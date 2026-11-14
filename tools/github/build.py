@@ -77,6 +77,7 @@ def package_native(ctx, shard, scratch, *, validation=False):
            # runners. Retain pinned hashes, without domestic mirror fallbacks.
            "SODUWORK_NODE_MIRROR": "https://nodejs.org/download/release",
            "SODUWORK_PYTHON_MIRROR": "https://github.com/astral-sh/python-build-standalone/releases/download",
+           "SODUWORK_PORTABLE_GIT_MIRROR": "https://github.com/git-for-windows/git/releases/download",
            "SODUWORK_RUNTIME_MIRROR_ONLY": "1"}
     require(not env.get("SODUWORK_INTERNAL_BUILD"), "Internal-only builds cannot enter public workflows")
     if validation:
