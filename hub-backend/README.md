@@ -62,11 +62,14 @@ Smoke checks live in [`smoke/`](smoke/). To run one directly, use its module fro
 
 Harness² completes seven tool-free planning stages before native execution. If a
 complete provider response explicitly reaches its output-token limit, the whole
-turn permits one retry of that same stage with at most twice its initial token
-allowance, capped at 16,384 tokens and the configured model limit. Both attempts
+turn permits one retry of that same stage with up to 16,384 output tokens, capped
+by the configured model output limit, instead of doubling the small initial
+planning allowance. Both attempts
 retain their reported usage and share the existing turn deadline and token budget.
 The client receives a retry progress message. Successful recovery headroom is reused
-for later stages of the same kind within the configured cap, without more retries.
+for all later planning stages within the configured cap, without more retries.
+Increasing the model's maximum output gives recovery more room up to 16,384 tokens;
+it does not increase the seven-stage count, turn deadline, or total token budget.
 Partial plans are discarded; broken
 streams, HTTP failures and native execution are not retried by this recovery path.
 Persistent truncation or a lower configured cap still fails before execution.
@@ -94,6 +97,20 @@ independent. See the [skill loading guide](../skills/README.md).
 ## OpenCode turn completion
 
 Native and ACP OpenCode executions preserve the current turn's provider finish reason. An output-token limit is reported as incomplete even when partial text exists and the native process exits successfully; existing progress and the session remain available for manual continuation. The ACP adapter observes only native session/turn identifiers and stop reasons through an invocation-local plugin, and rejects missing completion evidence without retrying tools or changing permissions. Run `python3 e2e_opencode_turn_outcome.py --binary /path/to/opencode` for isolated loopback-provider acceptance using an explicitly selected installed binary.
+
+## OpenCode installation and network diagnostics
+
+The managed installer tries an explicitly configured mirror, the connected Hub, then the official release. On macOS, archive downloads through the Python installer merge system HTTP/HTTPS proxy settings with environment overrides by scheme on every attempt. An explicitly empty proxy variable disables that scheme's system proxy. System-sourced proxies retain their system bypass rules alongside `NO_PROXY`; an empty `NO_PROXY` does not cancel the system exceptions. Explicit proxy overrides retain standard environment bypass behavior, and requests to the exact connected Hub origin stay direct. TLS certificate verification and pinned SHA-256 verification remain enabled. These download rules do not change npm dependency installation or model-gateway routing.
+
+Prepare the Hub mirror using the same code revision and pinned OpenCode version expected by the clients. Running `fetch_opencode_assets.py` without arguments prepares only Windows assets. To serve Apple Silicon and Intel Macs, run from that Hub checkout's `hub-backend/` directory:
+
+```sh
+python3 fetch_opencode_assets.py darwin-arm64 darwin-x64 darwin-x64-baseline
+```
+
+The script verifies the pinned SHA-256 before publishing files under `downloads/opencode/`. After deploying those files, inspect `GET /api/v1/download/opencode/info` for the expected version, platform and `filename`, then download `/api/v1/download/opencode/{filename}` using that exact filename. `available: true` only proves a file exists; verify the downloaded bytes against the pinned digest. The Runner independently verifies that digest before extraction. Preparing files in a checkout does not establish that a remote Hub serves them.
+
+For failed attempts, inspect the local Runner's `runner.log` for structured network diagnostics and the failed stage. A successful metadata request, partial download, checksum check or `--version` probe alone is not a completed installation: download, integrity check, extraction, executable version check, execution-dependency preparation and activation must all succeed. Model execution needs its own subsequent verification. Keep credentials and raw proxy configuration out of shared diagnostics; repair trusted certificate configuration rather than disabling TLS checks.
 
 ## API and trust boundaries
 
@@ -147,3 +164,19 @@ Repeating the same creation request for the same account and device returns its 
 Codex Harness, Qwen, Kimi and DeepSeek Harness use private state directories under the Runner data root. If a directory cannot be created because of permissions, a conflicting file or storage failure, preparation rejects the turn before launching an executor. The client receives an actionable diagnostic without personal paths or filesystem exception contents. Inherited personal state remains untouched; repairing the directory allows a new dispatch through the normal admission checks.
 
 `python3 -m unittest test_acp_home_isolation` checks real file collisions, injected permission failures, and Runner admission through a real subprocess/ACP bridge with a synthetic vendor. It verifies that failed preparation launches no executor and that a repaired directory permits execution. This does not establish real-provider or native-platform acceptance.
+
+## Private DeepSeek Harness probe
+
+Private model tests isolate writable DSH state and temporary files while resolving `DSH_PATH` from the Runner's installed runtime directory. Relocating test state must not relocate installed code. The private job and its raw provider output remain unavailable through Hub job APIs.
+
+With backend test dependencies and an existing compatible DSH installation, run:
+
+```sh
+python3 e2e_dsh_private_probe.py \
+  --adapter-entry /absolute/npm/root/@openma/deepseek-harness-acp/dist/bin.js \
+  --runtime-root /absolute/runner/data/agent-runtimes/dsh-host \
+  --node /absolute/path/to/node \
+  --output /absolute/evidence/directory
+```
+
+This explicit check uses the production private-probe job and ACP bridge, the installed adapter and host, and a synthetic loopback model. It first reproduces the old incorrect installation path, then requires a real model request and the expected Agent response with the corrected path. It uses disposable home, state and temporary directories, blocks non-loopback Node connections and cleans up its subprocesses. It does not install or update dependencies, use real credentials, or verify desktop UI, production Hub or provider behavior. Run it separately from the offline quality gate because it requires an existing native installation.

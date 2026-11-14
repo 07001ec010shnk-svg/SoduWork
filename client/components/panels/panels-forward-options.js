@@ -12,6 +12,7 @@ let _repoCache = [];
 let _fwdLoadSeq = 0;
 let _fwdSelection = { ai: null, mate: null };
 let _fwdModel = '';
+let _fwdModelExplicit = false;
 let _fwdLoading = { ai: false, mate: false };
 let _fwdMateRows = [];
 let _fwdMateQuery = '';
@@ -55,6 +56,7 @@ function _fwdReset(tid, force) {
   _fwdSelection = { ai: null, mate: null };
   _fwdResetMethodChoice();
   _fwdModel = '';
+  _fwdModelExplicit = false;
   _fwdLoading = { ai: false, mate: false };
   _fwdMateRows = [];
   _fwdMateQuery = '';
@@ -320,7 +322,9 @@ function _fwdChoose(tid, choice) {
     // Only an explicit Agent change can discard an incompatible local choice.
     // Directory refresh and delayed probes must preserve it until revalidated.
     if (choice?.type === 'direct' && previous?.id !== choice.id && String(_fwdModel).startsWith('local:') &&
-        !_fwdLocalModelAllowed(_fwdSubstrateOf(choice.id))) _fwdModel = '';
+        !_fwdLocalModelAllowed(_fwdSubstrateOf(choice.id))) {
+      _fwdModel = ''; _fwdModelExplicit = false;
+    }
     if (choice?.type === 'direct') _fwdManualAgent = _fwdId(choice.id);
     _fwdRememberMethodChoice(choice);
   }
@@ -367,15 +371,21 @@ function _fwdChoiceIsCurrent(choice) {
 }
 
 function _fwdLocalModelAllowed(agent) {
-  if (agent?.remote === true || agent?.locationMode === 'remote' || /^runner:/.test(String(agent?.key || agent?.id || ''))) return false;
-  const cli = String(agent?.cli || agent?.key || agent?.id || '').replace(/^local:/, '');
-  // Device-owned models are supported only by the probed native Pi transport.
-  // Other runtimes keep their managed or account model catalogs.
-  return cli === 'pi' && (agent?.localConversationAvailable === true || agent?.executionSource === 'conversation');
+  if (agent?.remote === true || agent?.locationMode === 'remote') return false;
+  const identity = String(agent?.key || agent?.id || '');
+  const cli = String(agent?.cli || identity).replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
+  if (!cli || ['codex', 'claude'].includes(cli)) return false;
+  if (agent?.modelMode === 'account') return false;
+  // Device-owned models require a successful probe of the current device.
+  // A same-device Runner may carry a runner key; the local conversation probe
+  // is what distinguishes it from a remote execution target.
+  return agent?.localConversationAvailable === true || agent?.executionSource === 'conversation';
 }
 
 function _fwdCanPickModel(agent) {
   if (!agent) return false;
+  const cli = String(agent.cli || agent.key || '').replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
+  if (['codex', 'claude'].includes(cli) || agent.modelMode === 'account') return false;
   return agent.modelPick !== false || (_fwdLocalModelAllowed(agent) && agent.localModelPick === true);
 }
 
@@ -384,22 +394,47 @@ async function _fwdLocalModelChoices() {
   if (!bridge || typeof bridge.get !== 'function') return [];
   try {
     const catalog = await bridge.get();
+    if (!catalog || catalog.ok === false || !Array.isArray(catalog.usable)) throw new Error('Local model catalog unavailable');
     return (Array.isArray(catalog?.usable) ? catalog.usable : [])
       .filter(row => row && row.localOnly === true && row.modality !== 'image' && row.modality !== 'video')
       .map(row => ({ ...row, name: String(row.name || row.id || ''), source: 'local', localOnly: true }))
       .filter(row => row.name);
   } catch (_) {
-    // A secure-store failure must not hide the Hub catalog or make remote
-    // execution appear unavailable.
-    return [];
+    // Preserve failure separately from a successful empty catalog. Remote
+    // targets can still use Hub models; local automatic selection must wait.
+    return Object.assign([], { readFailed: true });
   }
 }
 
 function _fwdMergeLocalModelChoices(rows) {
-  if (!rows.length || !_fwdOptions) return;
-  const current = Array.isArray(_fwdOptions.modelOptions) ? _fwdOptions.modelOptions : [];
-  const seen = new Set(current.map(row => String(row?.name || '')));
-  _fwdOptions.modelOptions = current.concat(rows.filter(row => !seen.has(row.name)));
+  if (!_fwdOptions) return;
+  _fwdOptions.localModelCatalogError = rows.readFailed === true;
+  const current = (Array.isArray(_fwdOptions.modelOptions) ? _fwdOptions.modelOptions : [])
+    .filter(row => row?.localOnly !== true && !String(row?.name || '').startsWith('local:'));
+  const seen = new Set(rows.map(row => row.name));
+  _fwdOptions.modelOptions = rows.concat(current.filter(row => !seen.has(row.name)));
+}
+
+function _fwdDirectModelState(agent, selected) {
+  const account = ['codex', 'claude'].includes(String(agent?.cli || agent?.key || '').replace(/^local:/, '').replace(/^runner:[^:]+:/, '')) || agent?.modelMode === 'account';
+  if (!account && String(selected || '').startsWith('local:') && !_fwdLocalModelAllowed(agent)) {
+    return { models: [], labels: {}, value: selected, stale: true };
+  }
+  if (!_fwdCanPickModel(agent)) return { models: [], labels: {}, value: '', stale: false };
+  const localAllowed = _fwdLocalModelAllowed(agent);
+  const allowed = name => localAllowed || !String(name || '').startsWith('local:');
+  const rows = (_fwdOptions?.modelOptions || []).filter(row => localAllowed ||
+    row?.localOnly !== true && allowed(row?.name));
+  const state = _fwpModelState({ ...(_fwdOptions || {}), modelOptions: rows,
+    models: (_fwdOptions?.models || []).filter(allowed),
+    defaultModel: allowed(_fwdOptions?.defaultModel) ? _fwdOptions?.defaultModel : '' }, selected);
+  if (localAllowed && (_fwdLocalLoading || _fwdOptions?.localModelCatalogError)) {
+    return { ...state, stale: true, catalogError: true };
+  }
+  if ((!state.value || state.stale) && state.models.length) {
+    return { ...state, value: state.models[0], stale: false };
+  }
+  return state;
 }
 
 function _fwdSyncConfirm(tid) {
@@ -435,11 +470,8 @@ function _fwdSyncConfirm(tid) {
   const localAllowed = _fwdLocalModelAllowed(agent);
   const canPickModel = _fwdCanPickModel(agent);
   if (!canPickModel && (choice.type !== 'direct' || !String(_fwdModel).startsWith('local:'))) _fwdModel = '';
-  const modelOptions = localAllowed
-    ? _fwdOptions?.modelOptions
-    : (_fwdOptions?.modelOptions || []).filter(row => row?.localOnly !== true && !String(row?.name || '').startsWith('local:'));
-  const catalog = canPickModel ? { ...(_fwdOptions || {}), modelOptions } : {models:[], modelOptions:[], defaultModel:''};
-  const modelState = _fwpModelState(catalog, _fwdModel);
+  const modelState = _fwdDirectModelState(agent, _fwdModel);
+  if (!busy) _fwdModel = modelState.value;
   const modelHtml = (canPickModel || modelState.stale) && (modelState.models.length || modelState.stale)
     ? '<label class="fwd-model"><span>本次模型</span><select id="fwdModel"' + (busy ? ' disabled' : '') + '>' +
       _fwpModelOptions(modelState, _fwpDefaultModelLabel(_fwdOptions, agent), _fwpDefaultModelTitle(_fwdOptions, agent)) +
@@ -459,6 +491,7 @@ function _fwdSyncConfirm(tid) {
   if (modelSelect) modelSelect.addEventListener('change', () => {
     if (button.dataset.idleLabel != null || (modelSelect.value && !modelState.models.includes(modelSelect.value))) return;
     _fwdModel = modelSelect.value || '';
+    _fwdModelExplicit = true;
     _fwdSetStatus('');
     _fwdSyncConfirm(tid);
     document.getElementById('fwdModel')?.focus();
@@ -466,7 +499,8 @@ function _fwdSyncConfirm(tid) {
   const validAgent = choice.type !== 'workflow' || !document.getElementById('fwdAgentSelect') ||
     _fwpPayload(document.getElementById('fwdList'), choice.id, false).ok;
   button.disabled = busy || !_fwdChoiceIsCurrent(choice) || !validAgent || modelState.stale;
-  if (modelState.stale) _fwdSetStatus('原模型已不可用，请重新选择', true);
+  if (modelState.stale) _fwdSetStatus(modelState.catalogError
+    ? '本地模型配置暂时无法读取，请刷新后重试' : '原模型已不可用，请重新选择', true);
   button.textContent = choice.type === 'workflow' ? '按这套方法开始' :
     choice.type === 'native' ? '确认在对话执行' :
     choice.type === 'direct' ? '确认交给 ' + title : '确认转给 ' + title;
@@ -769,12 +803,14 @@ async function _fwdConfirm(tid) {
   if (_fwdTab === 'mate') return _handoffTo(tid, choice.id, choice.name);
   if (choice.type === 'native') return _dispatchNativeTo(tid);
   if (choice.type === 'direct') {
-    if (_fwdCanPickModel(_fwdSubstrateOf(choice.id)) && _fwpModelState(_fwdOptions, _fwdModel).stale) {
+    const modelState = _fwdDirectModelState(_fwdSubstrateOf(choice.id), _fwdModel);
+    if (modelState.stale) {
       _fwdSyncConfirm(tid);
-      _fwdSetStatus('原模型已不可用，请重新选择', true);
+      _fwdSetStatus(modelState.catalogError ? '本地模型配置暂时无法读取，请刷新后重试' : '原模型已不可用，请重新选择', true);
       document.getElementById('fwdModel')?.focus();
       return;
     }
+    _fwdModel = modelState.value;
     return _dispatchAITo(tid, { id: choice.id, type: 'agent', cliName: choice.cli || '' }, choice.name);
   }
   const box = document.getElementById('fwdList');
