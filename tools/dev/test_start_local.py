@@ -926,6 +926,58 @@ class LocalStartupTests(unittest.TestCase):
                 self.assertEqual(build.prepare_desktop(self.state, self.state / 'startup.log'), client)
             run.assert_not_called()
 
+    def test_electron_proxy_environment_honors_precedence_and_explicit_switches(self):
+        cases = [
+            ({}, None),
+            ({'HTTP_PROXY': 'http://proxy.example:8080'}, '1'),
+            ({'https_proxy': 'http://proxy.example:8080'}, '1'),
+            ({'HTTPS_PROXY': 'http://upper.example:8080', 'https_proxy': ''}, None),
+            ({'HTTP_PROXY': 'http://upper.example:8080', 'http_proxy': '',
+              'https_proxy': 'http://lower.example:8080'}, '1'),
+            ({'ALL_PROXY': 'http://proxy.example:8080'}, None),
+            ({'ELECTRON_GET_USE_PROXY': 'true'}, '1'),
+        ]
+        for switch in ('', '0', 'false', 'FALSE', 'no', 'off', ' OFF '):
+            cases.append(({'HTTPS_PROXY': 'http://proxy.example:8080',
+                           'ELECTRON_GET_USE_PROXY': switch}, ''))
+        for original, expected in cases:
+            with self.subTest(environment=original), patch.object(build.os, 'environ', dict(original)):
+                before = dict(build.os.environ)
+                child = build.electron_install_environment()
+                self.assertEqual(child.get('ELECTRON_GET_USE_PROXY'), expected)
+                self.assertEqual(dict(build.os.environ), before)
+                self.assertIsNot(child, build.os.environ)
+                for key, value in original.items():
+                    if key != 'ELECTRON_GET_USE_PROXY':
+                        self.assertEqual(child[key], value)
+
+    def test_desktop_proxy_opt_in_is_limited_to_the_electron_download_child(self):
+        client = self.state / 'application/client'
+        client.mkdir(parents=True)
+        (client / 'package-lock.json').write_text('{}')
+        environment = {'DISPLAY': ':fixture', 'https_proxy': 'http://proxy.example:8080',
+                       'ELECTRON_MIRROR': 'https://mirror.example/electron/',
+                       'NODE_EXTRA_CA_CERTS': 'fixture-ca.pem', 'NO_PROXY': 'localhost'}
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append((command, kwargs))
+            if command[-1] == str(client / 'scripts/install-electron.cjs'):
+                binary = build.electron_binary(client)
+                binary.parent.mkdir(parents=True)
+                binary.write_text('electron fixture')
+
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'run', side_effect=run), \
+                patch.object(build.os, 'environ', dict(environment)), \
+                patch.object(sys, 'platform', 'win32'):
+            self.assertEqual(build.prepare_desktop(self.state, self.state / 'startup.log'), client)
+            self.assertEqual(dict(build.os.environ), environment)
+        self.assertEqual(len(calls), 3)
+        self.assertIsNone(calls[0][1].get('env'))
+        self.assertEqual(calls[1][1]['env'], {**environment, 'ELECTRON_GET_USE_PROXY': '1'})
+        self.assertIsNone(calls[2][1].get('env'))
+
     def test_desktop_download_failure_keeps_overrides_and_reports_recovery(self):
         client = self.state / 'application/client'
         client.mkdir(parents=True)
@@ -934,8 +986,9 @@ class LocalStartupTests(unittest.TestCase):
         def run(command, **kwargs):
             calls.append((command, kwargs))
             if command[0] == 'node':
-                self.assertEqual(os.environ['ELECTRON_MIRROR'], 'https://mirror.example/electron/')
-                self.assertEqual(os.environ['HTTPS_PROXY'], 'http://proxy.example:8080')
+                self.assertEqual(kwargs['env']['ELECTRON_MIRROR'], 'https://mirror.example/electron/')
+                self.assertEqual(kwargs['env']['HTTPS_PROXY'], 'http://proxy.example:8080')
+                self.assertEqual(kwargs['env']['ELECTRON_GET_USE_PROXY'], '1')
                 raise build.StartupError('Download fixture timed out')
         with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
                 patch.object(build, 'run', side_effect=run), patch.dict(os.environ, {
@@ -945,7 +998,7 @@ class LocalStartupTests(unittest.TestCase):
             with self.assertRaisesRegex(build.StartupError, 'ELECTRON_MIRROR'):
                 build.prepare_desktop(self.state, self.state / 'startup.log')
         self.assertEqual(calls[-1][1]['timeout'], build.ELECTRON_DOWNLOAD_TIMEOUT)
-        self.assertIsNone(calls[-1][1].get('env'))
+        self.assertEqual(calls[-1][0], ['node', str(client / 'scripts/install-electron.cjs')])
         self.assertFalse((self.state / 'desktop-dependencies.sha256').exists())
 
     def test_desktop_failure_is_reported_and_a_normal_quit_returns(self):

@@ -299,6 +299,23 @@ def electron_binary(client: Path) -> Path:
     return client / 'node_modules/electron/dist' / relative
 
 
+def electron_install_environment() -> dict[str, str]:
+    """Enable the locked downloader's proxy only in its installation process."""
+    env = dict(os.environ)
+    switch = env.get('ELECTRON_GET_USE_PROXY')
+    if switch is None:
+        # Match EnvHttpProxyAgent: lowercase, including an empty value, wins.
+        proxy = any(env.get(name.lower(), env.get(name, '')).strip()
+                    for name in ('HTTP_PROXY', 'HTTPS_PROXY'))
+        if proxy:
+            env['ELECTRON_GET_USE_PROXY'] = '1'
+    else:
+        # @electron/get treats every nonempty string (even "false") as true.
+        env['ELECTRON_GET_USE_PROXY'] = ('' if switch.strip().lower() in
+                                        {'', '0', 'false', 'no', 'off'} else '1')
+    return env
+
+
 def prepare_desktop(state: Path, log: Path) -> Path:
     """Install only in the launcher's generated copy, leaving the checkout untouched."""
     node, npm = check_dependencies()
@@ -315,8 +332,9 @@ def prepare_desktop(state: Path, log: Path) -> Path:
             print("桌面运行环境下载最多等待 10 分钟 / Electron download allows up to 10 minutes. "
                   "If GitHub is unreachable, configure ELECTRON_MIRROR or your proxy and retry.", flush=True)
             try:
-                run([node, str(client / 'node_modules/electron/install.js')], cwd=client, log=log,
+                run([node, str(client / 'scripts/install-electron.cjs')], cwd=client, log=log,
                     label='[Desktop] 下载桌面运行环境 / Downloading the Electron runtime',
+                    env=electron_install_environment(),
                     timeout=ELECTRON_DOWNLOAD_TIMEOUT)
             except StartupError as exc:
                 raise StartupError(
