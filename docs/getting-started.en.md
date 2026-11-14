@@ -130,6 +130,60 @@ Hidden input is normal: no characters or asterisks appear. Press Enter when done
 
 “Still running” means the installation process has not exited; it does not prove a download has succeeded. Read the printed `startup.log`, check network/proxy and npm/Python package download access, then rerun the same launcher. Do not delete the data directory. The initial Electron download also needs internet access.
 
+The npm registry and binary downloads use separate endpoints. Changing the npm registry mirror changes npm package downloads; it does not change the Electron or PortableGit download URLs:
+
+| Download | Setting |
+| --- | --- |
+| npm packages | `npm_config_registry` or npm's `registry` configuration |
+| Electron binaries | `ELECTRON_MIRROR`; see desktop troubleshooting below |
+| Windows PortableGit archives | `SODUWORK_PORTABLE_GIT_MIRROR`; see mirror and offline instructions below |
+
+#### Download through a proxy
+
+Set the proxy in the same terminal used to launch the source application. Port `7890` below is an example; replace it with your HTTP proxy's actual listening port. Keep existing `NO_PROXY` rules and bypass the proxy for the local Hub.
+
+Windows PowerShell:
+
+```powershell
+$env:HTTP_PROXY = 'http://127.0.0.1:7890'
+$env:HTTPS_PROXY = $env:HTTP_PROXY
+$env:NO_PROXY = "$env:NO_PROXY,localhost,127.0.0.1,::1".TrimStart(',')
+.\start.cmd --desktop
+```
+
+macOS/Linux:
+
+```sh
+export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY="$HTTP_PROXY"
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1,::1"
+sh start.sh --desktop
+```
+
+When `HTTP_PROXY` or `HTTPS_PROXY` is present, the launcher automatically enables `ELECTRON_GET_USE_PROXY` for the Electron install subprocess. An existing explicit setting is preserved; `0`, `false`, `no`, `off`, or an empty value disables automatic proxy activation for Electron. Node download scripts read the proxy settings and `NO_PROXY` per request and work with the required Node.js 22.19+ without raising the minimum version. `ELECTRON_GET_USE_PROXY` controls Electron only, not PortableGit downloads.
+
+#### Windows PortableGit mirrors and offline archives
+
+PortableGit downloads from the official Git for Windows release by default. To use a mirror, set `SODUWORK_PORTABLE_GIT_MIRROR` to its root URL. It must serve `<mirrorRoot>/v2.55.0.windows.4/<original-official-filename>`. The x64 filename is `PortableGit-2.55.0.4-64-bit.7z.exe`; arm64 uses `PortableGit-2.55.0.4-arm64.7z.exe`. Confirm that your mirror provides the pinned version and target architecture; no default PortableGit mirror is configured.
+
+Replace the example URL below with a mirror you can access:
+
+```powershell
+$env:SODUWORK_PORTABLE_GIT_MIRROR = 'https://mirror.example/portable-git'
+.\start.cmd --desktop
+```
+
+The downloader tries the configured mirror first, then falls back to the official URL on failure. If only mirror access is permitted, also set `$env:SODUWORK_RUNTIME_MIRROR_ONLY = '1'` before starting to prohibit official fallback. Mirrored files must still match the project's pinned SHA-256; a different version cannot be substituted. `ELECTRON_MIRROR` applies only to Electron and is not used as a Git mirror.
+
+You can also obtain the official archive with the matching version, architecture, and checksum in advance and supply its local path, for example on x64:
+
+```powershell
+$env:SODUWORK_PORTABLE_GIT_ARCHIVE = 'C:\Downloads\PortableGit-2.55.0.4-64-bit.7z.exe'
+.\start.cmd --desktop
+```
+
+The preparation script only reads and verifies this archive; it does not modify, delete, or replace it with a download. A missing file or SHA-256 mismatch is an error: correct the path or obtain the matching archive before retrying. This offline setting covers PortableGit only; other dependencies that have not been installed still need an accessible download source.
+
 ### Port already in use
 
 Do not stop an unfamiliar process. Use a free port from a terminal in the source directory, for example:
@@ -148,7 +202,7 @@ The browser address becomes `http://127.0.0.1:18990`, and the linked desktop cli
 
 ### Browser works but desktop does not
 
-The Electron binary download has a ten-minute limit. If it times out, choose a reachable mirror or configure your proxy, then rerun the same launcher. For example, set the mirror for your shell before starting.
+The Electron binary download has a ten-minute limit. If it times out, configure a proxy as described above or choose a reachable mirror specifically for Electron, then rerun the same launcher. The npm registry mirror does not control this binary download. For example, set the Electron mirror for your shell before starting.
 
 macOS/Linux:
 
@@ -170,7 +224,7 @@ set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 start.cmd --desktop
 ```
 
-Existing mirror and proxy settings are passed to the installer, which verifies download checksums. Slow connections can set `ELECTRON_DOWNLOAD_TIMEOUT` to a larger number of seconds. Successfully installed dependencies are reused on the next attempt.
+Existing `ELECTRON_MIRROR` and proxy settings are passed to the installer, which verifies download checksums. This mirror setting affects Electron only; Windows PortableGit uses the separate settings above. Slow connections can set `ELECTRON_DOWNLOAD_TIMEOUT` to a larger number of seconds. Successfully installed dependencies are reused on the next attempt.
 
 Check `desktop.log` in the same data directory. Resolve Electron download problems and retry. Linux desktop mode requires a graphical session and Electron's native libraries, such as NSS, GTK, and X11/Wayland. The launcher does not disable the sandbox or install operating system packages.
 

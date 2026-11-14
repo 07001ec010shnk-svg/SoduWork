@@ -131,6 +131,60 @@ sh start.sh --desktop
 
 长步骤的「Still running」表示安装进程尚未结束，并不代表下载已经成功。查看终端打印的 `startup.log`；检查网络、代理及 npm/Python 包下载是否可用，修正后重跑同一入口。不要删除数据目录。首次 Electron 下载也需要联网。
 
+npm 注册表与二进制下载使用不同的地址。设置 npm 镜像只改变 npm 包的来源，不会同时改变 Electron 或 PortableGit 的下载地址：
+
+| 下载内容 | 对应设置 |
+| --- | --- |
+| npm 包 | `npm_config_registry` 或 npm 的 `registry` 配置 |
+| Electron 二进制 | `ELECTRON_MIRROR`，见下面的桌面启动排障 |
+| Windows PortableGit 归档 | `SODUWORK_PORTABLE_GIT_MIRROR`，见下面的镜像与离线说明 |
+
+#### 使用代理下载
+
+在启动源码的同一个终端设置代理，再运行入口。下面的 `7890` 只是示例端口，应改成你的 HTTP 代理实际监听端口。保留已有 `NO_PROXY` 规则，并让本地 Hub 地址绕过代理。
+
+Windows PowerShell：
+
+```powershell
+$env:HTTP_PROXY = 'http://127.0.0.1:7890'
+$env:HTTPS_PROXY = $env:HTTP_PROXY
+$env:NO_PROXY = "$env:NO_PROXY,localhost,127.0.0.1,::1".TrimStart(',')
+.\start.cmd --desktop
+```
+
+macOS/Linux：
+
+```sh
+export HTTP_PROXY=http://127.0.0.1:7890
+export HTTPS_PROXY="$HTTP_PROXY"
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}localhost,127.0.0.1,::1"
+sh start.sh --desktop
+```
+
+启动器检测到 `HTTP_PROXY` 或 `HTTPS_PROXY` 时，会为 Electron 安装子进程自动启用 `ELECTRON_GET_USE_PROXY`。已有的显式设置会保留；设置为 `0`、`false`、`no`、`off` 或空值可关闭 Electron 的代理自动启用。Node 下载脚本按请求读取代理和 `NO_PROXY`，适用于上面要求的 Node.js 22.19+，无需提高最低版本。`ELECTRON_GET_USE_PROXY` 只控制 Electron，不控制 PortableGit 下载。
+
+#### Windows PortableGit 镜像与离线归档
+
+PortableGit 默认从官方 Git for Windows 发布地址下载。需要镜像时，设置 `SODUWORK_PORTABLE_GIT_MIRROR` 为镜像根地址，文件按 `<mirrorRoot>/v2.55.0.windows.4/<官方原文件名>` 提供。x64 文件名为 `PortableGit-2.55.0.4-64-bit.7z.exe`，arm64 为 `PortableGit-2.55.0.4-arm64.7z.exe`。请先确认镜像提供固定版本和当前架构的文件；项目不预设 PortableGit 镜像。
+
+将下面的示例地址替换成自己可用的镜像地址：
+
+```powershell
+$env:SODUWORK_PORTABLE_GIT_MIRROR = 'https://mirror.example/portable-git'
+.\start.cmd --desktop
+```
+
+下载会先尝试指定镜像，失败后回退官方地址。若只允许访问镜像，在启动前另外设置 `$env:SODUWORK_RUNTIME_MIRROR_ONLY = '1'`，禁止回退到官方源。镜像文件仍须通过项目固定的 SHA-256 校验，不能用其他版本替代。`ELECTRON_MIRROR` 仅用于 Electron，不会作为 Git 镜像。
+
+也可以提前取得匹配版本、架构及摘要的官方归档，通过本地路径使用，例如 x64：
+
+```powershell
+$env:SODUWORK_PORTABLE_GIT_ARCHIVE = 'C:\Downloads\PortableGit-2.55.0.4-64-bit.7z.exe'
+.\start.cmd --desktop
+```
+
+准备脚本只读取并校验该归档，不会改写、删除或重新下载覆盖它。文件不存在或 SHA-256 不匹配时会报错，请修正路径或重新取得正确归档后重试。这个离线设置只解决 PortableGit；其他尚未安装的依赖仍需要可用的下载来源。
+
 ### 提示端口已占用
 
 不要结束不认识的进程。在源码目录的终端改用一个空闲端口，例如：
@@ -149,7 +203,7 @@ sh start.sh --desktop --port 18990
 
 ### 浏览器能打开，桌面端打不开
 
-Electron 二进制文件的下载有十分钟超时限制。超时后，配置能访问的镜像或代理，再运行同一个启动命令。例如，按终端类型设置镜像。
+Electron 二进制文件的下载有十分钟超时限制。超时后，按上面的代理说明配置，或为 Electron 单独指定能访问的镜像，再运行同一个启动命令。npm 注册表镜像不控制这次二进制下载。例如，按终端类型设置 Electron 镜像。
 
 macOS/Linux：
 
@@ -171,7 +225,7 @@ set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 start.cmd --desktop
 ```
 
-安装器会沿用已有镜像和代理设置，并校验下载文件的摘要。慢速网络可将 `ELECTRON_DOWNLOAD_TIMEOUT` 设置为更大的秒数。下次启动会复用已安装成功的依赖。
+安装器会沿用已有 `ELECTRON_MIRROR` 和代理设置，并校验下载文件的摘要。这个镜像设置只影响 Electron，Windows PortableGit 需按上面的独立设置处理。慢速网络可将 `ELECTRON_DOWNLOAD_TIMEOUT` 设置为更大的秒数。下次启动会复用已安装成功的依赖。
 
 查看同一数据目录中的 `desktop.log`。Electron 下载失败时先解决下载问题，再重试。Linux 桌面需要图形会话和 Electron 所需的系统库（如 NSS、GTK、X11/Wayland）；启动器不会关闭沙箱或自动修改系统包。
 
