@@ -248,7 +248,10 @@ async function open(opts) {
     ]);
     _openTiming('runtime-prepared', openStarted);
     runtime = prepared[0];
-    if (prep.model.localOnly) runtime.registerProvider(prep.provider,
+    // Bind the ticket to this runtime before its first request. A model
+    // warmup in the same worker can replace the environment variable used
+    // by models.json between a tool call and the next model request.
+    runtime.registerProvider(prep.provider,
       require('../conversation/model-selection').piProvider(prep.model));
     model = configureLocalTransport(runtime.getModel(prep.provider, prep.model.id), prep.model);
     if (!model) {

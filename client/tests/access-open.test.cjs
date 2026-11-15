@@ -380,7 +380,8 @@ test('a stale account projection never falls through to the Agent registry', asy
   } });
   const result = await f.open({ chatId: 'stale-account-row' });
   assert.equal(result.ok, false);
-  assert.equal(result.notFound, true);
+  assert.equal(result.code, 'ACCOUNT_HISTORY_UNAVAILABLE');
+  assert.notEqual(result.notFound, true);
   assert.equal(typeof result.reason, 'string');
   assert.ok(result.reason.length > 0);
   assert.equal(f.calls.length, 0);

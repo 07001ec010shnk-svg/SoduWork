@@ -4,6 +4,7 @@ import json
 import time
 import unittest
 import urllib.error
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.services import harness2_provider as provider, harness2_streaming as streaming
@@ -25,6 +26,73 @@ def event(value):
 
 
 class NativeProviderTests(unittest.TestCase):
+    def test_native_long_stream_uses_a_direct_route_and_bounded_idle_timeout(self):
+        from app.services.harness2_native import Peer
+
+        now = 0.0
+        deadlines = []
+        packets = iter([
+            (60.0, b': keep-alive\n\n'),
+            (130.0, event({'choices': [{'delta': {'reasoning_content': 'thinking'}}]}).encode()),
+            (150.0, (event({'choices': [{'finish_reason': 'stop', 'delta': {'content': 'done'}}]})
+                     + 'data: [DONE]\n\n').encode()),
+        ])
+
+        class SlowResponse(Response):
+            fp = SimpleNamespace(raw=SimpleNamespace(_sock=SimpleNamespace(settimeout=deadlines.append)))
+
+            def read1(self, _size):
+                nonlocal now
+                now, chunk = next(packets)
+                return chunk
+
+        peer = Peer(MODEL, None, {}, output=lambda _event: None)
+        peer.session = SimpleNamespace(id='fixture')
+        urllib = provider.urllib.request
+        with patch('time.monotonic', side_effect=lambda: now), patch.object(
+                urllib, 'build_opener', wraps=urllib.build_opener) as opener, patch.object(
+                urllib.OpenerDirector, 'open', return_value=SlowResponse(b'', 'text/event-stream')) as transport:
+            message, _ = peer._inference(MESSAGES)
+        self.assertEqual(message['content'], 'done')
+        self.assertEqual(opener.call_args.args[0].proxies, {})
+        self.assertEqual(transport.call_args.kwargs['timeout'], 120.0)
+        self.assertEqual(deadlines, [120.0, 120.0, 120.0])
+
+    def test_known_unsupported_streaming_rejects_before_contacting_network(self):
+        payload = {'choices': [{'message': {'content': 'verified'}, 'finish_reason': 'stop'}]}
+        model = {**MODEL, 'capabilityProfile': {'streaming': {'state': 'unsupported'}}}
+        with patch.object(provider.urllib.request.OpenerDirector, 'open', return_value=Response(payload)) as transport:
+            with self.assertRaises(StructuredFailure) as caught:
+                provider.request(model, MESSAGES, [])
+        transport.assert_not_called()
+        self.assertEqual(caught.exception.code, 'model_streaming_unsupported')
+        diagnostic = failure_message(caught.exception, 'session/prompt')
+        self.assertIn('不支持流式输出', diagnostic)
+        self.assertNotIn(MODEL['key'], diagnostic)
+
+    def test_known_unsupported_required_tools_rejects_before_contacting_network(self):
+        payload = {'choices': [{'message': {'content': 'verified'}, 'finish_reason': 'stop'}]}
+        model = {**MODEL, 'capabilityProfile': {'toolCalling': {'state': 'unsupported'}}}
+        tools = [{'name': 'fixture_tool', 'parameters': {'type': 'object', 'properties': {}}}]
+        with patch.object(provider.urllib.request.OpenerDirector, 'open', return_value=Response(payload)) as transport:
+            with self.assertRaises(StructuredFailure) as caught:
+                provider.request(model, MESSAGES, tools)
+        transport.assert_not_called()
+        self.assertEqual(caught.exception.code, 'model_tools_unsupported')
+        self.assertIn('不支持工具调用', failure_message(caught.exception, 'session/prompt'))
+
+    def test_unknown_capabilities_and_tool_free_planning_remain_usable(self):
+        payload = {'choices': [{'message': {'content': 'verified'}, 'finish_reason': 'stop'}]}
+        cases = [({'streaming': {'state': 'unknown'}, 'toolCalling': {'state': 'unknown'}},
+                  [{'name': 'fixture_tool', 'parameters': {'type': 'object', 'properties': {}}}], False),
+                 ({'streaming': {'state': 'supported'}, 'toolCalling': {'state': 'unsupported'}}, [], True)]
+        for profile, tools, planning in cases:
+            with self.subTest(profile=profile), patch.object(provider.urllib.request.OpenerDirector, 'open',
+                    return_value=Response(payload)) as transport:
+                message, _ = provider.request({**MODEL, 'capabilityProfile': profile}, MESSAGES, tools, planning=planning)
+                self.assertEqual(message['content'], 'verified')
+                transport.assert_called_once()
+
     def test_keyless_local_model_sends_no_authentication_header(self):
         payload = {'choices': [{'message': {'content': 'verified'}, 'finish_reason': 'stop'}]}
         with patch.object(provider.urllib.request.OpenerDirector, 'open', return_value=Response(payload)) as transport:
@@ -111,6 +179,41 @@ class NativeProviderTests(unittest.TestCase):
         self.assertEqual(texts, ['partial'])
         self.assertEqual(len(usages), 1)
         self.assertEqual(usages[0]['output'], 2)
+
+    def test_stream_with_large_framing_overhead_preserves_a_complete_tool_call(self):
+        arguments = json.dumps({'path': 'art.html', 'content': '<span>test</span>\n' * 2300})
+        fragments = [arguments[i:i + 8] for i in range(0, len(arguments), 8)]
+        rows = []
+        for i, fragment in enumerate(fragments):
+            part = {'index': 0, 'function': {'arguments': fragment}}
+            if i == 0:
+                part.update(id='write-art', type='function')
+                part['function']['name'] = 'write_file'
+            rows.append({'id': 'chatcmpl-' + 'x' * 64, 'object': 'chat.completion.chunk',
+                         'created': 1794708000, 'model': 'deepseek-flash',
+                         'system_fingerprint': 'fp_' + 'a' * 64, 'usage': None,
+                         'choices': [{'index': 0, 'finish_reason': None, 'delta': {
+                             'content': None, 'reasoning_content': None, 'tool_calls': [part]}}]})
+        rows.extend([{'choices': [{'index': 0, 'finish_reason': 'tool_calls', 'delta': {}}]},
+                     {'choices': [], 'usage': {'prompt_tokens': 10, 'completion_tokens': 6500}}])
+        raw = (''.join(event(row) for row in rows) + 'data: [DONE]\n\n').encode()
+        self.assertGreater(len(raw), 2_000_000)
+        with patch.object(provider.urllib.request.OpenerDirector, 'open',
+                          return_value=Response(raw, 'text/event-stream')):
+            message, tokens = provider.request(MODEL, MESSAGES, [])
+        self.assertEqual(message['tool_calls'][0]['function']['arguments'], arguments)
+        self.assertEqual(tokens['output'], 6500)
+
+    def test_stream_wire_and_assembled_output_limits_keep_their_diagnosis(self):
+        delta = event({'choices': [{'delta': {'content': '测试' * 20}}]})
+        raw = (delta * 8 + 'data: [DONE]\n\n').encode()
+        for limit in ('MAX_WIRE_BYTES', 'MAX_OUTPUT_BYTES'):
+            with self.subTest(limit=limit), patch.object(streaming, limit, 512), patch.object(
+                    provider.urllib.request.OpenerDirector, 'open',
+                    return_value=Response(raw, 'text/event-stream')):
+                with self.assertRaises(StructuredFailure) as caught:
+                    provider.request(MODEL, MESSAGES, [])
+                self.assertEqual(caught.exception.code, 'response_limit')
 
     def test_safe_http_diagnosis_preserves_context_recovery_and_no_raw_secrets(self):
         for status, code, expected in [(400, 'context_length_exceeded', 'context_overflow'),

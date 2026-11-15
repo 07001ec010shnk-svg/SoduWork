@@ -445,6 +445,24 @@
     caption.append(name,hint); card.append(caption);
     return card;
   }
+  function localImageDeclaration(code, files) {
+    if (code.className && !code.classList.contains('language-soduwork-media') &&
+        !code.classList.contains('language-json')) return null;
+    const source = code.textContent.trim();
+    if (!source.startsWith('{') || source.length > 4096) return null;
+    let value;
+    try { value = JSON.parse(source); } catch (_) { return null; }
+    if (value?.type !== 'image' || Object.keys(value).some(name => !['type', 'items'].includes(name)) ||
+        !Array.isArray(value.items) || value.items.length !== 1) return null;
+    const item = value.items[0], url = item?.url;
+    if (typeof url !== 'string' || !url || /[:\\?#]/.test(url) ||
+        Object.keys(item).some(name => !['url', 'title'].includes(name))) return null;
+    const relative = url.replace(/^\.\//, '');
+    if (relative.split('/').some(part => !part || part === '.' || part === '..')) return null;
+    const matches = files.filter(file => file.artifactId && !file.deleted && isImage(file) &&
+      file.relative === relative);
+    return matches.length === 1 ? matches[0] : null;
+  }
   function inlineImages(root, files, ref) {
     files = asFiles(files);
     const doc = root.ownerDocument, shown = new Set([...root.querySelectorAll('[data-output-image],[data-delivery-preview]')]
@@ -463,6 +481,15 @@
       if (message.dataset.deliveryFinal !== 'false') owners.set(task, message);
       const target = owners.get(task);
       const candidates = new Map(), available = scoped(message,files);
+      if (target === message) {
+        message.querySelectorAll('.nmd pre > code').forEach(code => {
+          const file = localImageDeclaration(code, available);
+          if (!file) return;
+          const preview = shown.has(key(file)) ? button(doc, file, file.name) : imageCard(doc, file, ref);
+          shown.add(key(file));
+          code.parentElement.replaceWith(preview);
+        });
+      }
       message.querySelectorAll('[data-output-image-ref]').forEach(node => {
         const file = fileTarget(node.dataset.outputImageRef,available);
         if (file && !file.deleted && isImage(file)) {

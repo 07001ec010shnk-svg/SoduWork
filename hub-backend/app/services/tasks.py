@@ -492,6 +492,9 @@ async def create_task(
     stamp_actual(t, None, t.status)
     default_requester(t, cid, cname)   # Use the creator as requester for delegated-task receipts.
     session.add(t)
+    await session.flush()
+    from . import requirement_timeline
+    await requirement_timeline.record_definition(session, t)
     # Record who delegated the work; omit redundant events for personal local tasks.
     if origin != "local":
         from . import task_events
@@ -567,6 +570,9 @@ async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dic
             return None
         return await task_requirements.update_shared(session, client, candidate, dict(patch or {}))
     prev_status = t.status
+    from . import requirement_timeline
+    previous_definition = requirement_timeline.definition(t)
+    previous_definition_version = int(t.requirement_version or 1)
     patch = dict(patch or {})
     from . import task_requirements
     if patch.get("status") == "cancel" and t.status != "cancel":
@@ -652,6 +658,7 @@ async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dic
     # execution PATCH updates such as status, progress or orchestration.
     if not requirement_edit and set(patch) & _REQ_CONTENT_KEYS:
         t.requirement_version = int(t.requirement_version or 1) + 1
+    await requirement_timeline.record_definition(session, t, previous_definition, previous_definition_version)
     event_arrival, event_by, assignment_notice = "", "", None
     if t.assignee_user_id and t.assignee_user_id != prev_assignee:
         owner_uid, actor_name = await owner_user(session, owner_id)

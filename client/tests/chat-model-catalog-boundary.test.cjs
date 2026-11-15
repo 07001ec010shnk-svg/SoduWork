@@ -4,6 +4,13 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const source = fs.readFileSync(path.join(__dirname, '../components/panels/chat-composer-controls.js'), 'utf8');
 const deferred = () => { let resolve, reject; const promise = new Promise((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; };
 const tick = () => new Promise(resolve => setImmediate(resolve));
+function clock() {
+  let next = 0;
+  const timers = new Map();
+  return { setTimeout: callback => { const id = ++next; timers.set(id, callback); return id; },
+    clearTimeout: id => timers.delete(id),
+    expire() { for (const [id, callback] of [...timers]) if (timers.delete(id)) callback(); } };
+}
 function fixture(settings = {}) {
   let owner = 'hub/device/alice', changed;
   const node = () => ({ hidden: true, dataset: {}, style: {}, handlers: new Map(), innerHTML: '', textContent: '',
@@ -18,15 +25,19 @@ function fixture(settings = {}) {
   const state = { ref: 'chat', adapterId: 'qwen', model: { id: 'selected', label: 'Selected' } };
   const requests = [], calls = [], selections = [];
   const window = { ...node(), innerWidth: 1000, innerHeight: 800, SoduWorkModelChoice: require('../core/model-choice'),
+    setTimeout: settings.clock?.setTimeout || setTimeout, clearTimeout: settings.clock?.clearTimeout || clearTimeout,
     SoduWorkAPI: { taskStorageKey: () => owner, myModels: () => { const item = deferred(); requests.push(item); return item.promise; } },
     soduWorkAPI: { conversationSession: {
-      runtimes: async () => ({ ok: true, runtimes: [{ id: 'pi', modelMode: 'managed' }, { id: 'qwen', modelMode: 'managed' }, { id: 'codex', modelMode: 'account' }, { id: 'claude', modelMode: 'account' }] }),
+      runtimes: async () => settings.runtimes ? settings.runtimes() : ({ ok: true, runtimes: [{ id: 'pi', modelMode: 'managed' }, { id: 'qwen', modelMode: 'managed' }, { id: 'codex', modelMode: 'account' }, { id: 'claude', modelMode: 'account' }] }),
       runtimeModels: async id => { calls.push(id); return { models: [{ id: 'account-choice' }] }; },
       selectModel: async (ref, name) => { selections.push({ ref, name });
         if (settings.selectModel) return settings.selectModel(ref, name);
         return { ok: true, selection: { name, model: { id: name, label: name } } }; },
       onModelsChanged: fn => { changed = fn; return () => {}; },
     } } };
+  if (settings.runtimeWait) window.ChatRuntimePicker = { create: () => ({
+    render() {}, wait: settings.runtimeWait, reset() {}, destroy() {},
+  }) };
   vm.runInNewContext(source, { window, SoduWorkModelChoice: window.SoduWorkModelChoice, document: node(), AbortController });
   const controls = window.ChatComposerControls.create(el, { state: () => state, say() {},
     modelSelected: selection => { state.selection = selection; },
@@ -141,9 +152,9 @@ test('partial and rejected catalogs preserve an absent Hub choice while local of
   const f = fixture(); f.state.selection = { name: 'hub', model: { id: 'hub', label: 'Hub' } };
   const partial = { usable: [{ name: 'local:first', localOnly: true }], managedCatalogUnavailable: true };
   let pending = f.controls.waitForAccess(); await tick(); f.requests[0].resolve(partial);
-  assert.equal(await pending, false); assert.equal(f.state.selection.name, 'hub'); assert.deepEqual(f.selections, []);
+  await assert.rejects(pending, { code: 'MODEL_CATALOG_UNAVAILABLE' }); assert.equal(f.state.selection.name, 'hub'); assert.deepEqual(f.selections, []);
   pending = f.controls.waitForAccess(); await tick(); f.requests[1].resolve({ ok: false, usable: partial.usable });
-  assert.equal(await pending, false); assert.equal(f.state.selection.name, 'hub'); assert.deepEqual(f.selections, []);
+  await assert.rejects(pending, { code: 'MODEL_CATALOG_UNAVAILABLE' }); assert.equal(f.state.selection.name, 'hub'); assert.deepEqual(f.selections, []);
   f.state.selection = { name: 'local:first', model: { id: 'local:first' } };
   pending = f.controls.waitForAccess(); await tick(); f.requests[2].resolve(partial);
   assert.equal(await pending, true); assert.deepEqual(f.selections, []);
@@ -152,12 +163,15 @@ test('partial and rejected catalogs preserve an absent Hub choice while local of
   assert.equal(await pending, true); assert.equal(f.state.selection.name, 'local:first');
 });
 
-test('a same-scope directory refresh preserves the pending IPC acknowledgement but blocks stale send readiness', async () => {
+test('a same-scope directory refresh preserves the pending IPC acknowledgement and revalidates before send readiness', async () => {
   const request = deferred(), f = fixture({ selectModel: () => request.promise });
   const pending = f.controls.waitForAccess(); await tick(); f.requests[0].resolve(catalog); await tick();
   f.changed(); await tick(); f.requests[1].resolve(catalog); await tick();
   request.resolve({ ok: true, selection: { name: 'local:private', model: { id: 'local:private' } } });
-  assert.equal(await pending, false);
+  await tick();
+  assert.equal(f.requests.length, 3);
+  f.requests[2].resolve(catalog);
+  assert.equal(await pending, true);
   assert.equal(f.state.selection.name, 'local:private');
   assert.equal(f.selections.length, 1);
 });
@@ -169,7 +183,8 @@ test('a delayed automatic choice cannot overwrite a newer explicit choice or a d
     f.state.selection = { name: 'new-choice', model: { id: 'new-choice' } };
     if (changeOwner) f.owner('hub/device/bob');
     request.resolve({ ok: true, selection: { name: 'local:private', model: { id: 'local:private' } } });
-    assert.equal(await pending, false);
+    if (changeOwner) assert.equal(await pending, false);
+    else await assert.rejects(pending, { code: 'MODEL_SELECTION_FAILED' });
     assert.equal(f.state.selection.name, 'new-choice');
   }
 });
@@ -178,10 +193,10 @@ test('sending fails closed on a storage error and an empty confirmed catalog wit
   const f = fixture();
   f.state.selection = { name: 'local:private', model: { id: 'local:private', label: 'Private' } };
   const failed = f.controls.waitForAccess(); await tick(); f.requests[0].reject(Error('Secure storage unavailable'));
-  assert.equal(await failed, false); assert.deepEqual(f.selections, []);
+  await assert.rejects(failed, { code: 'MODEL_CATALOG_UNAVAILABLE' }); assert.deepEqual(f.selections, []);
   assert.equal(f.state.selection.name, 'local:private');
   const empty = f.controls.waitForAccess(); await tick(); f.requests[1].resolve({ usable: [] });
-  assert.equal(await empty, false); assert.deepEqual(f.selections, []);
+  await assert.rejects(empty, { code: 'MODEL_UNAVAILABLE' }); assert.deepEqual(f.selections, []);
   assert.equal(f.state.selection.model.unavailable, true);
   const restored = f.controls.waitForAccess(); await tick();
   f.requests[2].resolve({ usable: [{ name: 'local:first' }, { name: 'local:private', localOnly: true }] });
@@ -189,4 +204,129 @@ test('sending fails closed on a storage error and an empty confirmed catalog wit
   assert.equal(f.state.selection.name, 'local:private', 'A restored current model stays selected even when it is not first');
   assert.equal(f.state.selection.model.unavailable, undefined);
   assert.deepEqual(f.selections, [{ ref: 'chat', name: 'local:private' }]);
+});
+
+test('concurrent send checks and an opened picker share one live catalog read', async () => {
+  const f = fixture();
+  const opened = f.open(), first = f.controls.waitForAccess(), second = f.controls.waitForAccess();
+  await tick();
+  assert.equal(f.requests.length, 1);
+  f.requests[0].resolve({ usable: [{ name: 'selected' }] });
+  assert.deepEqual(await Promise.all([first, second]), [true, true]);
+  await opened;
+  assert.deepEqual(f.selections, []);
+});
+
+test('a model-change push wakes send admission and only the newer catalog can select a replacement', async () => {
+  const f = fixture();
+  const pending = f.controls.waitForAccess(); await tick();
+  f.changed(); await tick();
+  assert.equal(f.requests.length, 2);
+  f.requests[1].resolve({ usable: [{ name: 'selected', label: 'Latest choice' }] });
+  assert.equal(await pending, true, 'The superseded response need not settle before the current catalog admits Send');
+  f.requests[0].resolve({ usable: [{ name: 'local:obsolete', localOnly: true }] }); await tick();
+  assert.deepEqual(f.selections, []);
+  assert.equal(f.label.textContent, 'Latest choice');
+});
+
+test('closing a picker does not invalidate a same-conversation send catalog read', async () => {
+  const f = fixture();
+  const opened = f.open(); await tick();
+  await f.open();
+  const pending = f.controls.waitForAccess(); await tick();
+  assert.equal(f.requests.length, 1);
+  f.requests[0].resolve({ usable: [{ name: 'selected' }] });
+  assert.equal(await pending, true); await opened;
+  assert.deepEqual(f.selections, []);
+});
+
+test('runtime discovery times out visibly without allowing a late response to start model discovery', async () => {
+  const time = clock(), runtime = deferred();
+  const f = fixture({ clock: time, runtimes: () => runtime.promise });
+  const pending = f.controls.waitForAccess();
+  const rejected = assert.rejects(pending, { code: 'MODEL_CATALOG_TIMEOUT', message: /读取模型列表超时/ });
+  await tick(); time.expire(); await rejected;
+  assert.equal(f.requests.length, 0);
+  runtime.resolve({ ok: true, runtimes: [{ id: 'qwen', modelMode: 'managed' }] }); await tick();
+  assert.equal(f.requests.length, 0); assert.deepEqual(f.selections, []);
+  const retry = f.controls.waitForAccess(); await tick();
+  f.requests[0].resolve({ usable: [{ name: 'selected' }] });
+  assert.equal(await retry, true);
+});
+
+test('timed-out model discovery cannot apply a late replacement and a later send can retry', async () => {
+  const time = clock(), f = fixture({ clock: time });
+  const pending = f.controls.waitForAccess();
+  const rejected = assert.rejects(pending, { code: 'MODEL_CATALOG_TIMEOUT', message: /输入已保留/ });
+  await tick(); time.expire(); await rejected;
+  assert.deepEqual(f.selections, []);
+  f.requests[0].resolve({ usable: [{ name: 'local:late', localOnly: true }] }); await tick();
+  assert.deepEqual(f.selections, []); assert.equal(f.state.model.id, 'selected');
+  const retry = f.controls.waitForAccess(); await tick();
+  f.requests[1].resolve({ usable: [{ name: 'selected' }] });
+  assert.equal(await retry, true);
+});
+
+test('selection timeout retains the in-flight mutation and requires its acknowledgement before retry admission', async () => {
+  const time = clock(), selection = deferred(), f = fixture({ clock: time, selectModel: () => selection.promise });
+  const pending = f.controls.waitForAccess();
+  const rejected = assert.rejects(pending, { code: 'MODEL_SELECTION_UNCONFIRMED', message: /仍在确认中/ });
+  await tick(); f.requests[0].resolve({ usable: [{ name: 'local:replacement', localOnly: true }] }); await tick();
+  assert.equal(f.selections.length, 1);
+  time.expire(); await rejected;
+  assert.equal(f.state.model.id, 'selected'); assert.equal(f.state.selection, undefined);
+  let ready = false;
+  const retry = f.controls.waitForAccess().then(value => { ready = value; return value; }); await tick();
+  assert.equal(ready, false); assert.equal(f.requests.length, 1); assert.equal(f.selections.length, 1);
+  selection.resolve({ ok: true, selection: { name: 'local:replacement', model: { id: 'local:replacement' } } }); await tick();
+  assert.equal(f.state.selection.name, 'local:replacement', 'An authoritative late ACK still describes the committed selection');
+  assert.equal(f.requests.length, 2); assert.equal(ready, false);
+  f.requests[1].resolve({ usable: [{ name: 'local:replacement', localOnly: true }] });
+  assert.equal(await retry, true); assert.equal(f.selections.length, 1);
+});
+
+test('catalog failures are actionable when the picker is closed without exposing provider diagnostics', async () => {
+  const f = fixture();
+  const pending = f.controls.waitForAccess();
+  const rejected = assert.rejects(pending, error => {
+    assert.equal(error.code, 'MODEL_CATALOG_UNAVAILABLE');
+    assert.match(error.message, /检查连接或模型配置/);
+    assert.doesNotMatch(error.message, /private-endpoint|synthetic-provider-key/);
+    return true;
+  });
+  await tick();
+  f.requests[0].reject(Object.assign(Error('private-endpoint synthetic-provider-key'), { code: 'MODEL_INTERNAL' }));
+  await rejected;
+  assert.deepEqual(f.selections, []); assert.equal(f.state.model.id, 'selected');
+});
+
+test('sending during a background automatic selection surfaces its failure instead of silently returning false', async () => {
+  for (const superseded of [false, true]) {
+    const selection = deferred(), f = fixture({ selectModel: () => selection.promise });
+    f.changed(); await tick(); f.requests[0].resolve({ usable: [{ name: 'local:replacement', localOnly: true }] }); await tick();
+    const pending = f.controls.waitForAccess();
+    const rejected = assert.rejects(pending, { code: 'MODEL_SELECTION_FAILED', message: /模型切换未能确认/ });
+    await tick();
+    if (superseded) {
+      f.changed(); await tick(); f.requests[1].resolve({ usable: [{ name: 'selected' }] }); await tick();
+    }
+    selection.resolve({ ok: false, reason: 'private provider diagnostic' }); await rejected;
+    assert.equal(f.state.selection, undefined); assert.equal(f.selections.length, 1);
+  }
+});
+
+test('a destroyed composer cannot release send admission after a delayed execution-option acknowledgement', async () => {
+  for (const adapterId of ['qwen', 'codex']) {
+    const runtime = deferred(), f = fixture({ runtimeWait: () => runtime.promise });
+    f.state.adapterId = adapterId;
+    const pending = f.controls.waitForAccess(); await tick();
+    f.controls.destroy(); runtime.resolve(true);
+    assert.equal(await pending, false); assert.equal(f.requests.length, 0);
+  }
+});
+
+test('a cancelled execution-option choice remains a refusal without starting model discovery', async () => {
+  const f = fixture({ runtimeWait: async () => false });
+  assert.equal(await f.controls.waitForAccess(), false);
+  assert.equal(f.requests.length, 0); assert.deepEqual(f.selections, []);
 });

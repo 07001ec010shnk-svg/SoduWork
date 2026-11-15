@@ -26,6 +26,8 @@ from .harness2_errors import failure_message, StructuredFailure
 MAX_LINE = 32 * 1024 * 1024
 MAX_CALLS = 100
 MAX_ROUNDS = 40
+MODEL_REQUEST_TIMEOUT = 300.0
+MODEL_IDLE_TIMEOUT = 120.0
 
 
 class Cancelled(Exception):
@@ -151,7 +153,8 @@ class Peer:
                     self.update({"sessionUpdate": "harness2_usage", "tokens": tokens})
         def infer():
             try:
-                result.put((True, request(self.model, messages, schemas,
+                result.put((True, request(self.model, messages, schemas, timeout=MODEL_REQUEST_TIMEOUT,
+                                         idle_timeout=MODEL_IDLE_TIMEOUT,
                                          on_text=on_text, on_usage=on_usage)))
             except Exception as exc:
                 result.put((False, exc))

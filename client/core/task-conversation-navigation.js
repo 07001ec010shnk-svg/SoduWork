@@ -54,7 +54,7 @@
     /*
      * Create a bound review conversation once and reuse it on repeated opens. When execution
      * and review belong to the same user, prefer the execution conversation and fall back only
-     * when it is unavailable.
+     * when its archive is confirmed missing.
      */
     const acceptance = out.acceptanceSession || out.source === 'acceptance';
     const requestedApproval = text(out.approvalId);

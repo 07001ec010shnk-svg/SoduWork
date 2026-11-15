@@ -44,6 +44,11 @@ _MAX_FILE_BYTES = 4 * 1024 * 1024
 _MAX_TERMINALS = 8
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+_DSH_OUTPUT_CONTINUATION = (
+    "上一段模型输出达到单次上限。请沿用当前会话，从最后一个已确认的工具结果继续完成原请求。"
+    "已经完成的写入、命令、发送或其他操作不要重复。结果不确定时先只读核对。"
+    "如果交付物已经完成，请直接给出结果和已完成的验证。"
+)
 
 
 def _utf8_stdio() -> None:
@@ -214,6 +219,8 @@ class AcpBridge:
         self.stderr_tail: list[str] = []
         self.transition = Transition(self)
         self.outcome = None
+        self.dsh_can_compact = False
+        self.dsh_compact_reply: list[str] | None = None
 
     def start(self) -> None:
         flags = ({"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
@@ -520,11 +527,18 @@ class AcpBridge:
         self.thought_stream = ""
 
     def _update(self, update: dict) -> None:
+        kind = str(update.get("sessionUpdate") or "")
+        if self.agent_name == "dsh" and kind == "available_commands_update":
+            self.dsh_can_compact = any(
+                isinstance(command, dict) and command.get("name") == "compact"
+                for command in update.get("availableCommands") or [])
+        if self.dsh_compact_reply is not None and kind == "agent_message_chunk":
+            self.dsh_compact_reply.append(_text(update.get("content")))
+            return
         if self.loading:
             return
         self.transition.update(update)
         self.access.observe_tool(update)
-        kind = str(update.get("sessionUpdate") or "")
         if kind == "agent_thought_chunk":
             # Late reasoning may interleave with one explicitly identified
             # message (DSH); only a tool, new message or turn ends that stream.
@@ -626,6 +640,20 @@ class AcpBridge:
             "terminal": self.allow_terminal,
         }
 
+    def _compact_dsh_history(self) -> bool:
+        # The native command creates a durable checkpoint in this same session.
+        # DSH reports command failures as message chunks with an end_turn result.
+        self.dsh_compact_reply = []
+        try:
+            result = self.request("session/prompt", {
+                "sessionId": self.session_id,
+                "prompt": [{"type": "text", "text": "/compact"}],
+            })
+            return (result.get("stopReason") == "end_turn"
+                    and "".join(self.dsh_compact_reply).startswith("Compacted "))
+        finally:
+            self.dsh_compact_reply = None
+
     def run(self, prompt: str) -> int:
         self.start()
         init = self.request("initialize", {
@@ -685,6 +713,8 @@ class AcpBridge:
         self.access.apply(self, session_config)
         _emit({"type": "session", "sessionID": self.session_id})
         _emit({"type": "step_start"})
+        continued_output = False
+        compacted_output = False
         while True:
             if self.outcome:
                 self.outcome.begin(self.session_id)
@@ -699,6 +729,21 @@ class AcpBridge:
                 if native_reason in {"length", "max_tokens"}:
                     result = {**result, "stopReason": "max_tokens"}
             if not self.transition.complete(result):
+                if (self.agent_name == "dsh" and result.get("stopReason") == "max_tokens"
+                        and not self.transition.requested
+                        and not self.transition.cancel_sent and not self.transition.busy()):
+                    if continued_output:
+                        if compacted_output or not self.dsh_can_compact or not self._compact_dsh_history():
+                            break
+                        compacted_output = True
+                        self.transition.next_poll = 0
+                        self.transition.tick("complete")
+                        if self.transition.requested or self.transition.cancel_sent or self.transition.busy():
+                            break
+                    continued_output = True
+                    content = [{"type": "text", "text": _DSH_OUTPUT_CONTINUATION}]
+                    _emit({"type": "step_start"})
+                    continue
                 break
             continuation = self.transition.reconfigure(session_config)
             if continuation is None:
@@ -712,6 +757,8 @@ class AcpBridge:
         reason = str(result.get("stopReason") or "")
         if reason in ("", "end_turn"):
             return 0
+        if self.agent_name == "dsh" and reason == "max_tokens":
+            raise BridgeError("模型输出达到上限。已有文件和工具结果已保留，请继续当前会话完成剩余工作。")
         raise BridgeError("Agent stopped this turn: " + reason)
 
     def close(self) -> None:

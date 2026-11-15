@@ -146,7 +146,8 @@ function create({ raw: initial, options, restored, openNative, disposeNative, pr
       if (policy && (!support?.supported || !support.modes?.includes(policy.mode)))
         throw Error('目标 Agent 不支持当前权限模式，请先选择兼容的权限');
       let modelName = typeof selection.modelName === 'string' ? selection.modelName :
-        catalog.runtime(agentId).modelMode === catalog.runtime(raw.adapterId)?.modelMode ? before.modelSelection?.name || '' : '';
+        catalog.runtime(agentId).modelMode !== 'account' &&
+          catalog.runtime(agentId).modelMode === catalog.runtime(raw.adapterId)?.modelMode ? before.modelSelection?.name || '' : '';
       // Entering Codex uses the same first available native model as a new chat.
       if (agentId === 'codex' && !modelName)
         modelName = require('./native-model-catalog').list('codex').models?.[0]?.id || '';

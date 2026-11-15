@@ -5,14 +5,29 @@ import codecs
 import json
 
 from .harness2_errors import StructuredFailure
-from .mcp_http import _response_chunks
+from .mcp_http import ResponseTooLarge, _response_chunks
+
+# A model can send thousands of SSE envelopes for one tool call. Bound the
+# wire separately from the model output that we assemble and store.
+MAX_WIRE_BYTES = 64 * 1024 * 1024
+MAX_OUTPUT_BYTES = 2 * 1024 * 1024
 
 
-def read(response, deadline, anthropic, on_text, on_usage=None):
+def read(response, deadline, anthropic, on_text, on_usage=None, *, idle_timeout=None):
     decoder = codecs.getincrementaldecoder("utf-8")()
     pending, data_lines = "", []
     text, reasoning, calls, blocks, usage = [], [], {}, {}, {}
     reason, ended = None, False
+    output_bytes, event_chars = 0, 0
+
+    def keep(chunk):
+        nonlocal output_bytes
+        if not isinstance(chunk, str):
+            raise StructuredFailure("response_format")
+        output_bytes += len(chunk.encode("utf-8"))
+        if output_bytes > MAX_OUTPUT_BYTES:
+            raise StructuredFailure("response_limit")
+        return chunk
 
     def event(raw):
         nonlocal reason, ended, usage
@@ -37,6 +52,7 @@ def read(response, deadline, anthropic, on_text, on_usage=None):
                 if kind == "content_block_start":
                     if index in blocks:
                         raise StructuredFailure("response_format")
+                    keep(raw)
                     block = dict(value["content_block"])
                     blocks[index] = block
                     if block.get("type") == "tool_use":
@@ -50,9 +66,7 @@ def read(response, deadline, anthropic, on_text, on_usage=None):
                     if not field:
                         raise StructuredFailure("response_format")
                     chunk = delta["partial_json" if field == "_json" else field]
-                    if not isinstance(chunk, str):
-                        raise StructuredFailure("response_format")
-                    block[field] = block.get(field, "") + chunk
+                    block[field] = block.get(field, "") + keep(chunk)
                     if field == "text" and on_text:
                         on_text(chunk)
             elif kind == "message_delta":
@@ -72,31 +86,30 @@ def read(response, deadline, anthropic, on_text, on_usage=None):
                 delta = choice.get("delta") or {}
                 chunk = delta.get("content")
                 if chunk:
-                    if not isinstance(chunk, str):
-                        raise StructuredFailure("response_format")
-                    text.append(chunk)
+                    text.append(keep(chunk))
                     if on_text:
                         on_text(chunk)
                 if isinstance(delta.get("reasoning_content"), str):
-                    reasoning.append(delta["reasoning_content"])
+                    reasoning.append(keep(delta["reasoning_content"]))
                 for part in delta.get("tool_calls") or []:
                     index = part["index"]
                     if type(index) is not int or not 0 <= index < 16:
                         raise StructuredFailure("response_limit")
-                    call = calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                    call = calls.setdefault(index, {"id": "", "type": "function",
+                                                    "function": {"name": [], "arguments": []}})
                     if part.get("id"):
                         if call["id"] and call["id"] != part["id"]:
                             raise StructuredFailure("response_format")
-                        call["id"] = part["id"]
+                        if not call["id"]:
+                            call["id"] = keep(part["id"])
                     for field in ("name", "arguments"):
                         chunk = (part.get("function") or {}).get(field)
                         if chunk:
-                            if not isinstance(chunk, str):
-                                raise StructuredFailure("response_format")
-                            call["function"][field] += chunk
+                            call["function"][field].append(keep(chunk))
 
     try:
-        for chunk in _response_chunks(response, deadline):
+        for chunk in _response_chunks(response, deadline, max_bytes=MAX_WIRE_BYTES,
+                                      idle_timeout=idle_timeout):
             pending += decoder.decode(chunk)
             while "\n" in pending:
                 line, pending = pending.split("\n", 1)
@@ -104,8 +117,14 @@ def read(response, deadline, anthropic, on_text, on_usage=None):
                 if not line and data_lines:
                     event("\n".join(data_lines))
                     data_lines.clear()
+                    event_chars = 0
                 elif line.startswith("data:"):
+                    event_chars += len(line)
+                    if event_chars > MAX_OUTPUT_BYTES:
+                        raise StructuredFailure("response_limit")
                     data_lines.append(line[5:].lstrip(" "))
+            if len(pending) > MAX_OUTPUT_BYTES:
+                raise StructuredFailure("response_limit")
             # A validated terminal event ends inference even when an HTTP peer
             # leaves its transport alive. Waiting for EOF can turn completed
             # answers into timeouts. Usage precedes the provider terminal event.
@@ -131,11 +150,15 @@ def read(response, deadline, anthropic, on_text, on_usage=None):
                         block["input"] = json.loads(raw)
                 content.append(block)
             return {"content": content, "stop_reason": reason, "usage": usage}
+        for call in calls.values():
+            call["function"] = {field: "".join(parts) for field, parts in call["function"].items()}
         message = {"role": "assistant", "content": "".join(text),
                    "tool_calls": [calls[index] for index in sorted(calls)]}
         if reasoning:
             message["reasoning_content"] = "".join(reasoning)
         return {"choices": [{"message": message, "finish_reason": reason}], "usage": usage}
+    except ResponseTooLarge:
+        raise StructuredFailure("response_limit") from None
     except (TypeError, ValueError, KeyError, IndexError, AttributeError):
         raise StructuredFailure("response_format") from None
     finally:
