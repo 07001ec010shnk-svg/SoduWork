@@ -22,7 +22,7 @@ function fixture(catalog = localCatalog()) {
     catalog: structuredClone(catalog) };
   context.window = context;
   vm.createContext(context);
-  for (const file of ['model-capabilities.js', 'model-catalog-editor.js', 'panels-models.js']) {
+  for (const file of ['model-capabilities.js', 'model-catalog-editor.js', 'model-service-delete.js', 'panels-models.js']) {
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../components/panels', file), 'utf8'), context, { filename: file });
   }
   const evaluate = source => vm.runInContext(source, context);
@@ -60,6 +60,35 @@ test('a saved local model is counted once and remains editable despite its catal
   assert.equal((f.detail().match(/data-mdedit=/g) || []).length, 1);
   assert.doesNotMatch(f.detail(), /组织管理/);
   assert.equal(JSON.stringify(catalog), before, 'presentation does not rewrite persisted or execution catalogs');
+});
+
+test('a saved device API key is presented as local availability without personal or company quota wording', () => {
+  const catalog = store.publicCatalog(store.normalize({
+    providers: [{ id: 'local-fixture', name: 'Local fixture', baseUrl: 'https://fixture.invalid/v1', authMode: 'key' }],
+    models: [{ providerId: 'local-fixture', name: 'local-model' }],
+    keys: { 'local-fixture': 'synthetic-local-key' },
+  }));
+  const f = fixture(catalog);
+  assert.equal(f.evaluate('_mdState(_mdProvider("local-fixture"))'), 'local');
+  assert.match(f.nav(), /st-local/);
+  assert.match(f.nav(), /本地可用/);
+  assert.match(f.detail(), /本地访问密钥已配置/);
+  assert.match(f.detail(), /本地模型不使用 Hub 模型额度/);
+  assert.match(f.detail(), /aria-label="移除本地密钥"/);
+  assert.doesNotMatch(f.nav() + f.detail(), /个人额度|公司凭据|公司可用|synthetic-local-key/);
+});
+
+test('an unsaved device key keeps local availability distinct from a managed personal key', () => {
+  const local = { id: 'device:local-fixture', name: 'Local fixture', localOnly: true,
+    baseUrl: 'https://fixture.invalid/v1', authMode: 'key', modelNames: [] };
+  const managed = { ...local, id: 'local-fixture', localOnly: false };
+  const f = fixture({ providers: [local, managed], myModels: [], usable: [] });
+  f.evaluate('_mdKeyEdits["device:local-fixture"] = "synthetic-device-draft"; _mdKeyEdits["local-fixture"] = "synthetic-managed-draft";');
+  assert.equal(f.evaluate('_mdState(_mdProvider("device:local-fixture"))'), 'local');
+  assert.equal(f.evaluate('_mdState(_mdProvider("local-fixture"))'), 'mine');
+  assert.match(f.nav('device:local-fixture'), /本地可用/);
+  assert.doesNotMatch(f.nav('device:local-fixture'), /个人额度|公司可用/);
+  assert.match(f.nav('local-fixture'), /个人额度/);
 });
 
 test('canonical built-in provider names are localizable while renamed providers remain user content', () => {
@@ -152,7 +181,7 @@ test('local-only panel saves omit managed fields and survive post-save refresh f
   assert.equal(Object.hasOwn(saves[0], 'providers'), false);
   assert.equal(Object.hasOwn(saves[0], 'models'), false);
   assert.equal(Object.hasOwn(saves[0], 'expectedRevision'), false);
-  assert.equal(f.messages.some(message => message.includes('模型配置存好了')), true);
+  assert.ok(f.messages.includes('服务信息已保存'));
   assert.equal(f.messages.some(message => message.includes('没存上')), false);
 });
 
@@ -240,9 +269,11 @@ test('removing another model preserves the current edit draft and its unsaved fi
 test('confirmed provider removal clears that provider draft without clearing other drafts', async () => {
   const f = fixture();
   f.evaluate('_mdDrafts.set("local-fixture", {original:"shared-model"}); _mdDrafts.set("other-provider", {original:"other-model"});');
-  const action = removal(f, 'data-pdelete', 'local-fixture');
-  await action.click(); assert.equal(f.evaluate('_mdDrafts.has("local-fixture")'), true, 'confirmation has not deleted anything');
-  await action.click();
+  f.evaluate('_mdData.localRevision=catalog.revision');
+  f.context.SoduWorkAPI = { localModels: async () => f.context.catalog, saveMyModels: async () => ({ revision: 1 }) };
+  f.context.plan = await f.evaluate('_mdPrepareServiceDelete("local-fixture")');
+  assert.equal(f.evaluate('_mdDrafts.has("local-fixture")'), true, 'confirmation has not deleted anything');
+  await f.evaluate('_mdDeleteService(plan)');
   assert.equal(f.evaluate('_mdDrafts.has("local-fixture")'), false);
   assert.equal(f.evaluate('_mdDrafts.has("other-provider")'), true);
   assert.equal(f.evaluate('_mdData.providers.length'), 0);

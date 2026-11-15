@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from test_model_runtime import IsolatedDatabase
 from app.models import Client, ModelDef, ModelProvider
-from app.api import admin, config, tasks, model_runtime as runtime_api
+from app.api import admin, config, personal_models, tasks, model_runtime as runtime_api
 from app.services import model_catalog, model_config_guard as guard, model_runtime
 
 
@@ -93,6 +93,27 @@ class ModelConfigTests(IsolatedDatabase):
             current = await session.get(Client, "device")
             self.assertEqual(current.config["modelProviders"][0]["id"], "provider")
             self.assertNotIn("modelProviders", await config.get_config(current))
+
+    async def test_omitted_personal_provider_removes_only_its_key_without_key_patch(self):
+        providers = [{"id": "custom-" + name, "name": name,
+                      "baseUrl": "https://" + name + ".invalid/v1"} for name in ("remove", "keep")]
+        async with self.sessions() as session:
+            client = await session.get(Client, "device")
+            await personal_models.put_my_models({
+                "expectedRevision": guard.revision(client), "providers": providers,
+                "keys": {"custom-remove": "discarded-fixture", "custom-keep": "retained-fixture"},
+            }, client, session)
+        async with self.sessions() as session:
+            client = await session.get(Client, "device")
+            self.assertEqual(client.model_keys, {
+                "custom-remove": "discarded-fixture", "custom-keep": "retained-fixture"})
+            await personal_models.put_my_models({
+                "expectedRevision": guard.revision(client), "providers": [providers[1]], "keys": {},
+            }, client, session)
+        async with self.sessions() as session:
+            current = await session.get(Client, "device")
+            self.assertEqual(current.model_keys, {"custom-keep": "retained-fixture"})
+            self.assertEqual([row["id"] for row in current.config["modelProviders"]], ["custom-keep"])
 
     async def test_admin_model_edit_and_delete_require_current_revision(self):
         async with self.sessions() as session:
