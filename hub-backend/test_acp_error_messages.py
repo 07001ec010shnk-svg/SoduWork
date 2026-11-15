@@ -49,14 +49,20 @@ class AcpErrorMessagesTests(unittest.TestCase):
         message = "Internal error: upstream unavailable"
         self.assertEqual(bridge._friendly_bridge_error("dsh", message), message)
 
-    def test_dsh_output_limit_resumes_once_without_replaying_original_prompt(self):
-        for agent, reasons, busy, prompts, succeeds in [
-            ('dsh', ['max_tokens', 'end_turn'], False, 2, True),
-            ('dsh', ['max_tokens', 'max_tokens'], False, 2, False),
-            ('dsh', ['max_tokens'], True, 1, False),
-            ('qwen', ['max_tokens'], False, 1, False),
+    def test_dsh_output_recovery_is_bounded_and_keeps_the_original_session(self):
+        compacted = 'Compacted 4 history items (~32000 tokens).'
+        for agent, reasons, busy, compact_reply, resumes, succeeds in [
+            ('dsh', ['max_tokens', 'end_turn'], False, None, 1, True),
+            ('dsh', ['max_tokens', 'max_tokens'], False, None, 1, False),
+            ('dsh', ['max_tokens', 'max_tokens', 'end_turn'], False, compacted, 2, True),
+            ('dsh', ['max_tokens'] * 3, False, compacted, 2, False),
+            ('dsh', ['max_tokens'] * 2, False, 'No compactable history yet.', 1, False),
+            ('dsh', ['max_tokens'] * 2, False, '⚠ Compaction cancelled.', 1, False),
+            ('dsh', ['max_tokens'], True, compacted, 0, False),
+            ('qwen', ['max_tokens'], False, None, 0, False),
         ]:
-            with self.subTest(agent=agent, reasons=reasons, busy=busy), TemporaryDirectory() as folder:
+            with self.subTest(agent=agent, reasons=reasons, busy=busy, compact_reply=compact_reply), \
+                    TemporaryDirectory() as folder:
                 acp = bridge.AcpBridge([], folder, agent, 'workspace')
                 seen = []
                 stops = iter(reasons)
@@ -65,25 +71,34 @@ class AcpErrorMessagesTests(unittest.TestCase):
                     if method == 'initialize':
                         return {'protocolVersion': 1}
                     if method == 'session/new':
+                        if compact_reply is not None:
+                            acp._update({'sessionUpdate': 'available_commands_update',
+                                         'availableCommands': [{'name': 'compact'}]})
                         return {'sessionId': 'existing-tools'}
                     self.assertEqual(method, 'session/prompt')
                     seen.append(params)
+                    if params['prompt'][0]['text'] == '/compact':
+                        acp._update({'sessionUpdate': 'agent_message_chunk',
+                                     'content': {'type': 'text', 'text': compact_reply}})
+                        return {'stopReason': 'end_turn'}
                     return {'stopReason': next(stops)}
 
                 with patch.object(acp, 'start'), patch.object(acp, 'request', side_effect=request), \
                         patch.object(acp.access, 'apply'), patch.object(acp.transition, 'busy', return_value=busy), \
-                        patch.object(bridge.qwen_runtime, 'apply_model'), patch.object(bridge, '_emit'):
+                        patch.object(bridge.qwen_runtime, 'apply_model'), patch.object(bridge, '_emit') as emit:
                     if succeeds:
                         self.assertEqual(acp.run('Original synthetic task'), 0)
                     else:
                         with self.assertRaises(bridge.BridgeError):
                             acp.run('Original synthetic task')
-                self.assertEqual(len(seen), prompts)
                 self.assertEqual({p['sessionId'] for p in seen}, {'existing-tools'})
-                self.assertEqual(seen[0]['prompt'][0]['text'], 'Original synthetic task')
-                if prompts == 2:
-                    self.assertNotIn('Original synthetic task', seen[1]['prompt'][0]['text'])
-                    self.assertIn('已确认的工具结果继续', seen[1]['prompt'][0]['text'])
+                texts = [p['prompt'][0]['text'] for p in seen]
+                expected = ['Original synthetic task'] + [bridge._DSH_OUTPUT_CONTINUATION] * resumes
+                if compact_reply is not None and resumes:
+                    expected.insert(2, '/compact')
+                self.assertEqual(texts, expected)
+                if compact_reply:
+                    self.assertNotIn(compact_reply, str(emit.call_args_list))
 
     def test_real_bridge_entry_emits_failure_and_always_closes(self):
         args = SimpleNamespace(agent=["fixture"], cwd="fixture", agent_name="dsh",
