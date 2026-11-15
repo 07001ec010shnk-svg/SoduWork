@@ -195,3 +195,36 @@ test('an unnamed service draft is described with a human label, never its intern
   const f=fixture();f.evaluate('_mdAddService()');
   const plan=await f.evaluate('_mdPrepareServiceDelete(_mdNew.id)');assert.equal(plan.name,'未命名服务');
 });
+
+test('catalog reload retires removed-service editors and retains current service drafts',async()=>{
+  const f=fixture();
+  Object.assign(f.context.document.getElementById('mdBody'),{setAttribute(){},removeAttribute(){}});
+  f.evaluate(`
+    _mdData.providers.push({id:'custom-other',personal:true,name:'Other',baseUrl:'https://other.fixture.invalid/v1'});
+    _mdMyModels.push({providerId:'custom-other',name:'old-model'});
+    _mdDrafts.set('custom-other',{original:'old-model',model:{name:'old-model'},open:true});
+    _mdDrafts.set('custom-hub',{changed:true,fields:{label:'Retain existing editor'}});
+    _mdAddService();
+    _mdDrafts.set(_mdNew.id,{changed:true,fields:{label:'Retain new editor'}});
+  `);
+  const draftId=f.evaluate('_mdNew.id');
+  f.managed.revision='hub-2';
+  assert.equal(await f.evaluate('_mdLoad()'),true);
+  assert.equal(f.evaluate('_mdProvider("custom-other")'),undefined);
+  assert.equal(f.evaluate('_mdDrafts.has("custom-other")'),false);
+  assert.equal(f.evaluate('_mdDrafts.get("custom-hub").fields.label'),'Retain existing editor');
+  assert.equal(f.evaluate('_mdDrafts.get(_mdNew.id).fields.label'),'Retain new editor');
+  assert.equal(f.evaluate('_mdNew.id'),draftId);
+  const plan=await f.evaluate('_mdPrepareServiceDelete("custom-hub")');
+  assert.equal(plan.pid,'custom-hub');assert.equal(f.state.writes.length,0);
+});
+
+test('an unavailable managed catalog preserves unapplied Hub editor drafts',async()=>{
+  const f=fixture();
+  Object.assign(f.context.document.getElementById('mdBody'),{setAttribute(){},removeAttribute(){}});
+  f.evaluate('_mdDrafts.set("custom-hub",{original:"unsaved-model",changed:true,fields:{label:"Keep unapplied input"}});');
+  f.context.SoduWorkAPI.myModels=async()=>({...structuredClone(f.local),localRevision:f.local.revision,managedCatalogUnavailable:true});
+  assert.equal(await f.evaluate('_mdLoad()'),true);
+  assert.equal(f.evaluate('_mdDrafts.get("custom-hub")?.fields.label'),'Keep unapplied input');
+  assert.equal(f.state.writes.length,0);
+});

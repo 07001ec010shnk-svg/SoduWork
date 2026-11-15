@@ -156,6 +156,9 @@ async function _mdLoad(options) {
     _mdDirty = _mdLocalDirty = !!_mdNew; _mdManagedDirty = false;
     _mdLocalKeyIds = new Set(_mdNew ? [_mdNew.id] : []); _mdManagedNeedsReload = false;
     _mdRender();
+    // An unavailable Hub catalog cannot prove that a service was removed elsewhere.
+    if (!r.managedCatalogUnavailable)
+      for (const id of _mdDrafts.keys()) if (!_mdProvider(id)) _mdDrafts.delete(id);
     _mdLoadState = 'ready';
     return true;
   } catch (error) {

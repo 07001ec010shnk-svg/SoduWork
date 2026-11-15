@@ -416,3 +416,21 @@ test(`an oversized draft ${Object.keys(patch)[0]} cannot block another service s
   assert.equal(f.state.hubInputs.length, 1);
   assert.equal(f.evaluate('_mdDirty'), true);
 });
+
+test('a child editor resolves the complete device provider ID when there is no active selection', async t => {
+  const f = await fixture(t);
+  f.evaluate('_mdAddService(); _mdOpen = ""; _mdRender();');
+  assert.equal(f.evaluate('_mdOpen'), f.evaluate('_mdNew.id'));
+  assert.match(f.evaluate('_mdOpen'), /^device:custom-/);
+});
+
+test('saved device credentials retain local status and local key controls', async t => {
+  const f = await fixture(t);
+  f.touch('device:custom-private', { authMode: 'key' });
+  f.evaluate('_mdKeyEdits["device:custom-private"] = "synthetic-device-key"');
+  assert.equal(await f.evaluate('_mdSave(false)'), true);
+  assert.equal(f.evaluate('_mdState(_mdProvider("device:custom-private"))'), 'local');
+  assert.match(f.body.innerHTML, /移除本地密钥/);
+  assert.match(f.body.innerHTML, /本地访问密钥已配置/);
+  assert.doesNotMatch(f.body.innerHTML, /当前使用这个模型的个人 Key/);
+});
