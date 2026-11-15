@@ -480,6 +480,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
         return { ok: false, notFound: true, reason: '这条会话已经不存在了' };
       };
       let nativeLocal = false;
+      let knownAccountProjection = false;
       if (local) {
         let executable = true;
         try { historyAccess.assertOwner(app, opts.chatId, historyAccess.actor(app), local); }
@@ -534,6 +535,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       const selectedLive = opts.chatId && session.findBySessionId(opts.chatId);
       if (opts.chatId && (!selectedLive || selectedLive.adapterId === 'account-sync') &&
           typeof _accountSync !== 'undefined' && _accountSync?.isAccountConversation?.(opts.chatId)) {
+        knownAccountProjection = true;
         const item = await _accountSync.row(opts.chatId);
         await assertHistoryCurrent();
         if (item?.deleted) return { ok: false, notFound: true, reason: '这条会话已经不存在了' };
@@ -637,9 +639,9 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       // would turn a recoverable history miss into an adapter-not-registered
       // error page. The sidebar can refresh the authenticated directory and
       // retry the projection without creating a duplicate local session.
-      if (opts.chatId && (String(opts.adapterId || '').toLowerCase() === 'account-sync' ||
+      if (opts.chatId && (knownAccountProjection && !nativeLocal || String(opts.adapterId || '').toLowerCase() === 'account-sync' ||
           opts.accountConversation === true || opts.accountProjection === true)) {
-        return { ok: false, notFound: true,
+        return { ok: false, code: 'ACCOUNT_HISTORY_UNAVAILABLE',
           reason: '账号会话暂时无法读取，请刷新历史后重试' };
       }
       if (opts.chatId && typeof _cloudHandoff.reopen === 'function') {
@@ -716,7 +718,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       if (resume?.adapterId && !work.first) opts.adapterId = resume.adapterId;
       if (resume && (String(opts.adapterId || '').toLowerCase() === 'account-sync' ||
           resume.accountConversation === true || resume.accountProjection === true)) {
-        return { ok: false, notFound: true,
+        return { ok: false, code: 'ACCOUNT_HISTORY_UNAVAILABLE',
           reason: '账号会话暂时无法读取，请刷新历史后重试' };
       }
       // History links can omit the Agent or carry a stale composer choice.
@@ -932,7 +934,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       try {
         const result = await applicationEntries.navigate(event, raw.chatId);
         if (!result.ok || result.handled) return { ...result, applicationOpened: result.handled === true };
-      } catch (error) { return { ok: false, reason: String(error.message || error) }; }
+      } catch (error) { return { ok: false, reason: String(error.message || error),
+        ...(error.code === 'ACCOUNT_CONVERSATION_DELETED' ? { notFound: true, code: error.code } : {}) }; }
     }
     return openConversation(event, raw);
   });
@@ -1015,6 +1018,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       const acceptance = require('../conversation/acceptance-session').assertTask(s, rawOptions?.taskId);
       if (acceptance) rawOptions = { ...(rawOptions || {}), taskId: acceptance.taskRef,
         taskExecution: { acceptanceOnly: true, acceptanceMode: acceptance.acceptanceMode, approvalId: acceptance.approvalId,
+          ...Object.fromEntries(['acceptanceDraft', 'acceptanceInstruction'].filter(key =>
+            typeof rawOptions?.taskExecution?.[key] === 'string').map(key => [key, rawOptions.taskExecution[key]])),
           ...(acceptance.acceptanceAttachmentIds ? { acceptanceAttachmentIds: acceptance.acceptanceAttachmentIds } : {}) } };
       else if (rawOptions?.taskExecution?.acceptanceOnly) {
         if (rawOptions?.taskExecution?.acceptanceExecutionSession !== true)

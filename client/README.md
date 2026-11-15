@@ -24,6 +24,8 @@ The desktop uses Electron and native HTML/CSS/JavaScript. The React management U
 
 Conversations and task execution share the same session path: `panels-chat` → `conversationSession` → main-process IPC → `agent-runtime` → Pi or Runner. AI team assignments open the corresponding conversation. Requirement drawers expand task traces; legacy detail links resolve the same requirement rather than creating duplicate records.
 
+When the requirement creator and executor are the same person, execution continues in the original conversation. An explicitly selected runtime or model is applied through the normal native selection transaction while retaining the conversation ID and history. Acceptance also reuses the original execution conversation. These rules apply to Pi and every other runtime; only an authoritative missing-archive result permits a new conversation. Temporary read failures, denied access, and unconfirmed runtime switches preserve the original conversation and stop submission.
+
 The desktop rail opens the requirement pool directly. The old task board, detail chat box, and separate AI workstation conversation are retired. The [release scope](../docs/release-scope.en.md) describes the shared structure, assignment rules, and compatibility boundaries.
 
 HTML script order defines dependencies. When splitting scripts, verify resource references, shared state, loading order, and actual Electron behavior.
@@ -35,6 +37,8 @@ Remote notice history and receipt markers use account-scoped IndexedDB transacti
 The requirement delivery section can export one acceptance summary as Markdown through the native save dialog. Export requires execution-record access and an existing fixed delivery version. It reads one consistent snapshot, separates current requirement text from recorded acceptance criteria, and leaves missing validation or runtime attribution explicitly unrecorded. Exporting does not approve or change the requirement.
 
 The same section has a collapsed dispatch-instructions history. New desktop dispatches retain the explicitly entered supplementary note and selected/effective submission policy for each admitted conversation turn, including failed attempts. Native, Runner and workflow execution share this receipt path. Retrying the same turn cannot replace its note; later turns retain separate records. Only existing execution viewers can read this history. Old clients and historical entries without an explicit snapshot show missing fields as unrecorded; chat text, truncated legacy context and current routing are never used to reconstruct them.
+
+Conversation analysis and automatic acceptance include the saved requirement, dispatch supplements and review rejection notes. Conflicting business requirements follow the latest recorded time; unrelated requirements remain effective. Unknown or identical timestamps require explicit clarification rather than an invented priority. Generated drafts retain the original timestamps when resent. New reviewer notes are carried separately, and changed history invalidates a prepared review. The fixed delivery version, criterion identifiers and approval permissions remain authoritative. Client and Hub must both be updated to load this history; older services explicitly report missing history. Oversized history is rejected rather than silently truncated.
 
 ## Run and verify
 

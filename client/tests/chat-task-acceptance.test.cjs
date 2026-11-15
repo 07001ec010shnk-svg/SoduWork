@@ -95,7 +95,8 @@ function executionReviewFixture(bind) {
     ownerClientId: 'device', workRouting: { conversationTurn: { conversationId: 'execution-chat' } } };
   const input = { value: '', dispatchEvent() {} }, calls = [];
   const handle = { sessionId: 'execution-chat', taskIds: [] };
-  const window = { SoduWorkAPI: { getTask: async () => task, taskStorageKey: () => 'current-owner' } };
+  const window = {RequirementReviewContext:require('../core/requirement-review-context'),
+    SoduWorkAPI: { getTask: async () => task, taskStorageKey: () => 'current-owner' } };
   vm.runInNewContext(source, { window, SoduWorkAPI: window.SoduWorkAPI, setTimeout: () => 1,
     Event: class Event { constructor(type) { this.type = type; } } });
   const ctx = { _collabTasks: new Map([[task.id, { taskId: task.id, task }]]), _collabStarts: new Set(),
@@ -111,9 +112,94 @@ function executionReviewFixture(bind) {
     } }) };
   const controller = window.ChatTaskController.create(ctx);
   return { ctx, input, handle, task, calls, window,
-    open: (mode = 'manual') => controller._openTask(task.id, task.title, { task, source: 'acceptance',
-      acceptanceExecutionSession: true, acceptanceMode: mode, approvalId: 'pending-review' }) };
+    open: (mode = 'manual',options={}) => controller._openTask(task.id, task.title, { task, source: 'acceptance',
+      acceptanceExecutionSession: true, acceptanceMode: mode, approvalId: 'pending-review',...options }) };
 }
+
+const timeline=()=>({schemaVersion:1,revision:'revision-a',executionContextIncluded:true,rows:[
+  {id:'original',kind:'requirement',at:null,text:'Original request: blue background'},
+  {id:'supplement',kind:'supplement',at:'2026-11-14T01:00:00Z',text:'Supplement: red background'},
+  {id:'rework',kind:'rework',at:'2026-11-15T01:00:00Z',text:'Rejection feedback: green background'},
+]});
+
+for(const mode of ['manual','auto'])test(`${mode} prefill shows ordered requirement changes and keeps its generated baseline separate from the new reviewer note`,async()=>{
+  const f=executionReviewFixture(),history=timeline();
+  assert.equal(await f.open(mode,{requirementTimeline:history,acceptanceInstruction:'Check the mobile layout'}),true);
+  const draft=f.input.value;
+  assert.ok(draft.indexOf('Original request: blue background')<draft.indexOf('Supplement: red background'));
+  assert.ok(draft.indexOf('Supplement: red background')<draft.indexOf('Rejection feedback: green background'));
+  assert.match(draft,/真实记录时间最新/);assert.match(draft,/时间未记录/);assert.match(draft,/本次验收补充说明：\nCheck the mobile layout/);
+  assert.equal(f.ctx._sessionOptions.acceptanceDraft,draft);
+  assert.equal(f.ctx._sessionOptions.acceptanceInstruction,'Check the mobile layout');
+  const instruction=f.window.RequirementReviewContext.instruction(draft,f.ctx._sessionOptions);
+  assert.match(instruction,/Check the mobile layout/);assert.doesNotMatch(instruction,/Original request|red background|green background/);
+  f.input.value+='\n\nAlso verify keyboard navigation';
+  assert.equal(await f.open(mode,{requirementTimeline:history,acceptanceInstruction:'Check the mobile layout'}),true);
+  assert.equal(f.input.value,draft+'\n\nAlso verify keyboard navigation','Reopening must preserve newly typed instructions');
+  assert.equal(f.ctx._sessionOptions.acceptanceDraft,draft);
+  const appended=f.window.RequirementReviewContext.instruction(f.input.value,f.ctx._sessionOptions);
+  assert.match(appended,/Check the mobile layout/);assert.match(appended,/Also verify keyboard navigation/);
+  assert.doesNotMatch(appended,/Original request|red background|green background/);
+});
+
+test('a fresh timeline replaces only the unedited generated prefill for the same task and approval',async()=>{
+  const f=executionReviewFixture(),history=timeline();await f.open('manual',{requirementTimeline:history});
+  const before=f.input.value;
+  const fresh={...history,revision:'revision-b',rows:[...history.rows,{id:'new',kind:'supplement',at:'2026-11-15T02:00:00Z',text:'Newest saved note'}]};
+  await f.open('auto',{requirementTimeline:fresh,acceptanceInstruction:'Fresh approval note'});
+  assert.notEqual(f.input.value,before);assert.match(f.input.value,/Newest saved note/);assert.match(f.input.value,/Fresh approval note/);
+  assert.equal(f.ctx._sessionOptions.acceptanceDraft,f.input.value);
+});
+
+test('reopening an edited review without a new card note preserves the baseline-note pair',async()=>{
+  const f=executionReviewFixture();await f.open('manual',{requirementTimeline:timeline(),acceptanceInstruction:'Original reviewer note'});
+  const draft=f.input.value;f.input.value+='\n\nNew typed clarification';
+  await f.open('manual',{requirementTimeline:timeline()});
+  assert.equal(f.ctx._sessionOptions.acceptanceDraft,draft);assert.equal(f.ctx._sessionOptions.acceptanceInstruction,'Original reviewer note');
+  const instruction=f.window.RequirementReviewContext.instruction(f.input.value,f.ctx._sessionOptions);
+  assert.match(instruction,/Original reviewer note/);assert.match(instruction,/New typed clarification/);
+  assert.doesNotMatch(instruction,/Original request: blue background/);
+});
+
+test('a new card note is appended visibly to an edited draft while its original baseline metadata stays paired',async()=>{
+  const f=executionReviewFixture();await f.open('manual',{requirementTimeline:timeline(),acceptanceInstruction:'Original reviewer note'});
+  const draft=f.input.value;f.input.value+='\n\nPreserve this handwritten question';
+  const edited=f.input.value;
+  await f.open('auto',{requirementTimeline:timeline(),acceptanceInstruction:'New card reviewer note'});
+  assert.ok(f.input.value.startsWith(edited));assert.match(f.input.value,/本次验收补充说明：\nNew card reviewer note/);
+  assert.match(f.input.value,/本次验收方式：自动验收/);assert.equal(f.ctx._sessionOptions.acceptanceDraft,draft);
+  assert.equal(f.ctx._sessionOptions.acceptanceInstruction,'Original reviewer note');
+  assert.equal(JSON.parse(f.ctx._sessionOptions.acceptanceDraftScope)[2],'manual','The retained baseline keeps the mode in which it was generated');
+  assert.equal(f.ctx._sessionOptions.acceptanceMode,'auto');
+  const shown=f.input.value;
+  await f.open('auto',{requirementTimeline:timeline(),acceptanceInstruction:'New card reviewer note'});
+  assert.equal(f.input.value,shown,'Reopening the same card must not duplicate its visible note');
+  f.input.value=shown.replace('本次验收补充说明：\nNew card reviewer note','Removed reviewer note');
+  const editedAgain=f.input.value;
+  await f.open('auto',{requirementTimeline:timeline(),acceptanceInstruction:'New card reviewer note'});
+  assert.equal(f.input.value,editedAgain,'Reopening must not restore a note the reviewer removed from an edited draft');
+});
+
+test('legacy review preview preserves the canonical requirement body and explicitly marks unavailable history',()=>{
+  const window={};vm.runInNewContext(source,{window});
+  const text=window.ChatTaskController.acceptanceDraft({note:'Outdated legacy note',
+    requirementContent:{note:'Canonical requirement '+ 'x'.repeat(1000)+' Latest transfer supplement'}},'manual');
+  assert.match(text,/Latest transfer supplement/);assert.doesNotMatch(text,/Outdated legacy note/);
+  assert.match(text,/未提供完整/);
+});
+
+test('a late binding result preserves user input instead of replacing it with a generated review template',async()=>{
+  let finish;const f=executionReviewFixture(()=>new Promise(resolve=>{finish=resolve;}));
+  const pending=f.open('manual',{requirementTimeline:timeline(),acceptanceInstruction:'Approval note'});
+  f.input.value='My own review question';finish({ok:true});assert.equal(await pending,true);
+  assert.ok(f.input.value.startsWith('My own review question\n\n'));
+  assert.match(f.input.value,/本次验收补充说明：\nApproval note/);
+  assert.equal(f.ctx._sessionOptions.acceptanceDraft,'','User text is not relabeled as a generated history template');
+  assert.equal(f.ctx._sessionOptions.acceptanceInstruction,'Approval note');
+  const instruction=f.window.RequirementReviewContext.instruction(f.input.value,f.ctx._sessionOptions);
+  assert.match(instruction,/My own review question/);assert.match(instruction,/Approval note/);
+  assert.doesNotMatch(instruction,/Original request: blue background/);
+});
 
 test('reused review confirms the native task binding even when the renderer already shows the requirement', async () => {
   for (const mode of ['manual', 'auto']) {

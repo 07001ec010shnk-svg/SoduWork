@@ -104,6 +104,18 @@ test('model preflight shows pending state, preserves an acceptance draft on fail
   assert.equal(states.at(-1), 'idle');
 });
 
+test('review sends preserve the exact generated template and distinct reviewer instruction without promoting history to a fresh instruction',async()=>{
+  const f=fixture(),draft='【验收分析】\nOriginal and historical supplement context';
+  f.ctx._sessionOptions={acceptanceExecutionSession:true,acceptanceMode:'manual',approvalId:'review-1',
+    acceptanceDraft:draft,acceptanceInstruction:'Fresh reviewer note'};
+  f.ctx._activeCollabTaskId='review-task';f.ctx._collabTasks=new Map([['review-task',{task:{id:'review-task',status:'reviewing'},nativeTurn:true}]]);
+  f.input.value=draft+'\n\nFresh composer addition';
+  assert.equal(await f.ctx._sendCore(),true);
+  const sent=f.requests[0][3].taskExecution;
+  assert.equal(sent.acceptanceOnly,true);assert.equal(sent.acceptanceDraft,draft);assert.equal(sent.acceptanceInstruction,'Fresh reviewer note');
+  assert.equal(f.requests[0][1],draft+'\n\nFresh composer addition');
+});
+
 test('a late preflight error cannot overwrite a different conversation or account', async () => {
   for (const changed of ['conversation', 'account']) {
     const f = fixture(), check = deferred(); let finished = false;

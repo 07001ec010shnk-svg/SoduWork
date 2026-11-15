@@ -426,6 +426,9 @@ async def forget_previous_viewers(session, task, previous_org):
 async def update_shared(session, client, task, data):
     if not await can_manage(session, client, task):
         raise HTTPException(403, "你只能查看这条需求")
+    from . import requirement_timeline
+    previous_definition = requirement_timeline.definition(task)
+    previous_definition_version = int(task.requirement_version or 1)
     restore_cancelled = (task.status == "cancel" and "archivedAt" in data and
                          data["archivedAt"] is None and data.get("status") == "todo")
     if set(data) - (EXTRA_KEYS | BUSINESS_KEYS | ({"status"} if restore_cancelled else set())):
@@ -456,6 +459,7 @@ async def update_shared(session, client, task, data):
     # requirementVersion already increment it conditionally in apply.
     if not requirement_edit and set(data) & tasks._REQ_CONTENT_KEYS:
         task.requirement_version = int(task.requirement_version or 1) + 1
+    await requirement_timeline.record_definition(session, task, previous_definition, previous_definition_version)
     from . import task_notifications
     task_notifications.enqueue(session, task, "task.updated", previous_org=previous_org)
     await session.commit()
