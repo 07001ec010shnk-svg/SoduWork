@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 from contextlib import closing, contextmanager
 import getpass
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -322,13 +323,53 @@ def serve(state: Path, config: dict, args) -> None:
 
 
 def desktop_profile(state: Path) -> Path:
-    if sys.platform == 'darwin':
-        app_data = Path.home() / 'Library/Application Support'
-        if state.resolve() == (app_data / 'SoduWork/source-service').resolve():
-            # The existing Hub state is below the installed Electron profile.
-            # Keep its database in place and put the source desktop outside it.
-            return app_data / 'SoduWork Development/source-service-desktop'
-    return state / 'desktop-profile'
+    profile = state / 'desktop-profile'
+    if sys.platform != 'darwin':
+        return profile
+    app_data = Path.home() / 'Library/Application Support'
+    resolved = state.resolve()
+    reserved = [(app_data / name).resolve() for name in ('SoduWork', 'soduwork')]
+
+    def inside_installed(candidate: Path) -> bool:
+        parts = tuple(part.casefold() for part in candidate.resolve().parts)
+        return any(parts[:len(root.parts)] == tuple(part.casefold() for part in root.parts)
+                   for root in reserved)
+
+    def validate(candidate: Path) -> None:
+        # Validate before launch_desktop creates directories or writes configuration.
+        if inside_installed(candidate):
+            raise StartupError('The source desktop profile resolves inside installed client data. '
+                               'Choose an independent --data-dir or repair the development directory link; '
+                               'existing data was not changed.')
+        if os.path.lexists(candidate) and not candidate.is_dir():
+            raise StartupError('The source desktop profile is not an existing directory. '
+                               'Repair the profile path; existing data was not changed.')
+
+    if inside_installed(state) or inside_installed(profile):
+        # Keep Hub data in place. Only the source desktop profile moves out
+        # of the installed client's namespace, including custom state paths.
+        default = (app_data / 'SoduWork/source-service').resolve()
+        same_default = resolved == default or (
+            resolved.exists() and default.exists() and resolved.samefile(default))
+        if same_default:
+            # Preserve the existing default profile and its enrolled credentials.
+            profile = app_data / 'SoduWork Development/source-service-desktop'
+        else:
+            # Preserve the upstream identity, including case on sensitive volumes.
+            namespace = hashlib.sha256(os.fsencode(resolved)).hexdigest()[:20]
+            development = app_data / 'SoduWork Development'
+            profile = development / ('source-service-desktop-' + namespace)
+            validate(profile)
+            legacy = development / 'source-service-desktops' / namespace
+            if not os.path.lexists(profile) and os.path.lexists(legacy):
+                validate(legacy)
+                if legacy.is_symlink() or legacy.is_junction():
+                    raise StartupError('The previous source desktop profile must be a real directory. '
+                                       'Repair the profile path; existing data was not changed.')
+                # Reuse a prior development profile without moving or merging files.
+                profile = legacy
+    validate(profile)
+    return profile
 
 
 def launch_desktop(state: Path, client: Path, env: dict, base: str, output) -> subprocess.Popen:
@@ -419,7 +460,10 @@ def main(argv=None) -> int:
         if args.desktop:
             check_desktop_session()
         if args.check:
+            profile = desktop_profile(args.data_dir.expanduser().resolve()) if args.desktop else None
             dependency_report(desktop=args.desktop)
+            if profile is not None:
+                print(f'Desktop profile: {profile}')
             return 0
         check_dependencies()
         state = args.data_dir.expanduser().resolve()

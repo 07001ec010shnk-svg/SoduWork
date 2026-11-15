@@ -62,6 +62,35 @@ test('a saved local model is counted once and remains editable despite its catal
   assert.equal(JSON.stringify(catalog), before, 'presentation does not rewrite persisted or execution catalogs');
 });
 
+test('a saved device API key is presented as local availability without personal or company quota wording', () => {
+  const catalog = store.publicCatalog(store.normalize({
+    providers: [{ id: 'local-fixture', name: 'Local fixture', baseUrl: 'https://fixture.invalid/v1', authMode: 'key' }],
+    models: [{ providerId: 'local-fixture', name: 'local-model' }],
+    keys: { 'local-fixture': 'synthetic-local-key' },
+  }));
+  const f = fixture(catalog);
+  assert.equal(f.evaluate('_mdState(_mdProvider("local-fixture"))'), 'local');
+  assert.match(f.nav(), /st-local/);
+  assert.match(f.nav(), /本地可用/);
+  assert.match(f.detail(), /本地访问密钥已配置/);
+  assert.match(f.detail(), /本地模型不使用 Hub 模型额度/);
+  assert.match(f.detail(), /aria-label="移除本地密钥"/);
+  assert.doesNotMatch(f.nav() + f.detail(), /个人额度|公司凭据|公司可用|synthetic-local-key/);
+});
+
+test('an unsaved device key keeps local availability distinct from a managed personal key', () => {
+  const local = { id: 'device:local-fixture', name: 'Local fixture', localOnly: true,
+    baseUrl: 'https://fixture.invalid/v1', authMode: 'key', modelNames: [] };
+  const managed = { ...local, id: 'local-fixture', localOnly: false };
+  const f = fixture({ providers: [local, managed], myModels: [], usable: [] });
+  f.evaluate('_mdKeyEdits["device:local-fixture"] = "synthetic-device-draft"; _mdKeyEdits["local-fixture"] = "synthetic-managed-draft";');
+  assert.equal(f.evaluate('_mdState(_mdProvider("device:local-fixture"))'), 'local');
+  assert.equal(f.evaluate('_mdState(_mdProvider("local-fixture"))'), 'mine');
+  assert.match(f.nav('device:local-fixture'), /本地可用/);
+  assert.doesNotMatch(f.nav('device:local-fixture'), /个人额度|公司可用/);
+  assert.match(f.nav('local-fixture'), /个人额度/);
+});
+
 test('canonical built-in provider names are localizable while renamed providers remain user content', () => {
   const f = fixture();
   f.evaluate(`_mdData.providers.push(

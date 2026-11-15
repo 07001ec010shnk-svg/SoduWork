@@ -54,9 +54,12 @@ async function _mdPrepareServiceDelete(pid) {
       localKeys: { [pid]: null }, localRevision: catalog.revision };
   } else {
     const localIds = new Set(catalog.providers.filter(row => row.localOnly).map(row => row.id));
+    // Removing a personal provider also removes its saved key on the Hub.
+    // A redundant raw-ID key patch would be ambiguous when a device service
+    // has the same ID, since the deleted managed provider is absent below.
     plan.body = { providers: catalog.providers.filter(row => !row.localOnly && row.id !== pid),
       models: catalog.myModels.filter(row => !row.localOnly && !localIds.has(row.providerId) && row.providerId !== pid),
-      keys: { [pid]: null }, expectedRevision: catalog.revision };
+      keys: {}, expectedRevision: catalog.revision };
   }
   _mdGuardServiceDelete(plan);
   return plan;

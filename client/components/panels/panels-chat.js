@@ -508,6 +508,14 @@
     if (global.ChatTools && typeof ChatTools.paintSendButton === 'function') {
       ChatTools.paintSendButton(root, _runtimeBusy(), _messageAttachments, _stopState, _stopCapable(), _sendState);
     }
+    if ((_snap?.modelSelection?.model || _model)?.unavailable && !_stopCapable()) {
+      const send = root.querySelector('#nchatSend');
+      if (send) {
+        send.disabled = true;
+        send.title = '暂无可用模型，请检查模型配置后重试';
+        send.setAttribute('aria-label', send.title);
+      }
+    }
   }
   function _paintStopState() { _paintActionState(); }
   function _beginSendState() {
