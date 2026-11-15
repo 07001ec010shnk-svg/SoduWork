@@ -106,7 +106,8 @@ app.whenReady().then(async () => {
       assert.equal(opens[0].options.chatId, 'original-' + id, 'A paginated empty history must still open the exact original archive');
       assert.equal(actual.calls.filter(row => row.kind === 'send').length, 0);
       assert.equal(actual.calls.filter(row => row.kind === 'approval-detail').length, 1);
-      assert.equal(actual.calls.filter(row => row.kind === 'acceptance-context').length, mode==='auto'?1:0);
+      assert.equal(actual.calls.filter(row => row.kind === 'acceptance-context').length, 1,
+        'Manual analysis and automatic acceptance both read the authoritative review context before navigation');
       if (availability === 'unreadable') {
         assert.equal(opened, false); assert.equal(opens.length, 1, 'A failed archive read must not create another conversation');
         assert.equal(actual.snapshot.sessionNotFound, false); assert.equal(actual.snapshot.sessionOpenCode, 'ACCOUNT_HISTORY_UNAVAILABLE');

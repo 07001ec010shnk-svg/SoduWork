@@ -1018,6 +1018,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       const acceptance = require('../conversation/acceptance-session').assertTask(s, rawOptions?.taskId);
       if (acceptance) rawOptions = { ...(rawOptions || {}), taskId: acceptance.taskRef,
         taskExecution: { acceptanceOnly: true, acceptanceMode: acceptance.acceptanceMode, approvalId: acceptance.approvalId,
+          ...Object.fromEntries(['acceptanceDraft', 'acceptanceInstruction'].filter(key =>
+            typeof rawOptions?.taskExecution?.[key] === 'string').map(key => [key, rawOptions.taskExecution[key]])),
           ...(acceptance.acceptanceAttachmentIds ? { acceptanceAttachmentIds: acceptance.acceptanceAttachmentIds } : {}) } };
       else if (rawOptions?.taskExecution?.acceptanceOnly) {
         if (rawOptions?.taskExecution?.acceptanceExecutionSession !== true)

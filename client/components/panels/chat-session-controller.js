@@ -515,6 +515,8 @@ async function _sendCore(textOverride, sendOptions) {
     const sendTaskExecution = sendOptions?.taskExecution ||
       ((ctx._sessionOptions?.acceptanceSession === true || ctx._sessionOptions?.acceptanceExecutionSession === true) && sendTaskId ? { acceptanceOnly: true,
         acceptanceMode: ctx._sessionOptions.acceptanceMode, approvalId: ctx._sessionOptions.approvalId,
+        ...(typeof ctx._sessionOptions.acceptanceDraft === 'string' ? {acceptanceDraft:ctx._sessionOptions.acceptanceDraft} : {}),
+        ...(typeof ctx._sessionOptions.acceptanceInstruction === 'string' ? {acceptanceInstruction:ctx._sessionOptions.acceptanceInstruction} : {}),
         ...(ctx._sessionOptions?.acceptanceExecutionSession === true ? {acceptanceExecutionSession: true} : {}),
         ...(ctx._sessionOptions.acceptanceAttachmentIds ? {acceptanceAttachmentIds: ctx._sessionOptions.acceptanceAttachmentIds.slice()} : {}) } :
         activeTaskId ? { reuseConversation: true, followUp: !pendingBrief && !reworkSession,

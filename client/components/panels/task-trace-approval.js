@@ -90,29 +90,36 @@
   function openAcceptance(task, opts = {}) {
     const id = String(task?.id || '');
     const mode = opts.acceptanceMode === 'auto' ? 'auto' : 'manual';
+    const acceptanceInstruction = String(opts.acceptanceInstruction || '').trim();
+    const acceptanceAttachmentIds = Array.isArray(opts.acceptanceAttachmentIds)
+      ? [...new Set(opts.acceptanceAttachmentIds.map(String))].slice(0, 60) : [];
     const approvalId = String(opts.approvalId || '').startsWith('direct:') ? '' : String(opts.approvalId || '');
-    // The card has one active acceptance session per approval. Keep the mode
-    // out of the dedupe key so a quick radio switch cannot create two chats.
-    const key = [id, approvalId, acceptanceEpoch].join(':');
-    const recent = recentAcceptanceOpens.get(key);
-    if (recent && recent.expiresAt > Date.now()) return recent.promise;
-    if (recent) recentAcceptanceOpens.delete(key);
+    // Serialize changed choices for an approval without opening conversations concurrently.
+    // Only identical mode, note and file choices share a completed or pending request.
+    const epoch = acceptanceEpoch, key = [id, approvalId, epoch].join(':');
+    const signature = JSON.stringify([mode, acceptanceInstruction, [...acceptanceAttachmentIds].sort()]);
     const inFlight = acceptanceOpens.get(key);
-    if (inFlight) return inFlight;
-    const run = (async () => {
-      const epoch = acceptanceEpoch;
+    if (inFlight?.signature === signature) return inFlight.promise;
+    const recent = recentAcceptanceOpens.get(key);
+    if (!inFlight && recent?.signature === signature && recent.expiresAt > Date.now()) return recent.promise;
+    if (recent) recentAcceptanceOpens.delete(key);
+    const open = async () => {
       const assertCurrent = () => { if (epoch !== acceptanceEpoch) throw new Error('账号或服务已变化，请重新打开需求后重试'); };
+      assertCurrent();
       if (!id || typeof global.openTaskConversation !== 'function') throw new Error('验收会话暂时无法打开，请重试');
       const latest = global.SoduWorkAPI?.getTask ? await global.SoduWorkAPI.getTask(id) : task;
       assertCurrent();
       if (global.Requirements && (!latest || global.Requirements.stage(latest) !== 'reviewing' || latest.reviewedAt || latest.canViewExecution === false))
         throw new Error('需求状态或验收权限已变化，请刷新后重试');
+      let context = null;
+      if (typeof global.SoduWorkAPI?.getAcceptanceContext === 'function') {
+        context = await global.SoduWorkAPI.getAcceptanceContext(id);
+        assertCurrent();
+      }
       if (mode === 'auto') {
         const translated = message => global.SoduWorkI18n?.translateText?.(message) || message;
         if (typeof global.SoduWorkAPI?.getAcceptanceContext !== 'function')
           throw new Error(translated('暂时无法读取验收条件，请刷新后重试'));
-        const context = await global.SoduWorkAPI.getAcceptanceContext(id);
-        assertCurrent();
         if (context?.readiness?.requiresHumanConfirmation === true ||
             (context?.artifact?.kind === 'manual' && context?.artifact?.manifest?.manual === true))
           throw new Error('本轮没有可自动核验的交付物，请使用手动验收确认实际结果');
@@ -156,23 +163,28 @@
         acceptanceSession: !reuseExecutionSession,
         ...(reuseExecutionSession ? {chatId: originalId, reuseExecutionSession: true, acceptanceExecutionSession: true} : {}),
         acceptanceMode: mode, approvalId,
-        ...(Array.isArray(opts.acceptanceAttachmentIds) && opts.acceptanceAttachmentIds.length
-          ? {acceptanceAttachmentIds: [...new Set(opts.acceptanceAttachmentIds.map(String))].slice(0, 60)} : {}),
+        acceptanceInstruction,
+        ...(context?.requirementTimeline ? {requirementTimeline:context.requirementTimeline} : {}),
+        ...(acceptanceAttachmentIds.length ? {acceptanceAttachmentIds} : {}),
       });
       if (!opened) throw new Error('验收会话未能打开，需求仍保留在待验收，可重试');
       assertCurrent();
       await opts.onOpened?.(opts.approvalId || '', mode);
+      assertCurrent();
       return true;
-    })();
+    };
+    const run = inFlight ? inFlight.promise.catch(() => {}).then(open) : open();
     const tracked = run.then((result) => {
-      recentAcceptanceOpens.set(key, {promise: tracked, expiresAt: Date.now() + ACCEPTANCE_OPEN_DEDUPE_MS});
+      if (epoch === acceptanceEpoch)
+        recentAcceptanceOpens.set(key, {signature, promise: tracked, expiresAt: Date.now() + ACCEPTANCE_OPEN_DEDUPE_MS});
       return result;
     }, (error) => { throw error; });
-    acceptanceOpens.set(key, tracked);
+    const pending = {signature, promise: tracked};
+    acceptanceOpens.set(key, pending);
     tracked.then(() => {
-      if (acceptanceOpens.get(key) === tracked) acceptanceOpens.delete(key);
+      if (acceptanceOpens.get(key) === pending) acceptanceOpens.delete(key);
     }, () => {
-      if (acceptanceOpens.get(key) === tracked) acceptanceOpens.delete(key);
+      if (acceptanceOpens.get(key) === pending) acceptanceOpens.delete(key);
     });
     return tracked;
   }
@@ -295,6 +307,8 @@
     const review = String(item.action || '') === 'review';
     const manualOnly = manualConfirmationOnly(item);
     const mode = manualOnly ? 'manual' : acceptanceModes.get(acceptanceKey(requestId(item), item.artifactVersionId || artifact.id || subject)) || 'manual';
+    const noteField = '<label class="tfd-inline-note"><span>' + (review ? '验收补充说明' : '审批说明') +
+      ' <small>退回时必填</small></span><textarea rows="2" maxlength="2000" data-tfd-approval-note placeholder="补充核验要求、需要修改的内容或批准依据"></textarea></label>';
     return '<section class="tfd-inline-approval is-' + tone(item.status) +
       '" data-tfd-acceptance-choice="' + mode + '" data-tfd-approval-id="' + esc(requestId(item)) + '" data-tfd-consent="' + esc(item.artifactVersionId || artifact.id || subject) + '" data-tfd-blocking="' + blocking + '"' + (direct ? ' data-tfd-direct="1"' : '') + '>' +
       '<header><div class="tfd-inline-approval-title"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="m12 3 8 3v6c0 4-4 7-8 9-4-2-8-5-8-9V6zM12 8v5m0 3h.01"/></svg><b>' +
@@ -311,8 +325,9 @@
         '</div><p data-tfd-mode-manual>在新会话中核对本次固定版本与证据，不重新执行原需求；分析完成后回到此卡提交确认或退回。</p>' +
         '<p data-tfd-mode-auto>打开独立验收会话，由 SoduWork 核对本次固定版本。只有完整报告且每项标准可证实才会自动提交；失败或未通过保留待验收并附逐项证据。原交付物不重新执行或修改，启动失败可重试。</p></fieldset>' : '') +
       (verify ? '<label class="tfd-inline-verify"' + (review && taskId ? ' data-tfd-mode-manual' : '') + '><input type="checkbox" data-tfd-approval-verify><span>我已核对本次版本、证据与环境范围</span></label>' : '') +
+      (review ? noteField : '') +
       '<details class="tfd-inline-approval-form"' + (review && taskId ? ' data-tfd-mode-manual' : '') + (review && taskId && mode === 'manual' ? ' open' : '') + ' data-tfd-open="inline-approval-form"><summary>说明与审批依据<svg viewBox="0 0 24 24"><path d="m8 10 4 4 4-4"/></svg></summary>' +
-      '<label class="tfd-inline-note"><span>审批说明 <small>退回时必填</small></span><textarea rows="2" maxlength="2000" data-tfd-approval-note placeholder="需要修改什么，或补充批准依据"></textarea></label>' +
+      (review ? '' : noteField) +
       (review ? '<div class="tfd-inline-rework-files" data-tfd-rework-files>' +
         '<label class="tfd-inline-file-picker"><input type="file" multiple data-tfd-rework-file hidden><span>添加返修资料</span></label>' +
         '<small>仅作为返修参考，不会计入交付产物</small><div data-tfd-rework-file-list></div></div>' : '') +
@@ -555,6 +570,7 @@
     try {
       await openAcceptance({id: taskId, title: state?.opts?.taskTitle || ''}, {
         acceptanceMode: button.getAttribute('data-tfd-acceptance-session') === 'auto' ? 'auto' : 'manual',
+        acceptanceInstruction: String(block.querySelector('[data-tfd-approval-note]')?.value || '').trim(),
         approvalId: id, onOpened: state?.opts?.onAcceptanceOpened,
       });
       dismissAcceptanceCard(block, state, {
