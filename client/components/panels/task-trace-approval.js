@@ -151,7 +151,7 @@
         source: 'acceptance', forceNew: false,
         /*
          * Keep the original conversation type and mark this turn as review context. Navigation
-         * creates a separate review conversation if the original is unavailable.
+         * creates a separate review conversation only after the original archive is confirmed missing.
          */
         acceptanceSession: !reuseExecutionSession,
         ...(reuseExecutionSession ? {chatId: originalId, reuseExecutionSession: true, acceptanceExecutionSession: true} : {}),

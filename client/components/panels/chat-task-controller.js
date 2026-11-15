@@ -832,7 +832,7 @@
     }
     // A reserved or released archive can retain its id without a live handle.
     // Explicit new execution must clear it before _ensure falls back to that id.
-    if ((ctx._ref || (opts.forceNew && ctx._sessionId)) &&
+    if ((ctx._ref || (opts.forceNew && ctx._sessionId) || (ctx._sessionId && mappedChatId && mappedChatId !== String(ctx._sessionId))) &&
         (!ctx._sessionId || !mappedChatId || String(mappedChatId) !== String(ctx._sessionId))) ctx.reset();
     current = _viewGuard(true);
     // A task may already belong to this shared conversation. Its requested

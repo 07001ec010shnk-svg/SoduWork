@@ -221,6 +221,23 @@ test('switching to Codex with an empty native directory retains an unknown defau
   assert.equal((await handle.setThinkingLevel('high')).ok, false);
   assert.equal(f.requests.filter(row => row.op === 'job.dispatch').length, 0);
 });
+
+test('switching account runtimes uses the target catalog default without inheriting another account model', async t => {
+  t.mock.method(require('../main/agent-runtime/native-model-catalog'), 'list', () => ({ ok: true,
+    models: [{ id: 'target-codex-default' }] }));
+  const f = fixture(t), handle = (await f.bridge.open(options(f))).session, id = handle.sessionId;
+  await send(handle, 'Keep this conversation across account runtimes');
+  assert.equal((await handle.selectAgent('codex', { modelName: 'explicit-codex-model' })).ok, true);
+  assert.equal((await handle.selectAgent('claude')).ok, true);
+  assert.equal(handle.sessionId, id);
+  assert.equal(handle.snapshot().modelSelection.name, '');
+  assert.equal((await handle.selectAgent('codex')).ok, true);
+  assert.equal(handle.snapshot().modelSelection.name, 'target-codex-default');
+  assert.equal((await handle.selectAgent('claude', { modelName: 'explicit-claude-model' })).ok, true);
+  assert.equal(handle.snapshot().modelSelection.name, 'explicit-claude-model');
+  assert.equal(handle.sessionId, id);
+  assert.equal(handle.snapshot().messages[0].text, 'Keep this conversation across account runtimes');
+});
 const options = f => ({ app: f.app, ref: 'chat-switch', cwd: f.root, identity: identity('alice'), adapterId: 'pi', modelName: 'model-a',
   resolvePlugins: async ids => ({ items: ids.map(pluginId => ({ pluginId, name: 'Meeting', context: 'Fixture plugin context' })) }) });
 async function send(handle, text) { const sent = handle.submit(text, [], {}); assert.equal(sent.accepted, true); const done = await sent.completion; assert.equal(done.ok, true, JSON.stringify(done)); }
