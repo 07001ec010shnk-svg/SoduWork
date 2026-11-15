@@ -264,7 +264,8 @@ function controlsFixture(api, initial = {}, settings = {}) {
   wrap.querySelector = selector => selector === 'button' ? button : selector === '.nmodel-pop' ? pop : null;
   el.querySelector = selector => selector === '#nchatQueue' ? queue : selector === '#nchatModel' ? wrap : null;
   const state = { ref: 'fixture-chat', adapterId: 'codex', ...initial }, notices = [];
-  const window = { ...node(), innerWidth: 1000, innerHeight: 800, soduWorkAPI: { conversationSession: api } };
+  const window = { ...node(), innerWidth: 1000, innerHeight: 800, setTimeout, clearTimeout,
+    soduWorkAPI: { conversationSession: api } };
   if (settings.myModels) window.SoduWorkAPI = { myModels: settings.myModels };
   if (settings.native) window.ComposeModelPicker = { nativeEffort: {
     levels: model => model?.reasoningLevels || [], defaultLevel: model => model?.defaultReasoning || '',

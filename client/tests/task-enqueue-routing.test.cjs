@@ -80,6 +80,119 @@ function openedNative(options) {
     taskBindings: options.taskRef ? [{taskId: options.taskRef}] : []};
 }
 
+function sameOwnerCreationFixture(task, archive = {}) {
+  const f = nativeOpeningFixture(task, {open: options => options.chatId ? {
+    ...openedNative(options), sessionId: options.chatId, adapterId: archive.adapterId || 'pi',
+    model: {id: archive.model || 'shared-model'},
+  } : openedNative(options)});
+  let owner = 'creation-owner';
+  f.window.SoduWorkAPI.taskStorageKey = () => owner;
+  f.window.__teamCap = {meId: 'u'};
+  f.window.soduWorkAPI = {conversationSession: {findTaskCreation: async () => ({ok:true, sessionId:'creation-chat'})}};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../core/task-conversation-navigation.js'), 'utf8'), {window:f.window});
+  return {...f, switchOwner: value => { owner = value; }};
+}
+
+const ownPendingTask = () => ({id:'own-pending', title:'Choose execution independently', status:'todo',
+  createdBy:'u', assigneeUserId:'u', workRouting:{},
+  executionContext:{strategy:'direct', runner:{mode:'local'}}});
+
+for (const [created, selected] of [['pi','qwen'], ['qwen','opencode'], ['opencode','deepseek-harness'],
+  ['kimi','harness2'], ['harness2','codex-harness'], ['pi','codex'], ['pi','claude'], ['codex','pi'], ['claude','qwen']]) {
+  test(`implicit creation archive ${created} does not override first execution runtime ${selected}`, async () => {
+    const task = ownPendingTask(), f = sameOwnerCreationFixture(task, {adapterId:created});
+    const result = await f.api.enqueueTask(task.id, {source:'task-dispatch',agentId:'local:' + selected,model:'shared-model'});
+    assert.equal(result.ok, true);
+    assert.equal(f.nativeOpens.length, 2);
+    assert.equal(f.nativeOpens[0].chatId, 'creation-chat');
+    assert.equal(f.nativeOpens[1].chatId, undefined);
+    assert.equal(f.nativeOpens[1].adapterId, selected);
+    assert.equal(f.nativeOpens[1].modelName, 'shared-model');
+    assert.equal(f.ctx._sessionOptions.adapterId, selected);
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.sent[0].options.taskExecution.agentId, 'local:' + selected);
+    assert.equal(f.removed.length, 0, 'Creation history is retained');
+  });
+}
+
+for (const adapterId of ['pi','codex','claude']) {
+  test(`same-runtime ${adapterId} first dispatch honors an explicitly different model in a new archive`, async () => {
+    const task = ownPendingTask(), f = sameOwnerCreationFixture(task, {adapterId,model:'creation-model'});
+    assert.equal((await f.api.enqueueTask(task.id, {source:'task-dispatch',agentId:'local:' + adapterId,model:'execution-model'})).ok, true);
+    assert.equal(f.nativeOpens.length, 2);
+    assert.equal(f.nativeOpens[1].adapterId, adapterId);
+    assert.equal(f.nativeOpens[1].modelName, 'execution-model');
+    assert.equal(f.sent[0].options.taskExecution.model, 'execution-model');
+    assert.equal(f.removed.length, 0);
+  });
+
+  test(`matching ${adapterId} choices reuse the verified creation archive`, async () => {
+    const task = ownPendingTask(), f = sameOwnerCreationFixture(task, {adapterId});
+    assert.equal((await f.api.enqueueTask(task.id, {source:'task-dispatch',agentId:'local:' + adapterId,model:'shared-model'})).ok, true);
+    assert.equal(f.nativeOpens.length, 1);
+    assert.equal(f.ctx._sessionId, 'creation-chat');
+    assert.equal(f.sent.length, 1);
+  });
+}
+
+test('an omitted model is not interpreted as an explicit replacement of the creation model', async () => {
+  const task = ownPendingTask(), f = sameOwnerCreationFixture(task, {model:'creation-model'});
+  assert.equal((await f.api.enqueueTask(task.id, {source:'task-dispatch',agentId:'local:pi'})).ok, true);
+  assert.equal(f.nativeOpens.length, 1);
+  assert.equal(f.ctx._model.id, 'creation-model');
+});
+
+test('controlled dispatch keeps the creation host and its separately selected executor', async () => {
+  const task = ownPendingTask(), f = sameOwnerCreationFixture(task);
+  assert.equal((await f.api.enqueueTask(task.id, {source:'task-dispatch',agentId:'local:qwen',
+    repo:{id:'repo',path:'/synthetic/repo'},model:'executor-model'})).ok, true);
+  assert.equal(f.nativeOpens.length, 1);
+  assert.equal(f.ctx._sessionOptions.adapterId, 'pi');
+  assert.equal(f.sent[0].options.taskExecution.agentId, 'local:qwen');
+  assert.equal(f.sent[0].options.taskExecution.model, 'executor-model');
+});
+
+for (const mode of ['explicit-chat','explicit-reuse','existing-receipt']) {
+  test(`${mode} retains strict runtime compatibility instead of creating a replacement`, async () => {
+    const task = ownPendingTask();
+    if (mode === 'existing-receipt') task.workRouting.conversationTurn = {conversationId:'execution-chat',state:'failed'};
+    const f = sameOwnerCreationFixture(task);
+    const result = await f.api.enqueueTask(task.id, {source:'task-dispatch',agentId:'local:qwen',model:'shared-model',
+      ...(mode === 'explicit-chat' ? {chatId:'creation-chat'} : {}),
+      ...(mode === 'explicit-reuse' ? {chatId:'creation-chat',reuseConversation:true} : {})});
+    assert.equal(result.ok, false);
+    assert.match(result.reason, /Agent|会话/);
+    assert.equal(f.nativeOpens.length, 1);
+    assert.equal(f.sent.length, 0);
+  });
+}
+
+for (const change of ['owner','view','request','missing','started','receipt','runtime','model','repo','read-failed']) {
+  test(`implicit creation mismatch fails closed when the authoritative recheck changes ${change}`, async () => {
+    const task = ownPendingTask(), f = sameOwnerCreationFixture(task);
+    let reads = 0;
+    f.window.SoduWorkAPI.getTask = async () => {
+      // Binding the restored archive also refreshes its task card before the explicit recheck.
+      if (++reads <= 2) return task;
+      if (change === 'owner') f.switchOwner('different-owner');
+      if (change === 'view') f.ctx._viewEpoch++;
+      if (change === 'request') f.ctx._taskOpenSeq++;
+      if (change === 'missing') return null;
+      if (change === 'read-failed') throw Error('Offline authority read');
+      if (change === 'started') return {...task,status:'doing'};
+      if (change === 'receipt') return {...task,workRouting:{conversationTurn:{conversationId:'other-chat',state:'failed'}}};
+      if (change === 'runtime') return {...task,executionContext:{...task.executionContext,agent:{id:'local:claude'}}};
+      if (change === 'model') return {...task,model:'newly-assigned-model'};
+      if (change === 'repo') return {...task,repoId:'another-repo'};
+      return task;
+    };
+    assert.equal((await f.api.enqueueTask(task.id, {source:'task-dispatch',agentId:'local:qwen',model:'shared-model'})).ok, false);
+    assert.equal(reads, 3);
+    assert.equal(f.nativeOpens.length, 1);
+    assert.equal(f.sent.length, 0);
+  });
+}
+
 test('same-person dispatch prefers the original conversation and preserves controlled execution choices', async () => {
   const task = {id:'same-owner', title:'Delivery', status:'todo', createdBy:'u', assigneeUserId:'u',
     workRouting:{selectedStrategy:'direct', selectedAgentId:'pi', executionContext:{strategy:'direct', agent:{id:'pi'}, runner:{mode:'local'}}}};

@@ -13,6 +13,15 @@
       idle.has(String(ai.executionState || '').toLowerCase());
   }
 
+  function dispatchScope(task) {
+    const item = task || {}, routing = item.workRouting || {};
+    return JSON.stringify([item.createdBy, item.assigneeUserId, item.executorUserId,
+      item.projectId, item.project?.id, item.repoId, item.repo, item.agentId, item.agentKind,
+      item.assigneeType, item.squadId, item.workflowBindingId, item.model, item.reasoningEffort,
+      item.executionContext, routing.executionContext, routing.selectedStrategy, routing.selectedAgentId,
+      routing.workflowBindingId, routing.selectedWorkflowBindingId, routing.requiredAgentCapabilities]);
+  }
+
   function create(ctx, {
     _viewGuard, _sessionContext, _collabEntryStatus, _persistTaskBinding,
     _bindCollaborationTask, _setCollabEntryStatus, _openTaskPicker, _openTask,
@@ -205,14 +214,20 @@
     async function enqueueTask(taskId, options) {
       let opts = options || {};
       const current = _viewGuard();
-      const task = await global.SoduWorkAPI.getTask(taskId);
+      let task = await global.SoduWorkAPI.getTask(taskId);
       if (!current()) return {ok:false,reason:'会话已切换，需求未发送，请在目标会话重试'};
       if (!task) return { ok: false, reason: '需求不存在' };
       if (!isPickableTask(task)) return { ok: false, reason: '需求尚未准备好、已开始执行或无执行权限，请在需求池查看当前状态' };
-      if (opts.source === 'task-dispatch' && !opts.forceNew && !opts.chatId && !opts.reuseConversation) {
+      const requestedScope = dispatchScope(task);
+      let preferredCreation = false;
+      if (opts.source === 'task-dispatch' && !opts.forceNew && !opts.chatId && !opts.reuseConversation &&
+          !opts.acceptanceSession && !opts.acceptanceExecutionSession && !opts.reworkSession) {
         const original = await global.TaskConversationNavigation?.preferredConversation?.(task);
         if (!current()) return {ok:false,reason:'会话已切换，需求未发送，请在目标会话重试'};
-        if (original) opts = {...opts, chatId: original, preferredConversation: true};
+        if (original) {
+          preferredCreation = !task.workRouting?.conversationTurn?.conversationId;
+          opts = {...opts, chatId: original, preferredConversation: true};
+        }
       }
       const selection = _taskExecutionConfig(task, opts), config = selection.config;
       if (['task-dispatch', 'requirement-session'].includes(opts.source) && Object.hasOwn(opts, 'brief')) {
@@ -239,12 +254,32 @@
         reason: '当前会话使用 ' + info.adapterId + '，请先打开 ' + kind + ' 会话再派活，已有对话不会被更换底座' };
       if (!taskNavigation && validatingCurrent && ctx._ref && !controlled && config.model && config.model !== ctx._workModel()) return { ok: false,
         reason: '当前会话使用的模型与派活选择不同，请先在会话中确认模型，避免静默更换配置' };
-      const opened = await _openTask(taskId, task.title, { source: 'task-dispatch',
+      const openOptions = { source: 'task-dispatch',
         task, ...(opts.reuseConversation ? {} : {sessionOptions}), forceNew, chatId: opts.chatId || '', navigation: taskNavigation,
         preferredConversation: opts.preferredConversation === true,
         reuseCurrent: opts.reuseConversation ? (!opts.chatId || opts.chatId === ctx._sessionId) :
-          !taskNavigation && (!task.projectId || !info.projectId || task.projectId === info.projectId) });
+          !taskNavigation && (!task.projectId || !info.projectId || task.projectId === info.projectId) };
+      let opened = await _openTask(taskId, task.title, openOptions);
       if (!opened) return { ok: false, reason: ctx._taskOpenError || '需求会话未能打开' };
+      const restored = ctx.sessionInfo();
+      const differentChoice = Boolean(kind && kind !== restored.adapterId || config.model && config.model !== ctx._workModel());
+      if (preferredCreation && !controlled && differentChoice) {
+        // Creation provenance is a navigation preference, not an execution choice.
+        // Keep that archive intact when the executor explicitly chooses another runtime or model.
+        const sameView = _viewGuard(), sequence = ctx._taskOpenSeq;
+        let latest;
+        try { latest = await global.SoduWorkAPI.getTask(taskId); }
+        catch (_) { return {ok:false, reason:'需求暂时无法确认，请重新安排执行'}; }
+        if (!sameView() || sequence !== ctx._taskOpenSeq)
+          return {ok:false, reason:'会话已切换，需求未发送，请在目标会话重试'};
+        if (String(latest?.id || '') !== String(taskId) || !isPickableTask(latest) ||
+            latest.workRouting?.conversationTurn?.conversationId || dispatchScope(latest) !== requestedScope)
+          return {ok:false, reason:'需求状态或执行配置已变化，请重新安排执行'};
+        task = latest;
+        opened = await _openTask(taskId, task.title, {...openOptions, task,
+          forceNew:true, chatId:'', preferredConversation:false, reuseCurrent:false, navigation:true});
+        if (!opened) return {ok:false, reason:ctx._taskOpenError || '需求会话未能打开'};
+      }
       if (opts.reuseConversation) {
         const reason = global.RequirementSessionContext?.compatibility(task, _sessionContext());
         if (reason) return {ok:false,reason};

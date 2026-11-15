@@ -48,6 +48,7 @@
     get _cancel() { return _cancel; },
     get _stopState() { return _stopState; },
     get _sendState() { return _sendState; },
+    get _sendPreflight() { return _sendPreflight; }, set _sendPreflight(value) { _sendPreflight = value; },
     get _beginSendState() { return _beginSendState; },
     get _finishSendState() { return _finishSendState; },
     get _mode() { return _mode; }, set _mode(value) { _mode = value; },
@@ -193,6 +194,7 @@
   let _stopState = 'idle';  // idle | requested | timeout; scoped to the active turn.
   let _sendState = 'idle';  // idle | sending; scoped to the current submission.
   let _sendStateToken = 0;
+  let _sendPreflight = null;
   let _stopTimer = null;
   let _stopRequestToken = 0;
   let _stopReceiptAcknowledged = false;
@@ -850,6 +852,7 @@
     _stopRequestToken += 1;
     _sendStateToken += 1;
     _sendState = 'idle';
+    _sendPreflight = null;
     _clearStopTimer();
     _stopState = 'idle';
     _stopReceiptAcknowledged = false;
