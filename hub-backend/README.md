@@ -74,6 +74,14 @@ Partial plans are discarded; broken
 streams, HTTP failures and native execution are not retried by this recovery path.
 Persistent truncation or a lower configured cap still fails before execution.
 
+Native Harness² model requests connect directly to the configured endpoint. Each
+request has a 120-second network idle timeout and a 300-second total deadline.
+The SSE transport and the assembled output have separate size limits.
+
+DeepSeek Harness can continue once within the same native session when the model
+reports `max_tokens` and tool activity has settled. It asks the model to finish
+from the saved tool results. A second output limit is reported as incomplete.
+
 ## Database configuration
 
 Set `DATABASE_URL` in private configuration when overriding the SQLite default:
