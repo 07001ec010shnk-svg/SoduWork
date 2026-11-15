@@ -1,6 +1,7 @@
 """ACP storage guidance is specific and preserves native diagnostic evidence."""
 import io
 import json
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -47,6 +48,42 @@ class AcpErrorMessagesTests(unittest.TestCase):
     def test_unknown_error_is_unchanged(self):
         message = "Internal error: upstream unavailable"
         self.assertEqual(bridge._friendly_bridge_error("dsh", message), message)
+
+    def test_dsh_output_limit_resumes_once_without_replaying_original_prompt(self):
+        for agent, reasons, busy, prompts, succeeds in [
+            ('dsh', ['max_tokens', 'end_turn'], False, 2, True),
+            ('dsh', ['max_tokens', 'max_tokens'], False, 2, False),
+            ('dsh', ['max_tokens'], True, 1, False),
+            ('qwen', ['max_tokens'], False, 1, False),
+        ]:
+            with self.subTest(agent=agent, reasons=reasons, busy=busy), TemporaryDirectory() as folder:
+                acp = bridge.AcpBridge([], folder, agent, 'workspace')
+                seen = []
+                stops = iter(reasons)
+
+                def request(method, params):
+                    if method == 'initialize':
+                        return {'protocolVersion': 1}
+                    if method == 'session/new':
+                        return {'sessionId': 'existing-tools'}
+                    self.assertEqual(method, 'session/prompt')
+                    seen.append(params)
+                    return {'stopReason': next(stops)}
+
+                with patch.object(acp, 'start'), patch.object(acp, 'request', side_effect=request), \
+                        patch.object(acp.access, 'apply'), patch.object(acp.transition, 'busy', return_value=busy), \
+                        patch.object(bridge.qwen_runtime, 'apply_model'), patch.object(bridge, '_emit'):
+                    if succeeds:
+                        self.assertEqual(acp.run('Original synthetic task'), 0)
+                    else:
+                        with self.assertRaises(bridge.BridgeError):
+                            acp.run('Original synthetic task')
+                self.assertEqual(len(seen), prompts)
+                self.assertEqual({p['sessionId'] for p in seen}, {'existing-tools'})
+                self.assertEqual(seen[0]['prompt'][0]['text'], 'Original synthetic task')
+                if prompts == 2:
+                    self.assertNotIn('Original synthetic task', seen[1]['prompt'][0]['text'])
+                    self.assertIn('已确认的工具结果继续', seen[1]['prompt'][0]['text'])
 
     def test_real_bridge_entry_emits_failure_and_always_closes(self):
         args = SimpleNamespace(agent=["fixture"], cwd="fixture", agent_name="dsh",

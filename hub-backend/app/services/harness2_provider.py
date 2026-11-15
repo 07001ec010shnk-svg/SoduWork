@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 
 from .harness2_errors import StructuredFailure, PlanningOutputLimit
-from .mcp_http import _NoRedirect, _response_chunks
+from .mcp_http import ResponseTooLarge, _NoRedirect, _response_chunks
 
 
 def normalize_usage(value):
@@ -125,7 +125,8 @@ def thinking_options(model, *, planning=False):
     return result
 
 
-def request(model, messages, tools, *, timeout=90, on_text=None, on_usage=None, planning=False):
+def request(model, messages, tools, *, timeout=90, idle_timeout=None,
+            on_text=None, on_usage=None, planning=False):
     """Return a validated assistant message and real usage; never retry actions."""
     import time
 
@@ -174,13 +175,18 @@ def request(model, messages, tools, *, timeout=90, on_text=None, on_usage=None, 
     try:
         deadline = time.monotonic() + timeout
         streamed = False
-        with urllib.request.build_opener(_NoRedirect()).open(req, timeout=timeout) as response:
+        # Match the managed model gateway: route model requests directly even
+        # when macOS has an HTTP proxy configured for other traffic.
+        open_timeout = timeout if idle_timeout is None else min(timeout, idle_timeout)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+        with opener.open(req, timeout=open_timeout) as response:
             if "text/event-stream" in response.headers.get("Content-Type", "").lower():
                 from .harness2_streaming import read
-                data = read(response, deadline, anthropic, on_text, streamed_usage)
+                data = read(response, deadline, anthropic, on_text, streamed_usage,
+                            idle_timeout=idle_timeout)
                 streamed = True
             else:
-                data = json.loads(b"".join(_response_chunks(response, deadline)))
+                data = json.loads(b"".join(_response_chunks(response, deadline, idle_timeout=idle_timeout)))
     except urllib.error.HTTPError as exc:
         status = exc.code
         try:
@@ -201,6 +207,8 @@ def request(model, messages, tools, *, timeout=90, on_text=None, on_usage=None, 
                                 else "model_connection") from None
     except OSError:
         raise StructuredFailure("model_connection") from None
+    except ResponseTooLarge:
+        raise StructuredFailure("response_limit") from None
     except ValueError:
         raise StructuredFailure("response_format") from None
     tokens = normalize_usage(data.get("usage")) if isinstance(data, dict) else {}

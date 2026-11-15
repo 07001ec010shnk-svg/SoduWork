@@ -44,6 +44,11 @@ _MAX_FILE_BYTES = 4 * 1024 * 1024
 _MAX_TERMINALS = 8
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+_DSH_OUTPUT_CONTINUATION = (
+    "上一段模型输出达到单次上限。请沿用当前会话，从最后一个已确认的工具结果继续完成原请求。"
+    "已经完成的写入、命令、发送或其他操作不要重复。结果不确定时先只读核对。"
+    "如果交付物已经完成，请直接给出结果和已完成的验证。"
+)
 
 
 def _utf8_stdio() -> None:
@@ -685,6 +690,7 @@ class AcpBridge:
         self.access.apply(self, session_config)
         _emit({"type": "session", "sessionID": self.session_id})
         _emit({"type": "step_start"})
+        continued_output = False
         while True:
             if self.outcome:
                 self.outcome.begin(self.session_id)
@@ -699,6 +705,13 @@ class AcpBridge:
                 if native_reason in {"length", "max_tokens"}:
                     result = {**result, "stopReason": "max_tokens"}
             if not self.transition.complete(result):
+                if (self.agent_name == "dsh" and result.get("stopReason") == "max_tokens"
+                        and not continued_output and not self.transition.requested
+                        and not self.transition.cancel_sent and not self.transition.busy()):
+                    continued_output = True
+                    content = [{"type": "text", "text": _DSH_OUTPUT_CONTINUATION}]
+                    _emit({"type": "step_start"})
+                    continue
                 break
             continuation = self.transition.reconfigure(session_config)
             if continuation is None:
@@ -712,6 +725,8 @@ class AcpBridge:
         reason = str(result.get("stopReason") or "")
         if reason in ("", "end_turn"):
             return 0
+        if self.agent_name == "dsh" and reason == "max_tokens":
+            raise BridgeError("模型输出达到上限。已有文件和工具结果已保留，请继续当前会话完成剩余工作。")
         raise BridgeError("Agent stopped this turn: " + reason)
 
     def close(self) -> None:
