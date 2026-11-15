@@ -14,8 +14,10 @@ function crc32(buffer) { let crc = 0xffffffff; for (const byte of buffer) crc = 
 function u16(n) { const b = Buffer.alloc(2); b.writeUInt16LE(n & 0xffff); return b; }
 function u32(n) { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b; }
 function dosDate(st) {
-  const d = new Date(st.mtimeMs || Date.now());
-  return { date: ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate(), time: (d.getHours() << 11) | (d.getMinutes() << 5) | Math.floor(d.getSeconds() / 2) };
+  const modified = new Date(st.mtimeMs ?? Date.now());
+  const date = modified.getFullYear() < 1980 ? new Date(1980, 0, 1)
+    : modified.getFullYear() > 2107 ? new Date(2107, 11, 31, 23, 59, 58) : modified;
+  return { date: ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(), time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2) };
 }
 function collect(root) {
   const result = []; let total = 0;
