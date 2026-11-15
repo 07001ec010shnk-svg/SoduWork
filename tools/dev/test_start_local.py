@@ -167,7 +167,7 @@ class LocalStartupTests(unittest.TestCase):
     @unittest.skipIf(os.name == 'nt', 'Linux XDG paths use POSIX semantics')
     def test_linux_prepare_only_uses_safe_default_with_invalid_xdg_data_home(self):
         home = Path(self.temp.name) / 'home'
-        expected = home / '.local/share/soduwork/source-service'
+        expected = (home / '.local/share/soduwork/source-service').resolve()
         for value in ('', 'relative-data'):
             with self.subTest(value=value), patch.dict(os.environ, {'XDG_DATA_HOME': value}), \
                     patch.object(sys, 'platform', 'linux'), patch.object(Path, 'home', return_value=home), \
