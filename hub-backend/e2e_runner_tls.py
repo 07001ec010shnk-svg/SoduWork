@@ -100,7 +100,7 @@ report = {"frozen": frozen, "python": sys.version.split()[0], "openssl": ssl.OPE
           "bundledCAsha256": hashlib.sha256(bundled_bytes).hexdigest(),
           "mode": mode, "checks": checks,
           "ok": all(row["accepted"] == row["expected"] for row in checks)}
-print(json.dumps(report, ensure_ascii=False))
+print(json.dumps(report, ensure_ascii=True))
 raise SystemExit(0 if report["ok"] else 1)
 '''
 
