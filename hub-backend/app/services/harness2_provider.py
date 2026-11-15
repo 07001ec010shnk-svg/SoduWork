@@ -8,6 +8,7 @@ import urllib.request
 
 from .harness2_errors import StructuredFailure, PlanningOutputLimit
 from .mcp_http import ResponseTooLarge, _NoRedirect, _response_chunks
+from .runtime_tls import https_handler
 
 
 def normalize_usage(value):
@@ -188,7 +189,7 @@ def request(model, messages, tools, *, timeout=90, idle_timeout=None,
         # Match the managed model gateway: route model requests directly even
         # when macOS has an HTTP proxy configured for other traffic.
         open_timeout = timeout if idle_timeout is None else min(timeout, idle_timeout)
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect(), https_handler())
         with opener.open(req, timeout=open_timeout) as response:
             if "text/event-stream" in response.headers.get("Content-Type", "").lower():
                 from .harness2_streaming import read

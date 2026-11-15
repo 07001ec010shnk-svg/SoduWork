@@ -111,7 +111,7 @@ a = Analysis(
     [os.path.join(backend, "runner_main.py")],
     pathex=[backend],
     binaries=winpty_binaries,
-    datas=(winpty_datas + [
+    datas=(winpty_datas + collect_data_files("certifi") + [
         (os.path.join(backend, "app", "agent_catalog.json"), "app"),
         (os.path.join(backend, "app", "services", "dsh_session_storage.mjs"), "app/services"),
         (os.path.join(backend, "app", "services", "codex_gateway_startup.mjs"), "app/services"),

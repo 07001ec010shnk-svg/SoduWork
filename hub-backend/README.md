@@ -56,6 +56,8 @@ python3 quality_gate.py --profile extended --scope all
 
 The manifest in `quality_manifest.py` registers checks and their profiles. Unregistered checks block the gate. `live` checks connect to real Hubs, Runners, providers, or business data; they are not part of default offline acceptance.
 
+Permission-controlled turns confirm that their execution host has exited before settlement or a replacement turn. A reliable Agent exit receipt allows up to 30 seconds for normal host cleanup, such as a frozen executable removing its extraction directory; cancellation and permission changes retain the shorter stop deadline. If termination cannot be confirmed, the original process remains tracked and blocks replacement. An answer or a successful kill request alone does not establish successful completion. Run `python3 -m unittest test_local_process_cleanup` to verify delayed shutdown and failed-termination behavior with isolated subprocesses.
+
 Smoke checks live in [`smoke/`](smoke/). To run one directly, use its module from the `hub-backend/` directory, for example `python3 -m smoke.smoke_capabilities`. The quality gate selects the appropriate registered modules. Unit tests and `tests/` integration helpers keep their existing locations.
 
 ## Harness² planning recovery
@@ -108,6 +110,10 @@ Native and ACP OpenCode executions preserve the current turn's provider finish r
 
 ## OpenCode installation and network diagnostics
 
+Runner archive downloads, model-gateway reachability checks and Harness² model requests share a strict HTTPS trust configuration. By default, they retain Python/OpenSSL system roots and add the packaged `certifi` public CA bundle, including in frozen executables whose build-time OpenSSL certificate paths do not exist on the user's machine. Certificate chains and hostnames remain verified. This does not change external native harnesses' own HTTPS configuration.
+
+Nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR` values explicitly replace that default trust selection; a missing or invalid path fails without falling back to public roots. Supply the complete required trust set when configuring a private CA. Empty values do not select an exclusive override; default path discovery still follows Python/OpenSSL environment semantics. Trust is loaded only for HTTPS requests, including redirects from HTTP; plain HTTP does not depend on certificate configuration. Existing download proxy selection and direct model-gateway routing are unchanged.
+
 The managed installer tries an explicitly configured mirror, the connected Hub, then the official release. On macOS, archive downloads through the Python installer merge system HTTP/HTTPS proxy settings with environment overrides by scheme on every attempt. An explicitly empty proxy variable disables that scheme's system proxy. System-sourced proxies retain their system bypass rules alongside `NO_PROXY`; an empty `NO_PROXY` does not cancel the system exceptions. Explicit proxy overrides retain standard environment bypass behavior, and requests to the exact connected Hub origin stay direct. TLS certificate verification and pinned SHA-256 verification remain enabled. These download rules do not change npm dependency installation or model-gateway routing.
 
 Prepare the Hub mirror using the same code revision and pinned OpenCode version expected by the clients. Running `fetch_opencode_assets.py` without arguments prepares only Windows assets. To serve Apple Silicon and Intel Macs, run from that Hub checkout's `hub-backend/` directory:
@@ -119,6 +125,14 @@ python3 fetch_opencode_assets.py darwin-arm64 darwin-x64 darwin-x64-baseline
 The script verifies the pinned SHA-256 before publishing files under `downloads/opencode/`. After deploying those files, inspect `GET /api/v1/download/opencode/info` for the expected version, platform and `filename`, then download `/api/v1/download/opencode/{filename}` using that exact filename. `available: true` only proves a file exists; verify the downloaded bytes against the pinned digest. The Runner independently verifies that digest before extraction. Preparing files in a checkout does not establish that a remote Hub serves them.
 
 For failed attempts, inspect the local Runner's `runner.log` for structured network diagnostics and the failed stage. A successful metadata request, partial download, checksum check or `--version` probe alone is not a completed installation: download, integrity check, extraction, executable version check, execution-dependency preparation and activation must all succeed. Model execution needs its own subsequent verification. Keep credentials and raw proxy configuration out of shared diagnostics; repair trusted certificate configuration rather than disabling TLS checks.
+
+Verify the production network modules with real loopback HTTPS and a frozen PyInstaller probe in a dedicated environment containing `requirements-runner-build.txt` dependencies:
+
+```sh
+python3 e2e_runner_tls.py --output /absolute/evidence/directory
+```
+
+The check verifies the packaged CA resource, missing default roots, strict explicit overrides, and rejection of untrusted or mismatched certificates. `--source-only` exercises the same paths without freezing. These fixtures do not replace full desktop, production model or other operating-system verification.
 
 ## API and trust boundaries
 
