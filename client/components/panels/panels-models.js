@@ -194,10 +194,9 @@ async function _mdLoad(options) {
 function _mdState(p) {
   if (_mdNew?.id === p.id) return 'draft';
   if (!p.baseUrl) return 'noaddr';
-  if (p.localOnly) return p.authMode === 'none' || p.myKeySet || _mdKeyEdits[p.id] ? 'local' : 'open';
   if (p.authMode === 'none' && p.baseUrl) return 'local';
-  if (p.myKeySet || _mdKeyEdits[p.id]) return 'mine';
-  if (p.keySet) return 'org';
+  if (p.myKeySet || _mdKeyEdits[p.id]) return p.localOnly ? 'local' : 'mine';
+  if (p.keySet) return p.localOnly ? 'local' : 'org';
   return p.baseUrl ? 'open' : 'noaddr';
 }
 function _mdUsesLocalDiscovery(p) { return p?.localOnly === true || p?.authMode === 'none'; }
@@ -391,11 +390,11 @@ function _mdDetailHtml(p) {
 }
 
 function _mdBodyHtml(p, s, ms, own, t) {
-  const clearKeyLabel = p.localOnly ? '移除本地密钥' : '停止使用个人额度';
   const validation = _mdValidation?.providerId === p.id ? _mdValidation : null;
   const invalid = field => validation?.field === field ? ' aria-invalid="true"' : '';
   const error = field => '<small id="md-' + field + '-error" class="md-field-error" role="alert"' +
     (validation?.field === field ? '' : ' hidden') + '>' + esc(validation?.field === field ? validation.detail : '') + '</small>';
+  const clearKeyLabel = p.localOnly ? '移除本地密钥' : '停止使用个人额度';
   return '<div class="md-row-b" id="md-body-' + esc(p.id) + '" role="region">' +
     '<section class="md-settings-section"><header class="md-section-heading"><b>连接设置</b><small>填写服务提供的 API 地址</small></header>' +
     '<div class="md-connect-fields">' +

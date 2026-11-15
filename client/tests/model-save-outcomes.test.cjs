@@ -9,7 +9,7 @@ const vm = require('node:vm');
 const renderer = require('./renderer-source.cjs');
 const store = require('../main/local-model-store.cjs');
 
-async function fixture(t, { collision = false, personal = false } = {}) {
+async function fixture(t, { collision = false, managedPersonal = false, localKey = '' } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-save-outcome-'));
   const timers = new Set();
   store.configure({ app: { getPath: () => root }, safeStorage: {
@@ -18,11 +18,12 @@ async function fixture(t, { collision = false, personal = false } = {}) {
   } });
   t.after(() => { for (const timer of timers) clearTimeout(timer); store.configure(null); fs.rmSync(root, { recursive: true, force: true }); });
   store.save({ providers: [{ id: 'custom-private', name: 'Private service',
-    baseUrl: 'http://127.0.0.1:1/v1', authMode: 'none' }],
-  models: [{ providerId: 'custom-private', name: 'private-model' }] });
+    baseUrl: 'http://127.0.0.1:1/v1', authMode: localKey ? 'key' : 'none' }],
+  models: [{ providerId: 'custom-private', name: 'private-model' }],
+  keys: localKey ? { 'custom-private': localKey } : {} });
   const managedId = collision ? 'custom-private' : 'managed';
   const managed = { revision: 'hub-1', providers: [{ id: managedId, name: 'Managed service',
-    baseUrl: 'https://fixture.invalid/v1', modelNames: [], personal }],
+    baseUrl: 'https://fixture.invalid/v1', modelNames: [], personal: managedPersonal }],
     myModels: collision ? [{ providerId: managedId, name: 'hub-model' }] : [],
     usable: collision ? [{ providerId: managedId, name: 'hub-model' }] : [] };
   const state = { failHubWrite: false, failHubRead: false, localInputs: [], hubInputs: [], probes: [], notices: [], gate: null };
@@ -37,7 +38,7 @@ async function fixture(t, { collision = false, personal = false } = {}) {
     localStorage: { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, String(value)),
       removeItem: key => values.delete(key) },
     document: { getElementById: id => id === 'mdBody' ? body : id === 'mdSave' ? button : null },
-    petSay: message => state.notices.push(message), _humanErr: (error, fallback) => error.message || fallback,
+    petSay: message => state.notices.push(message),
     esc: value => String(value ?? '').replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;'),
     soduWorkAPI: { localModels: { get: async () => store.get(), save: async input => {
       state.localInputs.push(structuredClone(input));
@@ -62,6 +63,8 @@ async function fixture(t, { collision = false, personal = false } = {}) {
     },
   };
   box.window = box; vm.createContext(box);
+  const human = fs.readFileSync(path.join(__dirname, '../components/pet/pet-ui.js'), 'utf8');
+  vm.runInContext(human.slice(human.indexOf('function _humanErr('), human.indexOf('/* Speech bubbles. */')), box);
   vm.runInContext(renderer.readFileSync(path.join(__dirname, '../api.js'), 'utf8'), box);
   for (const file of ['model-capabilities.js', 'model-catalog-editor.js', 'model-service-delete.js', 'panels-models.js'])
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../components/panels', file), 'utf8'), box, { filename: file });
@@ -144,21 +147,23 @@ test('same-ID provider probes and explicit key patches use their declared owners
   assert.doesNotMatch(JSON.stringify(f.state.hubInputs), /device-secret|device:|local:model-/);
 });
 
-test('deleting a same-ID Hub service preserves the local service and its credentials', async t => {
-  const f = await fixture(t, { collision: true, personal: true });
-  f.touch('device:custom-private', { authMode: 'key' });
-  f.evaluate('_mdKeyEdits["device:custom-private"] = "synthetic-device-key"');
-  assert.equal(await f.evaluate('_mdSave(false)'), true);
-  const before = JSON.stringify(f.snapshot());
-  f.state.localInputs.length = 0;
+test('deleting a Hub service with the same raw device ID preserves the device service and its key', async t => {
+  const f = await fixture(t, { collision: true, managedPersonal: true, localKey: 'synthetic-device-key' });
   assert.equal(await f.removeProvider('custom-private'), true);
-  assert.equal(JSON.stringify(f.snapshot()), before);
-  assert.equal(f.state.localInputs.length, 0);
+  assert.equal(f.state.localInputs.length, 0, 'a Hub deletion must not write the device catalog');
+  assert.equal(f.snapshot().revision, 1);
+  assert.equal(f.snapshot().providers.length, 1);
+  assert.equal(f.snapshot().providers[0].id, 'custom-private');
+  assert.equal(f.snapshot().providers[0].keySet, true);
+  assert.equal(f.snapshot().myModels[0].name, 'private-model');
   assert.equal(f.state.hubInputs.length, 1);
-  assert.equal(f.state.hubInputs[0].providers.length, 0);
-  assert.equal(f.state.hubInputs[0].models.length, 0);
+  assert.deepEqual(f.state.hubInputs[0].providers, []);
+  assert.deepEqual(f.state.hubInputs[0].models, []);
+  assert.deepEqual(f.state.hubInputs[0].keys, {}, 'provider removal must not submit an ambiguous raw-ID key patch');
+  assert.equal(f.state.hubInputs[0].expectedRevision, 'hub-1');
   assert.equal(f.evaluate('_mdProvider("custom-private")'), undefined);
   assert.equal(f.evaluate('_mdProvider("device:custom-private").myKeySet'), true);
+  assert.equal(f.evaluate('_mdData.revision'), 'hub-2');
 });
 
 test('deleting the last local service never sends its removal key to a later managed save', async t => {
@@ -167,7 +172,7 @@ test('deleting the last local service never sends its removal key to a later man
   assert.equal(await f.removeProvider('device:custom-private'), true);
   assert.equal(f.snapshot().providers.length, 0);
   assert.equal(f.state.localInputs.length, 1);
-  assert.equal(f.state.hubInputs.length, 0, 'local deletion must preserve the managed draft');
+  assert.equal(f.state.hubInputs.length, 0, 'deleting a local service must not submit an unrelated managed draft');
   assert.equal(await f.evaluate('_mdSave(false)'), true);
   assert.equal(f.state.hubInputs.length, 1);
   assert.equal(JSON.stringify(f.state.hubInputs).includes('custom-private'), false);
@@ -272,9 +277,26 @@ test('reopening keeps a new service and its key and model pending until a succes
   assert.equal(f.snapshot().revision, 1);
   f.touch(id, { baseUrl: 'http://127.0.0.1:2/v1' });
   assert.equal(await f.evaluate('_mdSave(false)'), true);
-  assert.equal(f.snapshot().providers.some(row => row.id === id.slice(7)), true);
+  assert.equal(f.snapshot().providers.some(row => 'device:' + row.id === id), true);
   assert.equal(f.evaluate('_mdNew'), null);
   assert.equal(f.button.textContent, '已保存');
+});
+
+test('reopening a new service editor preserves its complete device namespace when selecting the draft', async t => {
+  const f = await fixture(t, { collision: true });
+  f.evaluate('_mdAddService()');
+  const id = f.evaluate('_mdNew.id');
+  assert.match(id, /^device:custom-/);
+  f.touch(id, { name: 'Reopened local draft' });
+  f.evaluate(`closeModelsPanel(); _mdOpen = ''; _mdEditor = ${JSON.stringify('__new__:' + id)};`);
+  assert.equal(await f.evaluate('_mdLoad()'), true);
+  assert.equal(f.evaluate('_mdOpen'), id);
+  assert.equal(f.evaluate('_mdNew.id'), id);
+  assert.match(f.body.innerHTML, new RegExp('data-mdselect="' + id + '" aria-pressed="true"'));
+  assert.match(f.body.innerHTML, /cfg-state is-draft[^>]*>未保存/);
+  assert.equal(f.snapshot().providers.length, 1);
+  assert.equal(f.state.localInputs.length, 0);
+  assert.equal(f.state.hubInputs.length, 0);
 });
 
 test('saving another local service leaves an incomplete new service pending', async t => {
@@ -314,7 +336,7 @@ test('a draft confirmed in storage is cleared even after the editor selection ch
   f.evaluate('_mdAddService()');
   const id = f.evaluate('_mdNew.id');
   store.save({ providers: [...f.snapshot().providers,
-    { id: id.slice(7), name: 'Committed elsewhere', baseUrl: 'http://127.0.0.1:2/v1', authMode: 'none' }] });
+    { id: id.slice('device:'.length), name: 'Committed elsewhere', baseUrl: 'http://127.0.0.1:2/v1', authMode: 'none' }] });
   f.evaluate('closeModelsPanel(); _mdEditor = "";');
   assert.equal(await f.evaluate('_mdLoad()'), true);
   assert.equal(f.evaluate('_mdNew'), null);
