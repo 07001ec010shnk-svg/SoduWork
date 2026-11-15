@@ -434,8 +434,34 @@ async function _sendCore(textOverride, sendOptions) {
     const el = ctx._mount();
     if (!el) return false;
     const accessEpoch = ctx._viewEpoch, sendScopeEpoch = ctx._draftScopeEpoch, sendOwnerScope = ctx._draftOwnerScope();
-    if (ctx._composerControls?.waitForAccess && !await ctx._composerControls.waitForAccess()) return false;
-    if (accessEpoch !== ctx._viewEpoch) return false;
+    const previousPreflight = ctx._sendPreflight;
+    const composerPreflight = textOverride == null ? { view: accessEpoch, scope: sendScopeEpoch, owner: sendOwnerScope } : null;
+    if (composerPreflight && previousPreflight?.view === accessEpoch &&
+        previousPreflight.scope === sendScopeEpoch && previousPreflight.owner === sendOwnerScope) return false;
+    if (composerPreflight) ctx._sendPreflight = composerPreflight;
+    const releasePreflight = () => {
+      if (composerPreflight && ctx._sendPreflight === composerPreflight) ctx._sendPreflight = null;
+    };
+    try {
+    if (ctx._composerControls?.waitForAccess) {
+      // Preflight can fetch the model directory before any message is admitted.
+      // Keep the draft intact and show the same bounded submission state here.
+      const accessToken = ctx._beginSendState?.();
+      try {
+        if (!await ctx._composerControls.waitForAccess()) return false;
+      } catch (error) {
+        if (accessEpoch === ctx._viewEpoch && sendScopeEpoch === ctx._draftScopeEpoch &&
+            sendOwnerScope === ctx._draftOwnerScope()) {
+          const reason = String(error?.message || '发送前检查失败，请重试');
+          if (ctx._runtimeBusy()) global.petSay?.(reason);
+          else ctx._fail('这一轮没发出去', reason);
+        }
+        return false;
+      } finally {
+        ctx._finishSendState?.(accessToken);
+      }
+    }
+    if (accessEpoch !== ctx._viewEpoch || sendScopeEpoch !== ctx._draftScopeEpoch || sendOwnerScope !== ctx._draftOwnerScope()) return false;
     if ((ctx._snap?.modelSelection?.model || ctx._model)?.unavailable) {
       ctx._fail('原本地模型已删除或不可用，请主动选择可用模型后继续发送');
       return false;
@@ -519,12 +545,15 @@ async function _sendCore(textOverride, sendOptions) {
     const retainFailure = reason => { if (currentSendScope()) ctx._retainFailedConversationDraft(sendDraftKey, failedDraft, reason); };
     const currentSendView = () => currentSendScope() && sendEpoch === ctx._viewEpoch && (!retainedRef || retainedRef === ctx._ref);
     const waitForPrior = ctx._submitTail; let releaseSubmit;
-    ctx._submitTail = new Promise((resolve) => { releaseSubmit = resolve; });
+    // A failed preparation releases its own slot without bypassing earlier admissions.
+    ctx._submitTail = Promise.all([waitForPrior,
+      new Promise((resolve) => { releaseSubmit = resolve; })]).then(() => {});
+    let localQueue = null, sendToken = null;
+    try {
     ctx._dismissProposal(true);
     ctx._workCards?.capture();
     if (global.ComposeDraft) ComposeDraft.clear({ preserveCreatedRequirement: true });
     if (global.ChatChrome && !wasRunning) ChatChrome.begin(text);
-    let localQueue = null;
     if (wasRunning) {
       localQueue = {
         id: 'local-' + (++ctx._localQueueSeq), text,
@@ -549,13 +578,15 @@ async function _sendCore(textOverride, sendOptions) {
     if (fromComposer) ctx._messageAttachments.clear();
     if (input && useComposer) { input.value = ''; input.style.height = 'auto'; }
     if (useComposer) ctx._clearConversationDraft(undefined, { preserveRequirement: true });
-    const sendToken = typeof ctx._beginSendState === 'function' ? ctx._beginSendState() : null;
+    // Once this draft has been consumed, a new composer message may queue
+    // while attachments or the previous send acknowledgement are pending.
+    releasePreflight();
+    sendToken = typeof ctx._beginSendState === 'function' ? ctx._beginSendState() : null;
     // Consume the sent draft only; snapshots never refill it from runtime state.
     if (fromComposer) ctx._pluginMention?.consume?.(resolvedPlugins);
     if (fromComposer) ctx._skillPicker?.consume(selectedSkills);
     if (!ctx._snap) ctx._snap = { status: 'idle', statusText: '', messages: [], tools: [], usage: null, pendingUi: null };
     ctx._render();
-    try {
       const attachmentRefs = await attachmentRefsPromise;
       if (!currentSendScope()) return false;
       if (!retainedRef && !currentSendView()) { retainFailure('会话已切换，这一轮尚未发送'); return false; }
@@ -667,17 +698,20 @@ async function _sendCore(textOverride, sendOptions) {
       }
       return Boolean(r && r.ok && !(localQueue && localQueue.cancelled));
     } catch (error) {
+      // Preparation may reject after an earlier synchronous UI hook has failed.
+      void Promise.resolve(attachmentRefsPromise).catch(() => {});
       retainFailure(String(error && error.message || error));
       if (!currentSendView()) return false;
       if (!wasRunning) ctx._fail('这一轮没发出去', String((error && error.message) || error), failedDraft, error);
       else if (!global.SoduWorkQuotaNotice?.show(error) && typeof petSay === 'function') petSay('排队消息没有发出去');
       return false;
     } finally {
+      releaseSubmit();
       if (typeof ctx._finishSendState === 'function') ctx._finishSendState(sendToken);
       if (currentSendView()) ctx._localQueue = ctx._localQueue.filter((row) => row !== localQueue);
-      releaseSubmit();
       if (currentSendView() && ctx._snap) ctx._render();
     }
+    } finally { releasePreflight(); }
   }
 
 function _paintOpening() {
