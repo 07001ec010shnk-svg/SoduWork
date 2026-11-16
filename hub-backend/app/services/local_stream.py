@@ -994,7 +994,7 @@ def _finish(ref: str, code: int, term: dict, hard_err: str) -> None:
                                 "请查看最后一条实况后重试。")
         else:
             run["state"] = "failed" if bad else "done"
-            if truncated and bad:
+            if truncated and bad and not hard_err:
                 run["failureKind"] = "execution_incomplete"
                 run["error"] = local_turn_outcome.TRUNCATED
             elif dialogue_failure:
