@@ -57,7 +57,7 @@ def _settings(conf: dict) -> dict:
 
 
 def _thinking(conf: dict) -> dict:
-    from .harness2_provider import thinking_options
+    from .model_thinking import thinking_options
     settings = _settings(conf)
     options = thinking_options(settings)
     # These formats use the same explicit provider switch as the desktop.

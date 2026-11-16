@@ -14,7 +14,7 @@
 
 **多底座 · 多 Agent · 私有化部署**
 
-支持 Pi · OpenCode · DeepSeek Harness · Qwen Code · Kimi Code · Codex Harness · Codex · Claude Code · Google Harness²
+支持 Pi · OpenCode · DeepSeek Harness · Qwen Code · Kimi Code · Codex Harness · Codex
 
 ```sh
 git clone https://github.com/mdiri-ai/SoduWork
@@ -100,7 +100,7 @@ cd SoduWork
 
 1. **再添加一个对话模型。** 在管理端「能力配置 → 模型目录」找到刚接入的服务，点「加模型」，填写服务商给出的准确模型 ID，选择「对话模型」并保存。API Key 是服务凭据，单独保存它不会创建可用模型。
 2. **打开桌面客户端并登录同一个 Hub。** 源码启动使用 `--desktop`；浏览器管理端用于配置。核对登录页「连接」里的地址与刚才保存模型的管理端一致。
-3. **点「新对话」，选择 Pi 和刚添加的模型。** Pi 使用 SoduWork 模型目录；Codex、Claude Code 等使用自己账号的底座还需要各自的登录，不会自动使用这把 API Key。
+3. **点「新对话」，选择 Pi 和刚添加的模型。** Pi 使用 SoduWork 模型目录；Codex 使用自己的账号，还需要单独登录，不会自动使用这把 API Key。
 4. **发一条小任务验证。** 例如：「把下面的模拟会议记录整理成待办表，列出负责人和截止时间；没有给出的信息写待确认：小王负责整理需求，周五完成；小李核对报价。」收到回复后检查表格内容。
 5. **需要交办与验收时再创建需求。** 写清目标、材料和验收标准，打开需求的「安排执行」，选择 Agent 和模型，检查交付结果后再确认验收。普通对话不需要先创建项目、插件或自动化。
 
@@ -197,8 +197,6 @@ flowchart LR
 | Kimi Code | SoduWork 模型目录里的模型 | ACP，按需安装 |
 | Codex Harness | SoduWork 模型目录里的模型 | ACP，按需安装 |
 | Codex | 自己的 OpenAI 账号 | 原生适配，按需安装 |
-| Claude Code | 自己的 Anthropic 账号 | ACP 适配，官方安装程序 |
-| Google Harness² | SoduWork 模型目录里的模型 | 原生适配；核心随包内置，首次使用时准备 |
 
 </details>
 

@@ -50,13 +50,11 @@ python3 quality_gate.py --list
 
 `live` 层可能连接真实 Hub、Runner、代码平台、模型或业务库，默认拒绝执行，不能用来替代离线发布门禁。详细口径见 [`../docs/release-scope.md`](../docs/release-scope.md)。
 
+受权限控制的回合在结算或开始下一轮前，必须确认执行宿主已退出。已有可靠的 Agent 退出记录时，正常收尾最多等待 30 秒，例如冻结程序清理自己的解压目录；取消和权限变更仍使用较短的停止期限。终止无法确认时继续跟踪原进程并阻止替换，不能仅凭已有回答或终止请求成功就判定完成。可运行 `python3 -m unittest test_local_process_cleanup`，使用隔离子进程验证延迟退出与终止未确认的行为。
+
 冒烟脚本集中在 [`smoke/`](smoke/) 目录。单独运行时，在 `hub-backend/` 目录使用模块命令，例如 `python3 -m smoke.smoke_capabilities`；质量门禁会选择已登记的模块。单元测试和 `tests/` 集成辅助脚本保留现有位置。
 
-## Harness² 推演恢复
-
-Harness² 在原生执行前完成七个无工具推演阶段。仅当模型完整响应明确报告达到输出 token 上限时，整轮允许重试同一阶段一次：最多使用 16,384 个输出 token，同时不得超过已配置的模型输出上限，不再只将较小的首次推演预算翻倍。两次尝试的实际用量均保留，共用原有整轮时限和 token 预算，客户端会显示重试进度。成功恢复后的预算会在本轮所有后续推演阶段沿用，仍受配置上限约束，不增加重试次数。调大模型最大输出会为恢复提供更多空间，但最多到 16,384 token，不会增加七阶段调用数、整轮时限或总 token 预算。未完成的计划会被丢弃；此恢复路径不重试异常断流、HTTP 错误或原生执行。持续截断或较低的配置上限仍会在执行前报错。
-
-Harness² 原生执行直接连接所配置的模型服务。每次请求的网络空闲超时为 120 秒，总时限为 300 秒。SSE 传输和组装后的模型输出分别限制大小。
+## DeepSeek Harness 回合完成状态
 
 DeepSeek Harness 收到 `max_tokens` 且工具操作已结束时，会在原会话中续跑一次，要求模型从已保存的工具结果接着做。再次达到输出上限时，会显示本轮未完成。
 
@@ -84,6 +82,10 @@ OpenCode 原生和 ACP 执行均保留当前回合的模型停止原因。达到
 
 ## OpenCode 安装与网络诊断
 
+Runner 归档下载、模型网关连通性预检与 macOS Runner 的安全控制连接共用严格的 TLS 信任配置。默认保留 Python/OpenSSL 的系统根证书，同时加载随包提供的 `certifi` 公共 CA 文件，避免冻结可执行文件依赖用户机器上不存在的构建时 OpenSSL 证书路径。证书链与主机名仍须通过校验。这不改变外部原生底座自身的 HTTPS 配置。
+
+非空的 `SSL_CERT_FILE` 或 `SSL_CERT_DIR` 会明确替换上述默认信任范围；路径缺失或无效时直接失败，不回退到公共根证书。配置私有 CA 时应提供完整的所需信任集合。空值不会启用独占的显式信任覆盖，默认路径发现仍遵循 Python/OpenSSL 的环境变量语义。仅在 HTTPS 请求时加载证书，包括从 HTTP 跳转到 HTTPS；普通 HTTP 不依赖证书配置。现有下载代理选择和模型网关直连策略保持不变。
+
 受管安装器依次尝试明确配置的镜像、当前连接的 Hub 和官方发行源。macOS 上通过 Python 安装器下载归档时，每次尝试都会按协议合并系统 HTTP/HTTPS 代理与环境变量覆盖值。明确设为空的代理变量会禁用对应协议的系统代理。来自系统的代理同时保留系统绕过规则和 `NO_PROXY`；空 `NO_PROXY` 不会取消系统例外。显式代理覆盖仍采用标准环境绕过行为，当前 Hub 的精确来源（协议、主机、端口）保持直连。TLS 证书校验和固定 SHA-256 校验始终启用。这些下载规则不改变 npm 依赖安装或模型网关的连接策略。
 
 准备 Hub 镜像时，应使用与客户端预期一致的代码版本和固定 OpenCode 版本。不带参数运行 `fetch_opencode_assets.py` 只准备 Windows 资产。若需服务 Apple Silicon 和 Intel Mac，在该 Hub 代码目录的 `hub-backend/` 下运行：
@@ -95,6 +97,14 @@ python3 fetch_opencode_assets.py darwin-arm64 darwin-x64 darwin-x64-baseline
 脚本先验证固定 SHA-256，再将文件发布到 `downloads/opencode/`。部署这些文件后，通过 `GET /api/v1/download/opencode/info` 核对版本、平台和 `filename`，再用精确文件名下载 `/api/v1/download/opencode/{filename}`。`available: true` 仅代表文件存在；还需按固定摘要校验下载内容。Runner 在解压前也会独立校验该摘要。在代码目录准备好文件，不代表远程 Hub 已提供这些文件。
 
 安装失败时，查看本地 Runner 的 `runner.log` 中的结构化网络诊断及失败阶段。元数据请求、部分下载、摘要校验或 `--version` 探测单独成功，都不等于安装完成：下载、完整性校验、解压、可执行文件版本检查、执行依赖准备和激活必须全部成功，之后还要单独验证模型执行。共享诊断时不得包含凭据和原始代理配置；证书问题应修复可信证书配置，不得关闭 TLS 校验。
+
+在装有 `requirements-runner-build.txt` 依赖的专用环境中，用真实本机回环 HTTPS 和 PyInstaller 冻结探针验证生产网络模块：
+
+```sh
+python3 e2e_runner_tls.py --output /absolute/evidence/directory
+```
+
+检查覆盖随包 CA 资源、默认根证书缺失、显式信任覆盖，以及拒绝不可信证书和主机名不匹配的证书。`--source-only` 可不打包执行同一调用路径。这些测试不能替代完整桌面、生产模型或其他操作系统验证。
 
 ## API 概览
 

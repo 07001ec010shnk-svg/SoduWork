@@ -49,7 +49,7 @@ test('calls without an explicit local execution context cannot resolve or forwar
   const modelConfig = require('../main/pi-session/model-config');
   t.mock.method(store, 'resolve', () => { throw Error('Must not read local credentials'); });
   const fetchImpl = () => { throw Error('Must not contact Hub'); };
-  for (const agent of ['pi', 'harness2', 'codex', 'custom-example']) {
+  for (const agent of ['pi', 'codex', 'custom-example']) {
     const result = await modelConfig.fetchModel(null, 'local:private:model', 1000, fetchImpl, false, agent);
     assert.equal(result.ok, false);
     assert.match(result.reason, /本机受管底座调用/);
@@ -65,7 +65,7 @@ test('managed local runtimes resolve the on-device model without contacting Hub'
     provider: 'ollama', providerName: 'Ollama', localOnly: true,
   }));
   const fetchImpl = () => { throw Error('Hub must not receive local model requests'); };
-  for (const agent of ['harness2', 'qwen', 'opencode', 'dsh', 'kimi']) {
+  for (const agent of ['qwen', 'opencode', 'dsh', 'kimi']) {
     const result = await require('../main/pi-session/model-config').fetchModel(
       null, 'local:private:model', 1000, fetchImpl, false, agent, { allowLocal: true });
     assert.equal(result.ok, true, agent);
@@ -146,7 +146,7 @@ test('unavailable automation placeholders never reach Hub or mutate device selec
 
 test('opaque automation references stay local for every managed runtime and verified current-device Runner seat', async () => {
   const model = 'local:model-' + 'a'.repeat(32);
-  for (const runtime of ['pi', 'qwen', 'opencode', 'dsh', 'kimi', 'harness2', 'codex-harness']) {
+  for (const runtime of ['pi', 'qwen', 'opencode', 'dsh', 'kimi', 'codex-harness']) {
     const writes = [];
     const f = fixture(undefined, { authenticated: true, automationModels: {
       set: async input => { writes.push(input); return { ok: true }; },
@@ -168,7 +168,7 @@ test('opaque automation references stay local for every managed runtime and veri
     assert.equal(f.requests.length, 2);
   }
   const account = fixture();
-  for (const runtime of ['codex', 'claude'])
+  for (const runtime of ['codex'])
     await assert.rejects(account.api.createSchedule({ modelName: model, assigneeId: 'local:' + runtime }), /本地模型/);
   assert.equal(account.requests.length, 0);
 });
@@ -275,9 +275,9 @@ test('local model references cannot bypass managed dispatch or native runtime ad
 
 test('wrapped local image references never reach Hub quota admission', async () => {
   const { beforeTurn } = require('../main/conversation/quota-admission.cjs');
-  for (const agent of ['pi', 'qwen', 'codex', 'claude']) {
+  for (const agent of ['pi', 'qwen', 'codex']) {
     await assert.rejects(beforeTurn(() => assert.fail('local reference disclosed to Hub'), owner(), undefined,
-      { agent, modelMode: agent === 'codex' || agent === 'claude' ? 'account' : 'managed' })({
+      { agent, modelMode: agent === 'codex' ? 'account' : 'managed' })({
       modelName: 'image::private::local:model-' + 'a'.repeat(32),
     }));
   }

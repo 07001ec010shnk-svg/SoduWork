@@ -133,10 +133,6 @@ def _real_bin(cands: list[str], names: list[str]) -> str | None:
     return None
 
 
-def _claude_bin() -> str | None:
-    # Native install, account probing and ACP execution resolve the same file.
-    from .agent_native_install import active_binary
-    return active_binary(_data_root()) or None
 
 
 def _opencode_bin() -> str | None:
@@ -371,26 +367,6 @@ _NATIVE_PROFILES = {
         "session_flag": ["--session"],
         "compact": lambda run: _compact_opencode(run),
     },
-    "claude": {
-        "name": "Claude Code",
-        "bin": _claude_bin,
-        "needs_llm": False,
-        "own_session": True,        # SoduWork assigns this runtime's session ID before execution.
-        "start": lambda sid, mode, ws, cfg=None: [
-            "-p", "--session-id", sid, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-            # Planning uses the CLI's native plan mode.
-            # Working mode uses acceptEdits rather than bypassPermissions.
-            "--permission-mode", "plan" if mode == "plan" else "acceptEdits",
-        ],
-        "resume": lambda sid, mode, ws, cfg=None: [
-            "-p", "--resume", sid, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-            "--permission-mode", "plan" if mode == "plan" else "acceptEdits",
-        ],
-        # Claude resumes the same session with --resume; omitting -p opens its interactive interface.
-        "session_flag": ["--resume"],
-        # Let Claude manage its own context compaction.
-        "compact": None,
-    },
 
 
 
@@ -451,9 +427,6 @@ _NATIVE_PROFILES = {
 from ..agent_catalog import AGENTS as _AGENT_CATALOG
 from . import acp_agents as _acp_agents
 from . import codex_account_acp as _account_acp
-from . import harness2_runtime as _harness2_runtime
-
-_NATIVE_PROFILES["harness2"] = _harness2_runtime.profile()
 
 _PROFILES = {
     key: (_acp_agents.profile(key) if row["runner"]["adapter"] == "acp" else {
@@ -926,7 +899,7 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
     if cfg.get(runtime_images.CFG_KEY):
         if not runtime_ref:
             raise runtime_images.ImageInputError("图片附件缺少会话归属，请重新发送")
-        if (prof.get("acp_key") or prof is _PROFILES.get("opencode") or prof is _PROFILES.get("harness2")) and not runtime_images.transport_supported(cfg.get("llm")):
+        if (prof.get("acp_key") or prof is _PROFILES.get("opencode")) and not runtime_images.transport_supported(cfg.get("llm")):
             raise runtime_images.ImageInputError("当前所选模型未启用图片输入，请手动选择支持图片的模型后重试；原图已保留，未自动更换模型")
         env[runtime_images.ENV_KEY] = runtime_images.environment(cfg, os.path.join(_store_dir(runtime_ref), "inputs"))
     # Agent skills may launch Python subprocesses. Keep their text boundary
@@ -982,10 +955,6 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
     # Add repository hosts to NO_PROXY while preserving system proxies for other requests.
     # Set this before the needs_llm early return so agents using native accounts also inherit it.
     _git_host_no_proxy(env, str((cfg or {}).get("repoGitUrl") or ""))
-    if prof is _PROFILES.get("harness2"):
-        return _no_proxy_for(_harness2_runtime.environment(env, cfg, runtime_ref=runtime_ref,
-                             **({"artifact_root": runtime_root} if runtime_root else {})),
-                             str((cfg.get("llm") or {}).get("base") or ""))
     if not prof.get("needs_llm"):
         if prof.get("acp_key"):
             _acp_agents.home_env(prof["acp_key"], env, runtime_root or _data_root())
@@ -1131,7 +1100,7 @@ def _friendly(msg: str) -> str:
     if not m:
         return ""
     if "Not logged in" in m or "authentication_failed" in m or "/login" in m:
-        return ("本机的 claude 没有可用凭据（CLI 报 Not logged in）。"
+        return ("当前执行底座没有可用凭据（CLI 报 Not logged in）。"
                 "要么在这台机器上先把 CLI 登录好，要么给它配 API Key / 共享模型服务——"
                 "这一步得由人来定，SoduWork 不替你存密钥。")
     if "Incorrect API key" in m or "invalid_api_key" in m:

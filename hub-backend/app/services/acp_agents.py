@@ -22,12 +22,6 @@ CATALOG: dict[str, dict] = acp_specs()
 def find_bin(key: str) -> str | None:
     """Find an installed ACP agent without mistaking SoduWork itself for one."""
     spec = CATALOG.get(key) or {}
-    if key == "claude":
-        from .agent_native_install import active_binary
-        from .local_base import _data_root
-        if not active_binary(_data_root()):
-            return None
-        return agent_npm_runtime.private_bin(spec.get("bins") or ()) or None
     override = os.environ.get("SODUWORK_AGENT_%s_BIN" % key.upper().replace("-", "_"))
     if override:
         path = os.path.abspath(os.path.expanduser(override))
@@ -114,10 +108,6 @@ def command_argv(key: str, exe: str, args: list[str], ws: str,
 
 def runtime_issue(key: str, *, probe: bool = False) -> str:
     """Return a human-readable runtime defect before a task is created."""
-    if key == "claude":
-        from .claude_runtime import runtime_issue as claude_issue
-        from .local_base import _data_root
-        return claude_issue(_data_root())
     if key != "dsh":
         return ""
     exe = find_bin(key) or ""
@@ -137,12 +127,6 @@ def home_env(key: str, env: dict, work_root: str, *, installation_root: str | No
     Private probes relocate writable state, not the installed runtime code.
     """
     declaration = (CATALOG.get(key) or {}).get("home") or {}
-    if key == "claude":
-        from .claude_runtime import environment
-        env.update(environment(work_root, env))
-        for name in ("NODE_OPTIONS", "ELECTRON_RUN_AS_NODE", "CLAUDECODE"):
-            env.pop(name, None)
-        return
     if not declaration or not work_root:
         return
     folder = declaration["folder"]

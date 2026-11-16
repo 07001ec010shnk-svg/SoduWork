@@ -5,14 +5,21 @@
     pi:'Pi', codex:'Codex', 'codex-harness':'Codex Harness', opencode:'OpenCode',
     claude:'Claude Code', kimi:'Kimi Code', qwen:'Qwen Code', dsh:'DeepSeek Harness', harness2:'Google Harness²',
   };
-  function harnessNames() { return global.AgentBrand?.LABELS || FALLBACK_HARNESS_NAMES; }
+  function harnessNames() { return { ...FALLBACK_HARNESS_NAMES, ...global.AgentBrand?.LABELS }; }
+  function historicalHarnessId(value) {
+    if (typeof value !== 'string') return '';
+    const raw = value.toLowerCase();
+    // Retired runtime names remain provenance, never selectable capabilities.
+    if (Object.hasOwn(FALLBACK_HARNESS_NAMES, raw)) return raw;
+    const old = Object.entries(FALLBACK_HARNESS_NAMES).find(([, name]) => name.toLowerCase() === raw);
+    return old?.[0] || global.AgentBrand?.canonical(value) || raw;
+  }
   function historyHarnesses(row) {
     const labels = harnessNames();
     if (Array.isArray(row.usedHarnesses)) {
       // The main process supplies whole-conversation execution provenance. An
       // explicit empty set must never fall back to an unsent composer choice.
-      return [...new Set(row.usedHarnesses.map(value => typeof value === 'string'
-        ? global.AgentBrand?.canonical(value) || value.toLowerCase() : '')
+      return [...new Set(row.usedHarnesses.map(historicalHarnessId)
         .filter(id => id !== 'custom' && Object.hasOwn(labels, id)))];
     }
     if (row.pending || row.workOnly || row.count === 0) return [];
@@ -20,7 +27,7 @@
     return legacy !== 'custom' && Object.hasOwn(labels, legacy) ? [legacy] : [];
   }
   function harnessIcon(id) {
-    if (global.AgentBrand?.html) return global.AgentBrand.html(id);
+    if (global.AgentBrand?.html) return global.AgentBrand.html(id, { title: harnessNames()[id] });
     return '<span class="agent-brand" data-agent-brand="' + id + '"><svg viewBox="0 0 24 24" aria-hidden="true">' +
       '<path d="m12 3 8 4v10l-8 4-8-4V7zM4 7l8 4 8-4M12 11v10"/></svg></span>';
   }

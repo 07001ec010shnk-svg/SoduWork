@@ -176,7 +176,7 @@ function _schNormalizeLocalModelOptions(result) {
 function _schLocalModelAgent(agent) {
   if (!agent) return false;
   const runtime = String(agent.cli || agent.id || '').replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
-  if (!runtime || ['codex', 'claude'].includes(runtime)) return false;
+  if (!runtime || ['codex'].includes(runtime)) return false;
   if (!String(agent.id || '').startsWith('local:') && !String(agent.id || '').startsWith('runner:')) return false;
   return agent.mode !== 'remote' && agent.locationMode !== 'remote';
 }
@@ -189,7 +189,7 @@ function _schModelOptionsFor(agentId) {
   const agent = _schAgents.find(item => String(item.id) === String(agentId || ''));
   if (agent && agent.nativeModelPick) return _schNativeOptionsFor(agent.id);
   const runtime = String(agent?.cli || agentId || '').replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
-  if (['codex', 'claude'].includes(runtime)) return [];
+  if (['codex'].includes(runtime)) return [];
   const local = _schLocalModelAgent(agent) ? _schLocalModelOptions : [];
   return local.concat(_schModelOptions);
 }

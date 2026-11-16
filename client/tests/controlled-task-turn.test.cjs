@@ -64,7 +64,7 @@ test('controlled Runner compares execution ref, not the database record id', asy
 });
 
 test('controlled dispatch retains the selected engine and attributes replayed output to the actual Hub receipt', async () => {
-  for (const engine of ['opencode', 'kimi', 'harness2']) {
+  for (const engine of ['opencode', 'kimi']) {
     const messages = [], calls = []; let page = 0;
     const adapter = create({ task: { id: 'assigned' },
       spec: { mode: 'dispatch', context: {}, agentId: 'runner:device:' + engine }, scope: {}, wait: async () => {},

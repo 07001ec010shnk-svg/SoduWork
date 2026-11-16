@@ -1,49 +1,14 @@
 """Platform contract checks on one host, without native builds or downloads."""
 from __future__ import annotations
 
-import ntpath
 import os
-from pathlib import Path, PurePosixPath, PureWindowsPath
-import posixpath
+from pathlib import Path
 import runpy
-import types
 import unittest
 from unittest.mock import patch
 
 
-class Harness2PlatformTest(unittest.TestCase):
-    def test_source_and_frozen_launches_keep_native_sessions_and_unicode_arguments(self):
-        from app.services import harness2_runtime as runtime
-        platforms = [
-            ("win32", "x64", ntpath, PureWindowsPath, r"C:\应用 目录"),
-            ("darwin", "arm64", posixpath, PurePosixPath, "/Applications/应用 目录"),
-            ("darwin", "x64", posixpath, PurePosixPath, "/Applications/应用 目录"),
-            ("linux", "x64", posixpath, PurePosixPath, "/opt/应用 目录"),
-        ]
-        for platform, arch, paths, path_type, root in platforms:
-            for frozen in (False, True):
-                with self.subTest(platform=platform, arch=arch, frozen=frozen):
-                    executable = paths.join(root, "soduwork-runner.exe" if platform == "win32" else "soduwork-runner")
-                    source = paths.join(root, "app", "services", "harness2_runtime.py")
-                    script = paths.join(root, "app", "services", "harness2_bridge.py")
-                    workspace = paths.join(root, "我的 工程")
-                    with (patch.object(runtime, "sys", types.SimpleNamespace(
-                            platform=platform, executable=executable, frozen=frozen)),
-                          patch.object(runtime, "os", types.SimpleNamespace(path=paths)),
-                          patch.object(runtime, "Path", path_type),
-                          patch.object(runtime, "__file__", source)):
-                        profile = runtime.profile()
-                        cfg = {"requiredCapabilities": ["terminal"]}
-                        args = profile["resume"]("native-existing-session", "work", workspace, cfg)
-                        command = profile["command"](profile["bin"](), args, workspace, cfg)
-                        self.assertEqual(command, [executable,
-                            "--harness2-bridge" if frozen else script,
-                            "--cwd", workspace, "--session", "native-existing-session",
-                            "--mode", "work", "--terminal"])
-                        self.assertEqual(profile["argv_prefix"](), [
-                            "--harness2-bridge" if frozen else script])
-                        first = profile["start"]("outer-runner-ref", "plan", workspace, {})
-                        self.assertEqual(first, ["--session", "", "--mode", "plan"])
+class RunnerPlatformContractTests(unittest.TestCase):
 
     def test_shared_executor_selects_native_artifacts_and_cpu_variants(self):
         from app.services import managed_agents
@@ -87,7 +52,7 @@ class Harness2PlatformTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Public Runner distribution is blocked"):
                 runpy.run_path(str(backend / "runner.spec"), init_globals={"SPECPATH": str(backend)})
 
-    def test_all_runner_recipes_include_the_same_harness_core_and_original_notices(self):
+    def test_all_runner_recipes_include_active_modules_ca_data_and_original_notices(self):
         from app.services import runner_sources
         # Replace installed-distribution metadata discovery only; execute the
         # production recipe and inspect its resulting PyInstaller arguments.
@@ -104,11 +69,8 @@ class Harness2PlatformTest(unittest.TestCase):
         reviewed_versions = {row["name"]: row["version"] for row in json.loads(
             (project / "third-party/manifest.json").read_text(encoding="utf-8"))["pythonNoticeOverrides"]}
         required = {
-            "app/services/harness2_runtime.py", "app/services/harness2_bridge.py",
-            "app/services/harness2_engine.py", "app/services/harness2_vendor/core/recursion.py",
             "app/services/darwin_process_tree.py", "app/services/linux_process_tree.py",
-            "app/services/harness2_vendor/config.py", "app/agent_catalog.json",
-            "app/services/harness2_vendor/LICENSE", "app/services/harness2_vendor/UPSTREAM.md",
+            "app/agent_catalog.json",
         }
         for platform in ("win32", "darwin", "linux"):
             with self.subTest(platform=platform):
@@ -136,12 +98,14 @@ class Harness2PlatformTest(unittest.TestCase):
                               for path in runner_sources.build_inputs(backend, project)
                               if path.is_relative_to(backend)}
                 self.assertTrue(required.issubset(inputs), sorted(required - inputs))
-                self.assertIn("app.services.harness2_bridge", captured["hiddenimports"])
+                retired = ("harness2", "claude_runtime", "agent_native_install")
+                self.assertFalse(any(any(name in path for name in retired) for path in inputs))
+                self.assertFalse(any(any(name in module for name in retired)
+                                     for module in captured["hiddenimports"]))
+                self.assertFalse(any(part.startswith("harness2") for entry in captured["datas"]
+                                     for path in entry for part in Path(path).parts))
                 for entry in ca_data:
                     self.assertIn(entry, captured["datas"])
-                for name in ("LICENSE", "UPSTREAM.md"):
-                    self.assertIn((str(backend / "app/services/harness2_vendor" / name),
-                                   "app/services/harness2_vendor"), captured["datas"])
                 self.assertIn((str(backend / "app/agent_catalog.json"), "app"), captured["datas"])
                 original = project / "third-party/licenses/dnspython-LICENSE.txt"
                 self.assertIn((str(original), "third-party/python/dnspython-2.9.0"), captured["datas"])

@@ -570,6 +570,11 @@ class AcpBridge:
         self.transition.update(update)
         self.access.observe_tool(update)
         if kind == "agent_thought_chunk":
+            text = _text(update.get("content"))
+            # Some adapters forward empty reasoning deltas alongside text.
+            # They carry no content and must not end the active message.
+            if not text:
+                return
             # Late reasoning may interleave with one explicitly identified
             # message (DSH); only a tool, new message or turn ends that stream.
             if self.message_parts and not self.message_has_native_id:
@@ -577,10 +582,8 @@ class AcpBridge:
             if not getattr(self, "thought_stream", ""):
                 self.thought_count = getattr(self, "thought_count", 0) + 1
                 self.thought_stream = "acp:thought:%s" % self.thought_count
-            text = _text(update.get("content"))
-            if text:
-                _emit({"type": "reasoning", "part": {"streamId": self.thought_stream,
-                       "delta": text, "done": False}})
+            _emit({"type": "reasoning", "part": {"streamId": self.thought_stream,
+                   "delta": text, "done": False}})
             return
         if kind == "agent_message_chunk":
             self._flush_thought()
@@ -702,12 +705,6 @@ class AcpBridge:
         self.transition.resumable = bool(capabilities.get("loadSession") or
             (capabilities.get("sessionCapabilities") or {}).get("resume") is not None)
         session_params = {"cwd": self.cwd, "mcpServers": []}
-        if self.agent_name == "claude":
-            # The dispatch already supplies approved skills and MCP credentials.
-            # Personal/project hooks and permissive settings cannot override it.
-            session_params["_meta"] = {"claudeCode": {"options": {
-                "settingSources": [], "strictMcpConfig": True,
-            }}}
         session_config = {}
         if self.session_id:
             session_caps = capabilities.get("sessionCapabilities") or {}

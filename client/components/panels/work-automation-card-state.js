@@ -59,8 +59,8 @@
     const selected = String(current || '').trim();
     const agent = (catalogs.agents || []).find(item => String(item.id) === String(agentId || ''));
     const runtime = String(agent?.cli || agent?.adapterId || agentId || '').replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
-    const local = agent && !['codex', 'claude'].includes(runtime) && agent.mode !== 'remote' && agent.locationMode !== 'remote';
-    const account = ['codex', 'claude'].includes(runtime) || agent?.modelMode === 'account';
+    const local = agent && !['codex'].includes(runtime) && agent.mode !== 'remote' && agent.locationMode !== 'remote';
+    const account = ['codex'].includes(runtime) || agent?.modelMode === 'account';
     if (!agent?.nativeModelPick && (account || agent?.modelPick === false && !local)) return '';
     const options = (agent?.nativeModelPick ? agent.modelOptions || [] : catalogs.modelOptions || []).filter(item =>
       String(item?.name || item?.id || '').trim() && item?.available !== false && item?.unavailable !== true &&

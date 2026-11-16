@@ -2073,7 +2073,7 @@ module.exports = {
   RUNNER_CAPABILITIES,
   createRunnerRuntimeAdapter,
   getRunnerSessionDetails,
-  _runnerInventory,
+  _runnerInventory, _dropRunnerInventory,
   _uuidV5,
   _skillRows,
 };

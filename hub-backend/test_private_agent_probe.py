@@ -125,9 +125,6 @@ class PrivateProbeProcessTests(unittest.TestCase):
         if not success:
             output = {"type": "error", "message": "private-probe-wire private-probe-key http://private-probe.invalid/v1"}
         source = "import json; print(" + repr(json.dumps(output)) + ",flush=True)"
-        if key == "harness2" and success:
-            source += "; print(" + repr(json.dumps({"type": "harness2_probe_complete",
-                "coverage": "native-execute-v1", "stages": 0})) + ",flush=True)"
         try:
             with tempfile.TemporaryDirectory() as data:
                 history = Path(data) / "agent-probe.json"

@@ -54,7 +54,7 @@ function harness(t, opts={}) {
   return {root,app,open,calls,events,id,
     release(){released=true;hold?.();}, get held(){return !!hold;}};
 }
-for (const adapterId of ['harness2', 'opencode']) {
+for (const adapterId of ['kimi', 'opencode']) {
   test(adapterId + ' sends the shared Pi conversation contract before plugins and final language', async t => {
     const contract = require('../main/conversation/agent-contract');
     const locale = require('../main/native-locale.cjs');
@@ -224,7 +224,7 @@ test('Runner rechecks permission for inherited plugins and refuses a revoked gra
   assert.equal(resolutions,2);assert.equal(cleanups,1);
   assert.equal(h.calls.filter(c=>c.op==='job.comment').length,0);
 });
-for (const adapterId of ['harness2', 'opencode']) {
+for (const adapterId of ['kimi', 'opencode']) {
   test(adapterId + ': denied plugin selection does not contaminate the next ordinary message', async t => {
     const resolutions = [];
     const h = harness(t, { spec: catalog.runtime(adapterId), open: { resolvePlugins: async ids => {
