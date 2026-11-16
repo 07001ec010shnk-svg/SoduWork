@@ -45,6 +45,13 @@ To verify this path with a real Runner and Pi subprocess against a disposable au
 
 ## Offline quality gate
 
+Runner control connections and model-gateway preflight use the installed OS trust
+through MIT-licensed `truststore`: Security framework on macOS, CryptoAPI on Windows,
+and the distribution's system CA store on Linux. They do not use a bundled public
+root list. Explicit `SSL_CERT_FILE` / `SSL_CERT_DIR` settings are honored; invalid
+settings fail closed. Native trust failures are reported without retrying under a
+different trust policy. TLS and hostname verification remain required.
+
 Use the dedicated test environment, not a production service environment:
 
 ```sh

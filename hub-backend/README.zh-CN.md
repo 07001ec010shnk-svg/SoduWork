@@ -32,6 +32,12 @@ Runner 重启后，恢复终端仍绑定原执行的会话历史，不恢复模�
 
 ## 质量门禁
 
+Runner 控制连接和模型网关预检查通过 MIT 许可的 `truststore` 使用安装机的系统信任：
+macOS 使用 Security framework，Windows 使用 CryptoAPI，Linux 使用发行版的系统 CA 存储，
+不使用随包附带的公共根证书列表。保留显式 `SSL_CERT_FILE` / `SSL_CERT_DIR` 配置；
+无效配置会阻止连接。系统信任验证失败时直接报告，不换另一套信任策略重试；
+证书链与主机名校验始终开启。
+
 所有后端冒烟都登记在 `quality_manifest.py`，新增脚本未登记会直接阻断发布：
 
 ```bash
