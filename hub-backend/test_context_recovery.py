@@ -118,6 +118,30 @@ class ContextRecoveryTests(unittest.TestCase):
                 assert not term.get("overflow") and not term.get("isError")
 
 
+    def test_context_overflow_can_recover_after_a_confirmed_nonzero_exit(self):
+        ref, row, _ = self.runtime
+        terminal = {}
+        policy.observe(row, {"type": "error", "message": "context length exceeded"}, terminal)
+
+        with patch.object(ctx, "_recover_overflow", return_value=True) as recover:
+            stream._finish(ref, 1, terminal, "")
+
+        recover.assert_called_once_with(ref)
+
+    def test_context_overflow_does_not_restart_after_host_cleanup_failure(self):
+        ref, row, spawn = self.runtime
+        terminal = {}
+        policy.observe(row, {"type": "error", "message": "context length exceeded"}, terminal)
+        error = "Permission-controlled execution host exited abnormally"
+
+        with patch.object(ctx, "_recover_overflow", return_value=True) as recover:
+            stream._finish(ref, 1, terminal, error)
+
+        recover.assert_not_called()
+        spawn.assert_not_called()
+        self.assertEqual(row["state"], "failed")
+        self.assertEqual(row["error"], error)
+
     def test_normal_conversation_does_not_trigger_recovery(self):
         term = {}
         policy.observe({}, {"type": "message_end", "message": {"role": "assistant", "stopReason": "stop", "content": "context window exceeded 是一个错误"}}, term)
