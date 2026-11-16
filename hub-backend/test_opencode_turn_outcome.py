@@ -25,7 +25,10 @@ class OpenCodeTurnOutcomeTests(unittest.TestCase):
 
     def test_zero_exit_with_partial_text_is_failed_without_replaying_tools(self):
         with tempfile.TemporaryDirectory(prefix="soduwork-opencode-settle-") as folder:
-            for reason in ("length", "max_tokens", "stop"):
+            for reason, cleanup_error in (
+                ("length", ""), ("max_tokens", ""), ("stop", ""),
+                ("length", "Execution host did not exit"),
+            ):
                 ref = "opencode-fixture-" + reason
                 run = {"state": "running", "cli": "opencode", "ws": folder,
                        "seq": 0, "lines": [], "cfg": {}, "artifactMode": "files",
@@ -38,9 +41,12 @@ class OpenCodeTurnOutcomeTests(unittest.TestCase):
                                       {"type": "step_finish", "part": {"reason": reason}}):
                             local_stream._on_line(ref, json.dumps(event), terminal)
                         with patch.object(local_stream, "_resume") as resume:
-                            local_stream._finish(ref, 0, terminal, "")
+                            local_stream._finish(ref, 0, terminal, cleanup_error)
                     self.assertEqual(run["state"], "done" if reason == "stop" else "failed")
-                    if reason != "stop":
+                    if cleanup_error:
+                        self.assertNotEqual(run.get("failureKind"), "execution_incomplete")
+                        self.assertEqual(run["error"], cleanup_error)
+                    elif reason != "stop":
                         self.assertEqual(run["failureKind"], "execution_incomplete")
                         self.assertEqual(run["error"], local_turn_outcome.TRUNCATED)
                     resume.assert_not_called()

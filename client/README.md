@@ -42,6 +42,14 @@ Conversation analysis and automatic acceptance include the saved requirement, di
 
 ## Run and verify
 
+Ordinary new chats use a fresh private working directory; the previous chat's
+directory and the recent folder picker location are not inherited. Explicitly
+selected project folders remain shared. Personal memory excludes automatic
+runtime identity and knowledge-cutoff summaries and filters such historical
+claims from injected local context. My Memory shows rendered Markdown by default,
+with source editing available under Edit Markdown. Existing conversations retain
+their history and working directory.
+
 For a first local session, run `sh start.sh --desktop` from the repository root. For independent development, keep Hub running and execute:
 
 ```sh
