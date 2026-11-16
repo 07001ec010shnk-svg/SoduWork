@@ -965,7 +965,8 @@ def _finish(ref: str, code: int, term: dict, hard_err: str) -> None:
         _scrub_runtime_config(ref)
         return
     # On context exhaustion, try compaction before handoff; neither transition is an execution failure.
-    if overflow and not stopping and not run.get("permissionDenied"):
+    # Recovery can launch a replacement, so require a settled execution host.
+    if overflow and not hard_err and not stopping and not run.get("permissionDenied"):
         from .local_ctx import _recover_overflow     # Defer the import because stream and context modules depend on each other.
         if _recover_overflow(ref):
             return
