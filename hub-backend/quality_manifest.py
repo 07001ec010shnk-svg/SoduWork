@@ -314,6 +314,7 @@ RELEASE_SMOKES = tuple(sorted((
     "smoke/smoke_work_catalog.py",
     "test_unified_requirements.py",
     "test_admin_requirement_dispatch.py",
+    "test_user_role_updates.py",
     "test_unified_requirements_migration.py",
     "test_unified_requirements_acl.py",
     "test_approval_inbox_scope.py",

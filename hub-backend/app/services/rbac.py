@@ -334,7 +334,7 @@ async def update_user(session: AsyncSession, uid: str, patch: dict) -> dict | No
         u.display_name = patch["displayName"]
     if "orgId" in patch and patch["orgId"] is not None:
         u.org_id = patch["orgId"] or None
-    if "roleId" in patch and patch["roleId"] is not None:
+    if "roleId" in patch:
         u.role_id = patch["roleId"] or None
     revoke_sessions = False
     if "isActive" in patch and patch["isActive"] is not None:
