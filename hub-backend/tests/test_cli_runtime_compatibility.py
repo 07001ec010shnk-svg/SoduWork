@@ -52,6 +52,45 @@ class CliRuntimeCompatibilityTests(unittest.TestCase):
             self.assertEqual(env['KIMI_MODEL_PROVIDER_TYPE'], kind)
             self.assertNotIn('KIMI_MODEL_HEADERS', env)
 
+    def test_kimi_anonymous_local_model_uses_a_non_secret_credential_placeholder(self):
+        for kind in ('openai', 'anthropic'):
+            for missing_key in ('', '   '):
+                with self.subTest(kind=kind, key=missing_key):
+                    llm = {'base': 'http://127.0.0.1:11434/v1', 'model': 'local-model',
+                           'key': missing_key, 'kind': kind, 'localOnly': True}
+                    original = dict(llm)
+                    env = {'KIMI_MODEL_API_KEY': 'inherited-personal-key',
+                           'KIMI_MODEL_HEADERS': 'inherited-personal-headers'}
+                    acp_agents.inject_llm_env('kimi', env, llm)
+                    self.assertEqual(env['KIMI_MODEL_API_KEY'], 'soduwork-anonymous-local')
+                    self.assertEqual(env['KIMI_MODEL_BASE_URL'], llm['base'])
+                    self.assertEqual(env['KIMI_MODEL_NAME'], 'local-model')
+                    self.assertEqual(env['KIMI_MODEL_PROVIDER_TYPE'], kind)
+                    self.assertNotIn('KIMI_MODEL_HEADERS', env)
+                    self.assertEqual(llm, original, 'The placeholder is process-local, not saved model configuration')
+
+    def test_kimi_placeholder_requires_explicit_local_model_and_preserves_supplied_keys(self):
+        for local_only in (False, None, 'true', 1):
+            with self.subTest(local_only=local_only):
+                env = {}
+                acp_agents.inject_llm_env('kimi', env, {
+                    'base': 'https://model.invalid/v1', 'model': 'remote-model',
+                    'localOnly': local_only})
+                self.assertEqual(env, {}, 'An unauthenticated remote model must not acquire a placeholder')
+        env = {}
+        acp_agents.inject_llm_env('kimi', env, {
+            'base': 'http://127.0.0.1:11434/v1', 'model': 'local-model',
+            'key': 'explicit-local-key', 'localOnly': True})
+        self.assertEqual(env['KIMI_MODEL_API_KEY'], 'explicit-local-key')
+
+    def test_kimi_placeholder_does_not_change_other_agents_anonymous_model_contract(self):
+        env = {'OPENAI_API_KEY': 'inherited-personal-key'}
+        acp_agents.inject_llm_env('qwen', env, {
+            'base': 'http://127.0.0.1:11434/v1', 'model': 'local-model', 'localOnly': True})
+        self.assertNotIn('OPENAI_API_KEY', env)
+        self.assertNotIn('KIMI_MODEL_API_KEY', env)
+        self.assertEqual(env['OPENAI_MODEL'], 'local-model')
+
     def test_bundled_shell_replaces_stale_paths_without_requiring_global_git(self):
         with tempfile.TemporaryDirectory() as folder:
             shell = Path(folder) / 'bin' / 'bash.exe'

@@ -162,6 +162,14 @@ Codex Harness、Qwen、Kimi 和 DeepSeek Harness 使用 Runner 数据根目录�
 
 `python3 -m unittest test_acp_home_isolation` 验证真实文件冲突、模拟权限拒绝，以及真实子进程与 ACP 桥接下使用合成底座的 Runner 准入流程，确认准备失败时执行组件未启动、修复目录后能够执行。这不等同真实模型服务或原生平台验收。
 
+## ACP 文件与 Kimi 问答契约
+
+ACP `fs/read_text_file` 在省略 `limit` 时返回完整 UTF-8 文件并保留换行符；显式正整数 `line` / `limit` 用于范围读取。超过宿主 4 MB 限制的文件会明确报错，桥接不会静默截断内容后再交给原生编辑工具写回。
+
+Kimi 的 `AskUserQuestion` 权限回退会显示为具体答案选项。用户选择的 `optionId` 经桌面端和 Runner 原样回传；完全访问模式也必须等待用户回答，取消问题不会授权或拒绝后续工具操作。此回退保留 Kimi 只处理第一个问题、单选的行为，客户端不声明支持 elicitation 表单。显式标记 `localOnly: true` 的受管 Kimi 模型允许省略 API 密钥：启动环境会注入满足 Kimi 校验的固定非秘密占位值，不修改已保存凭据或远程模型校验。
+
+离线回归命令为 `python3 -m smoke.smoke_acp_runtime`、`python3 -m smoke.smoke_access_policy` 和 `python3 -m unittest tests.test_cli_runtime_compatibility`，覆盖完整文件编辑与追加、问答选择与取消、本地模型环境构造。另使用真实 Kimi Code 2.6.2 和回环模型接口验证了原生 ACP 行为；这不代表外部模型服务验收。
+
 ## DeepSeek Harness 私有探测
 
 本地模型测试隔离 DSH 的可写状态和临时文件，同时从 Runner 已安装的运行时目录解析 `DSH_PATH`。隔离测试状态不能改变已安装代码的位置。私有作业及模型服务原始输出仍不能通过 Hub 作业 API 获取。

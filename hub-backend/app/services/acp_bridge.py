@@ -343,19 +343,26 @@ class AcpBridge:
             raise BridgeError("Requested file does not exist")
         if os.path.getsize(path) > _MAX_FILE_BYTES:
             raise BridgeError("A single file read cannot exceed 4 MB")
-        try:
-            first = max(1, int(params.get("line") or 1))
-            limit = min(2000, max(1, int(params.get("limit") or 2000)))
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise BridgeError("Invalid file line range") from exc
-        selected: list[str] = []
-        with open(path, "r", encoding="utf-8", errors="replace") as handle:
-            for number, line in enumerate(handle, 1):
-                if number >= first:
-                    selected.append(line)
-                if len(selected) >= limit:
-                    break
-        return {"content": "".join(selected)}
+        first = params.get("line")
+        first = 1 if first is None else first
+        limit = params.get("limit")
+        if (type(first) is not int or first < 1
+                or (limit is not None and (type(limit) is not int or limit < 1))):
+            raise BridgeError("Invalid file line range")
+        # An omitted ACP limit means the complete file, including for an
+        # Agent's read/modify/write operation. Never present a truncated prefix
+        # as the whole file. Bound the actual read as well as the size probe so
+        # a file growing between those operations cannot bypass the byte cap.
+        with open(path, "rb") as handle:
+            raw = handle.read(_MAX_FILE_BYTES + 1)
+        if len(raw) > _MAX_FILE_BYTES:
+            raise BridgeError("A single file read cannot exceed 4 MB")
+        content = raw.decode("utf-8", errors="replace")
+        if first == 1 and limit is None:
+            return {"content": content}
+        lines = content.splitlines(keepends=True)
+        end = None if limit is None else first - 1 + limit
+        return {"content": "".join(lines[first - 1:end])}
 
     def _write_text_file(self, params: dict) -> dict:
         if self.permission != "workspace":
@@ -475,6 +482,29 @@ class AcpBridge:
             "message": "Unsupported SoduWork Runner client method: " + method}})
 
     def _permission_result(self, params: dict) -> dict:
+        call = params.get("toolCall") or {}
+        raw_options = params.get("options") or []
+        kimi_approval = {"approve_once": "allow_once", "approve_always": "allow_always",
+                         "reject": "reject_once"}
+        # Kimi can also request permission to *run* AskUserQuestion. Its
+        # canonical approval options must remain on the ordinary grant path.
+        canonical_approval = (isinstance(raw_options, list) and len(raw_options) == len(kimi_approval)
+                              and all(isinstance(item, dict) and isinstance(item.get("optionId"), str)
+                                      and kimi_approval.get(item["optionId"]) == item.get("kind")
+                                      and item["optionId"] in kimi_approval for item in raw_options)
+                              and len({item["optionId"] for item in raw_options}) == len(kimi_approval))
+        if self.agent_name == "kimi" and call.get("title") == "AskUserQuestion" and not canonical_approval:
+            # This reviewed Kimi fallback asks for an answer, not permission.
+            # Full access and legacy workspace mode must never choose for users.
+            choice = None
+            if not self.transition.permission_blocked(params):
+                choice = self.access.native_question(params)
+            if choice is None:
+                self.transition.next_poll = 0
+                self.transition.tick("permission")
+                self.transition.permission_blocked(params)
+                return {"outcome": {"outcome": "cancelled"}}
+            return {"outcome": {"outcome": "selected", "optionId": choice}}
         options = [item for item in (params.get("options") or [])
                    if isinstance(item, dict) and item.get("optionId")]
         approved = self.permission != "readonly"

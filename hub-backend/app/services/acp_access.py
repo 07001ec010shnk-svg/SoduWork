@@ -254,6 +254,29 @@ class BridgeAccess:
         # or safely support a reusable grant. grantRoot is a scope, not a file.
         return "native.tool", "", arguments, False
 
+    def native_question(self, params: dict) -> str | None:
+        if not self.enabled:
+            return None
+        call = params.get("toolCall") or {}
+        # Kimi's ACP fallback carries the question in text content and encodes
+        # each answer as an allow_once option. Never reduce this to a boolean.
+        title = "\n".join(item["content"]["text"] for item in call.get("content", [])
+                          if isinstance(item, dict) and item.get("type") == "content"
+                          and isinstance(item.get("content"), dict)
+                          and item["content"].get("type") == "text"
+                          and isinstance(item["content"].get("text"), str))
+        options = params.get("options")
+        response = self.call("/request", {
+            "action": "native.question", "operationId": str(call.get("toolCallId") or ""),
+            "title": title or "AskUserQuestion", "tool": "AskUserQuestion",
+            "arguments": {"question": title}, "options": options, "allowSession": False})
+        choice = response.get("optionId")
+        if (response.get("decision") == "answer" and isinstance(choice, str)
+                and isinstance(options, list)
+                and any(isinstance(item, dict) and item.get("optionId") == choice for item in options)):
+            return choice
+        return None
+
     def native_permission(self, params: dict) -> bool:
         call = dict(params.get("toolCall") or {})
         if self.agent_name in {"opencode", "dsh", "kimi"}:

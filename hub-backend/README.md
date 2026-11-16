@@ -171,6 +171,14 @@ Codex Harness, Qwen, Kimi and DeepSeek Harness use private state directories und
 
 `python3 -m unittest test_acp_home_isolation` checks real file collisions, injected permission failures, and Runner admission through a real subprocess/ACP bridge with a synthetic vendor. It verifies that failed preparation launches no executor and that a repaired directory permits execution. This does not establish real-provider or native-platform acceptance.
 
+## ACP file and Kimi question contracts
+
+ACP `fs/read_text_file` returns the complete UTF-8 file when `limit` is omitted, preserving line endings. Explicit positive `line`/`limit` values select a range. Files over the 4 MB host limit fail explicitly; the bridge never returns a silently truncated file that a native edit could write back.
+
+Kimi's `AskUserQuestion` permission fallback is presented as answer choices. The selected `optionId` travels through the desktop and Runner unchanged; full access still waits for a human answer, and cancelling does not grant or deny subsequent tool operations. This fallback retains Kimi's first-question, single-choice behavior; the client does not advertise elicitation forms. A managed Kimi model explicitly marked `localOnly: true` may omit its API key: the launch environment receives a fixed non-secret placeholder required by Kimi, without changing saved credentials or remote-model validation.
+
+Offline regressions run with `python3 -m smoke.smoke_acp_runtime`, `python3 -m smoke.smoke_access_policy`, and `python3 -m unittest tests.test_cli_runtime_compatibility`. They cover whole-file edit/append, question selection/cancellation and local model environment construction. Real Kimi Code 2.6.2 was also checked against a loopback model fixture; this verifies the native ACP behavior, not acceptance by an external model provider.
+
 ## Private DeepSeek Harness probe
 
 Private model tests isolate writable DSH state and temporary files while resolving `DSH_PATH` from the Runner's installed runtime directory. Relocating test state must not relocate installed code. The private job and its raw provider output remain unavailable through Hub job APIs.
