@@ -67,6 +67,17 @@
   function writeLocal(key, value) {
     try { localStorage.setItem(key, String(value)); } catch (e) { /* Allow this session to continue when storage is read-only. */ }
   }
+  function loginAccount(value) {
+    return typeof value === 'string' && value.trim().length <= 320 && !/[\x00-\x1f\x7f]/.test(value)
+      ? value.trim() : '';
+  }
+  function loginAccountKey() {
+    return 'soduwork_work_last_login_account_v1@' + encodeURIComponent(normalizeHub(base()));
+  }
+  function rememberLoginAccount(value, result) {
+    var account = loginAccount(value);
+    if (account && result?.ok && result.user?.id) writeLocal(loginAccountKey(), account);
+  }
   function normalizeHub(raw) {
     var value = String(raw || '').trim();
     if (!value) throw new Error('请填写 SoduWork 服务地址');
@@ -184,13 +195,13 @@
     }
     var committed = await bridge.selectHubEnvironment(target);
     if (!committed || !committed.ok) throw new Error(committed && committed.error || '无法切换服务');
+    runtimeHub = target;
     if (previous !== target) {
       invalidateRegistrations();
       _deviceSession = ''; _deviceSessionUntil = 0; _deviceAuthState = 'legacy';
       _deviceId = ''; _clientUser = null; _clientQuota = null;
       try { window.dispatchEvent(new CustomEvent('soduwork-data-scope-changed')); } catch (_) {}
     }
-    runtimeHub = target;
     return hubConfig();
   }
   var _savedHubRestore = null;
@@ -377,7 +388,7 @@
     if (_deviceSession) { _deviceSession = ''; _deviceSessionUntil = 0; }
     return false;
   }
-  function rememberSession(row) {
+  function rememberSession(row, options) {
     var previousScope = _deviceId && _clientUser ? taskStorageKey('ops') : '';
     if (row && row.clientId) _deviceId = String(row.clientId);
     if (row?.user?.id && row.user.id !== _clientUser?.id) _clientQuota = null;
@@ -401,10 +412,23 @@
     try { window.dispatchEvent(new CustomEvent('soduwork-device-auth', { detail: {
       state: _deviceAuthState, activationRequired: _deviceAuthState === 'pending',
       user: _clientUser, quota: _clientQuota,
-      code: String(row && row.code || ''), error: String(row && row.error || '')
+      code: String(row && row.code || ''), error: String(row && row.error || ''),
+      ...(options?.interactiveLogin === true && row?.ok && row.user?.id ? { interactiveLogin: true } : {})
     } })); } catch (e) {}
   }
-  function requireClientAuth(reason, payload) {
+  function requestAuth() {
+    hasValidDeviceSession();
+    return { epoch: _registrationEpoch, hub: base(), clientId: device(),
+      scope: taskStorageKey('ops'), session: _deviceSession };
+  }
+  function assertRequestAuth(request, session = true) {
+    if (request.epoch !== _registrationEpoch || request.hub !== base() ||
+        request.clientId !== device() || request.scope !== taskStorageKey('ops') ||
+        session && request.session !== _deviceSession) throw staleTaskScope();
+  }
+  function requireClientAuth(reason, payload, request) {
+    request = request || requestAuth();
+    assertRequestAuth(request);
     var data = payload || {};
     if (data.code === 'TOKEN_QUOTA_EXCEEDED' && _clientUser && hasValidDeviceSession()) {
       // A delayed request error may describe quota that an administrator has
@@ -420,7 +444,9 @@
     if (data.quota) _clientQuota = data.quota;
     try {
       if (window.soduWorkAPI && window.soduWorkAPI.deviceAuthClearSession) {
-        window.soduWorkAPI.deviceAuthClearSession({ hub: base(), clientId: device() });
+        // Clearing an older rejected token must not invalidate a newer login in another window.
+        Promise.resolve(window.soduWorkAPI.deviceAuthClearSession({ hub: request.hub,
+          clientId: request.clientId, expectedSession: request.session })).catch(function () {});
       }
       window.dispatchEvent(new CustomEvent('soduwork-client-auth-required', { detail: {
         state: _deviceAuthState, reason: String(reason || ''), code: String(data.code || ''),
@@ -428,14 +454,15 @@
       } }));
     } catch (e) {}
   }
-  function handleAuthError(error) {
+  function handleAuthError(error, request) {
     if (!error) return;
+    assertRequestAuth(request, error.code === 'TOKEN_QUOTA_EXCEEDED' || error.status === 401);
     if (error.code === 'LEGAL_ACCEPTANCE_REQUIRED') {
       window.dispatchEvent(new CustomEvent('soduwork-legal-required'));
       return;
     }
     if (error.code === 'TOKEN_QUOTA_EXCEEDED' || error.status === 401) {
-      requireClientAuth(error.code || 'SESSION_INVALID', error.payload || error);
+      requireClientAuth(error.code || 'SESSION_INVALID', error.payload || error, request);
     }
   }
 
@@ -614,6 +641,7 @@
     var o = Object.assign({ headers: {} }, opts || {});
     delete o.taskScope;
     o.headers = Object.assign(authHeaders(true), o.headers);
+    var auth = requestAuth();
     if (trace?.requestId && !Object.keys(o.headers).some(key => key.toLowerCase() === 'x-request-id')) o.headers['X-Request-ID'] = trace.requestId;
     if (!o.signal) o.signal = _abortSignal(DEFAULT_TIMEOUT);
     var res;
@@ -627,6 +655,7 @@
     mark(true);
     var txt = await res.text();
     if (requestScope !== taskStorageKey('ops')) throw staleTaskScope();
+    assertRequestAuth(auth, false);
     /*
      * The first request may precede initialization or encounter an expired 30-minute session.
      * Refresh through secure storage and replay once; pending or disabled devices must still
@@ -634,7 +663,7 @@
      */
     if (res.status === 401 && !retried && path !== '/clients/register') {
       try {
-        if (await refreshDeviceSession(_deviceSession)) return jfetch(path, Object.assign({}, opts, { taskScope: requestScope }), true, trace);
+        if (await refreshDeviceSession(auth.session)) return jfetch(path, Object.assign({}, opts, { taskScope: requestScope }), true, trace);
       } catch (e) { if (registrationBoundaryError(e)) throw e; /* Preserve the original 401 error details. */ }
       /*
        * A failed refresh can reflect a transient network error. Preserve the original 401 and
@@ -644,7 +673,7 @@
       throw httpError(res, txt);
     }
     if (!res.ok) {
-      var requestError = httpError(res, txt); handleAuthError(requestError); throw requestError;
+      var requestError = httpError(res, txt); handleAuthError(requestError, auth); throw requestError;
     }
     return parseJSON(txt);
   }
@@ -679,7 +708,7 @@
       form.append('sequence', String(Math.max(0, Number(metadata.sequence) || 0)));
       form.append('criterionText', String(metadata.criterionText || '').slice(0, 500));
     }
-    var res;
+    var res, auth = requestAuth();
     try {
       res = await fetch(apiUrl(path), {
         method: 'POST', headers: authHeaders(false), body: form,
@@ -689,15 +718,16 @@
     mark(true);
     var txt = await res.text();
     if (requestScope && requestScope !== taskStorageKey('ops')) throw staleTaskScope();
+    assertRequestAuth(auth, false);
     if (res.status === 401 && !retried) {
       try {
-        if (await refreshDeviceSession(_deviceSession)) return uploadFile(path, file, true, metadata, requestScope);
+        if (await refreshDeviceSession(auth.session)) return uploadFile(path, file, true, metadata, requestScope);
       } catch (e) { if (registrationBoundaryError(e)) throw e; }
       /* As in jfetch, preserve the original 401 after refresh failure without forcing reauthentication. */
       throw httpError(res, txt);
     }
     if (!res.ok) {
-      var requestError = httpError(res, txt); handleAuthError(requestError); throw requestError;
+      var requestError = httpError(res, txt); handleAuthError(requestError, auth); throw requestError;
     }
     return parseJSON(txt);
   }
@@ -797,6 +827,7 @@
   async function domainRead(domain, path) {
     var bridge = global.soduWorkAPI, scope = domainScope();
     if (!bridge?.clientDomainRead || !scope.userId) return jfetch(path);
+    var auth = requestAuth();
     var result = await bridge.clientDomainRead(domain, scope);
     if (!sameDomainScope(scope)) throw staleTaskScope();
     if (result?.code === 'DOMAIN_POLL_FALLBACK') return jfetch(path);
@@ -806,7 +837,7 @@
       if (result?.status) {
         var error = httpError({status: result.status}, JSON.stringify(result.body || {detail: result.reason}));
         error.connectivityHandled = true;
-        if (result.status !== 401) handleAuthError(error);
+        if (result.status !== 401) handleAuthError(error, auth);
         throw error;
       }
       throw Object.assign(new Error(result?.reason || '同步暂时不可用'), {status: result?.status, code: result?.code, connectivityHandled: true});
@@ -2727,7 +2758,7 @@
     },
 
     async publishDelivery(payload) {
-      var requestScope = taskStorageKey('ops');
+      var requestScope = taskStorageKey('ops'), auth = requestAuth();
       if (!payload?.manifest || typeof payload.data !== 'string') throw new Error('成果内容尚未准备好');
       var raw = atob(payload.data), bytes = new Uint8Array(raw.length);
       for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
@@ -2736,7 +2767,7 @@
       var res = await fetch(apiUrl('/deliveries'), { method: 'POST', headers: authHeaders(false), body: form, signal: _abortSignal(120000) });
       assertLibraryScope(requestScope);
       var text = await res.text(); assertLibraryScope(requestScope);
-      if (!res.ok) { var error = httpError(res, text); handleAuthError(error); throw error; }
+      if (!res.ok) { var error = httpError(res, text); handleAuthError(error, auth); throw error; }
       /*
        * Reject empty responses with a clear error instead of JSON.parse's generic end-of-input
        * message.
@@ -2848,7 +2879,7 @@
       catch (e) { markFromError(e); throw e; }
     },
     async uploadLibraryFile(file, folderId, storage, source) {
-      var requestScope = taskStorageKey('ops');
+      var requestScope = taskStorageKey('ops'), auth = requestAuth();
       if (!file) throw new Error('请选择文件');
       var form = new FormData(); form.append('file', file); form.append('folderId', folderId || ''); form.append('storage', storage || '');
       var meta = source && typeof source === 'object' ? source : {};
@@ -2863,7 +2894,7 @@
         assertLibraryScope(requestScope);
         mark(true); var txt = await res.text();
         assertLibraryScope(requestScope);
-        if (!res.ok) { var err = httpError(res, txt); handleAuthError(err); throw err; }
+        if (!res.ok) { var err = httpError(res, txt); handleAuthError(err, auth); throw err; }
         return parseJSON(txt);
       } catch (e) { markFromError(e); throw e; }
     },
@@ -2901,7 +2932,7 @@
       }
     },
     async readLibraryBinary(id) {
-      var requestScope = taskStorageKey('ops');
+      var requestScope = taskStorageKey('ops'), auth = requestAuth();
       try {
         var res = await fetch(apiUrl('/library/items/' + encodeURIComponent(id) + '/download'), {
           method: 'GET', headers: authHeaders(false), signal: _abortSignal(120000)
@@ -2913,7 +2944,7 @@
         mark(true);
         if (!res.ok) {
           var text = await res.text(); assertLibraryScope(requestScope);
-          var err = httpError(res, text); handleAuthError(err); throw err;
+          var err = httpError(res, text); handleAuthError(err, auth); throw err;
         }
         var limit = 64 * 1024 * 1024;
         if (Number(res.headers.get('content-length') || 0) > limit) { await res.body?.cancel(); throw new Error('文件超过 64MB，请下载后使用'); }
@@ -2947,7 +2978,7 @@
       } catch (error) { markFromError(error); throw error; }
     },
     async readLibraryArchiveFile(id, path, options) {
-      var requestScope = taskStorageKey('ops');
+      var requestScope = taskStorageKey('ops'), auth = requestAuth();
       var route = '/library/items/' + encodeURIComponent(id) + '/archive/file?path=' + encodeURIComponent(libraryArchivePath(path));
       try {
         if (options?.preview) {
@@ -2966,7 +2997,7 @@
         mark(true);
         if (!res.ok) {
           var text = await res.text(); assertLibraryScope(requestScope);
-          var error = httpError(res, text); handleAuthError(error); throw error;
+          var error = httpError(res, text); handleAuthError(error, auth); throw error;
         }
         var cap = 64 * 1024 * 1024;
         if (Number(res.headers.get('content-length') || 0) > cap) {
@@ -3090,7 +3121,7 @@
       catch (e) { markFromError(e); throw e; }
     },
     async downloadLibraryItem(id, filename, member) {
-      var requestScope = taskStorageKey('ops');
+      var requestScope = taskStorageKey('ops'), auth = requestAuth();
       try {
         var memberBlob = member?.path ? await (member.archive === true ? this.readLibraryArchiveFile(id, member.path) : this.readDeliveryFile(id, member.path)) : null;
         var res = memberBlob ? new Response(memberBlob) : await fetch(apiUrl('/library/items/' + encodeURIComponent(id) + '/download'), {
@@ -3103,7 +3134,7 @@
         mark(true);
         if (!res.ok) {
           var text = await res.text(); assertLibraryScope(requestScope);
-          var err = httpError(res, text); handleAuthError(err); throw err;
+          var err = httpError(res, text); handleAuthError(err, auth); throw err;
         }
         var blob = await res.blob(); assertLibraryScope(requestScope);
         var url = URL.createObjectURL(blob), a = document.createElement('a');
@@ -3162,6 +3193,10 @@
              * before device activation.
              */
             try { if (readLocal(LEGACY_AUTH_HUB_KEY) === base()) localStorage.removeItem('soduwork_work_device_secret'); } catch (e) {}
+            // Existing signed-in profiles may predate the explicit account preference.
+            if (secure.ok && secure.session && secure.user?.id && !secure.activationRequired && !SoduWorkAPI.rememberedLoginAccount()) {
+              rememberLoginAccount(loginAccount(secure.user.email) || loginAccount(secure.user.username), secure);
+            }
             rememberSession(secure);
             await syncRunnerConfig(body.workRoot || '', registration);
             registration.check();
@@ -3194,6 +3229,7 @@
     },
 
     async clientLogin(credentials) {
+      var account = loginAccount(credentials && credentials.account);
       var restoration = restoreSavedHub(); if (restoration) await restoration;
       if (!window.soduWorkAPI || !window.soduWorkAPI.deviceAuthLogin) {
         return { ok: false, error: '\u5f53\u524d\u5ba2\u6237\u7aef\u7248\u672c\u4e0d\u652f\u6301\u5b89\u5168\u767b\u5f55' };
@@ -3217,9 +3253,12 @@
       });
       checkLogin();
       invalidateRegistrations();
-      rememberSession(result || {});
+      var acceptedEpoch = _registrationEpoch;
+      rememberLoginAccount(account, result);
+      rememberSession(result || {}, { interactiveLogin: true });
       if (result && result.ok) {
         await syncRunnerConfig(root);
+        if (acceptedEpoch !== _registrationEpoch || loginHub !== base()) throw staleTaskScope();
         mark(true);
       } else if (result && (result.code === 'TOKEN_QUOTA_EXCEEDED' || result.status === 401)) {
         requireClientAuth(result.code || 'LOGIN_FAILED', result);
@@ -3228,6 +3267,7 @@
     },
 
     async clientAccountAction(action, payload) {
+      var account = loginAccount(payload && payload.email);
       var restoration = restoreSavedHub(); if (restoration) await restoration;
       if (!window.soduWorkAPI || !window.soduWorkAPI.deviceAccountAction)
         return { ok: false, error: '请更新客户端后使用邮箱账号功能' };
@@ -3250,8 +3290,11 @@
       if (epoch !== _registrationEpoch || hub !== base()) throw staleTaskScope();
       if (signsIn && result && result.ok) {
         invalidateRegistrations();
-        rememberSession(result);
+        var acceptedEpoch = _registrationEpoch;
+        rememberLoginAccount(account, result);
+        rememberSession(result, { interactiveLogin: true });
         await syncRunnerConfig(root);
+        if (acceptedEpoch !== _registrationEpoch || hub !== base()) throw staleTaskScope();
         mark(true);
       }
       return result || { ok: false, error: '服务没有返回结果' };
@@ -3377,6 +3420,9 @@
     clientAuthSnapshot() {
       return { state: _deviceAuthState, user: _clientUser, quota: _clientQuota,
         clientId: device(), online: _online };
+    },
+    rememberedLoginAccount() {
+      return loginAccount(readLocal(loginAccountKey()));
     },
     im: {
       catalog: opts => jfetch('/im', Object.assign({cache: 'no-store'}, opts)),
