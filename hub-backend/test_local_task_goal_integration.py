@@ -103,6 +103,20 @@ class TaskGoalIntegrationTests(unittest.TestCase):
         self.assertEqual(self.run["goalState"]["reason"], self.run["error"])
         self.assertIn("CLI", self.run["error"])
 
+    def test_disabling_goal_releases_executor_switch_and_restores_dialogue_mode(self):
+        from app.services import runner_turn_selection, execution_selection
+        self.run["state"] = "stopped"
+        wanted = {"agentId": "opencode", "modelName": self.cfg["llm"]["model"], "reasoningEffort": ""}
+        profile = {**base._PROFILES["opencode"], "bin": lambda: "fixture-agent", "runtime_issue": None}
+        with patch.dict(base._PROFILES, {"opencode": profile}):
+            with self.assertRaises(execution_selection.SelectionError) as error:
+                runner_turn_selection.validate(self.ref, wanted, self.run["cfg"])
+            self.assertEqual(error.exception.code, "EXECUTION_GOAL_ACTIVE")
+            self.assertTrue(goal.control(self.run, "disable")["ok"])
+            self.assertEqual(self.run["conversationMode"], "adaptive")
+            selected = runner_turn_selection.validate(self.ref, wanted, self.run["cfg"])
+            self.assertEqual(selected["agentId"], "opencode")
+
     def test_protocol_failure_after_limit_is_not_recovered(self):
         self.tool()
         terminal = self.emit({"type": "step_finish", "part": {"reason": "max_tokens"}})

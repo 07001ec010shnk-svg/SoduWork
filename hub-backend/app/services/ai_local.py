@@ -773,7 +773,8 @@ def _dispatch_sync_once(cfg: dict, t, files: list | None = None,
             "firstStarted": time.time(),
         }
         if goal_contract:
-            _RUNS[sid].update(goalContract=goal_seed["goalContract"], goalState=goal_seed["goalState"], goalTurnOwned=True)
+            _RUNS[sid].update(goalContract=goal_seed["goalContract"], goalState=goal_seed["goalState"],
+                              goalTurnOwned=True, conversationMode="goal")
             prompt = local_task_goal.work_prompt(_RUNS[sid], prompt)
     from .runtime_messages import epoch_ms
     conversation_text = str(ctx.get("conversationUserText") or "").strip()

@@ -67,6 +67,7 @@ def initialize(run: dict, raw: object, now: float | None = None) -> bool:
         if run["goalState"]["status"] not in {"completed", "disabled"}:
             return False
     at = time.time() if now is None else now
+    run["conversationMode"] = "goal"
     run["goalContract"] = contract
     run["goalState"] = {"schemaVersion": 1, "status": "working", "reason": "",
                         "activeSince": at, "elapsedMs": 0, "steps": 0, "continuations": 0,
@@ -140,6 +141,10 @@ def control(run: dict, action: str, now: float | None = None) -> dict:
             return {"ok": True}
         _status(run, "paused" if action == "pause" else "disabled",
                 "目标已暂停，已有进度已保留。" if action == "pause" else "目标模式已关闭。", at)
+        if action == "disable":
+            # Executor selection and ordinary-dialogue settlement use this
+            # durable mode too; closing the controller must release both.
+            run["conversationMode"] = "adaptive"
     else:
         return {"ok": False, "error": "未知目标操作。"}
     return {"ok": True}
