@@ -13,7 +13,7 @@ def check(binary):
     if bundled != Path(certifi.where()).read_bytes():
         raise AssertionError("Frozen Runner CA bundle differs from the pinned dependency")
     modules = archive.open_embedded_archive("PYZ.pyz").toc
-    if not {"certifi", "certifi.core", "app.services.runner_tls"}.issubset(modules):
+    if not {"certifi", "certifi.core", "app.services.runner_tls", "app.services.runtime_tls"}.issubset(modules):
         raise AssertionError("Frozen Runner is missing its CA loader")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.load_verify_locations(cadata=bundled.decode("ascii"))
