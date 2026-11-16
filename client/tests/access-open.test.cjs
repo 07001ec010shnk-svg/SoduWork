@@ -82,6 +82,7 @@ function fixture(options = {}) {
       if (name === '../conversation/acceptance-session' && options.acceptance) return options.acceptance;
       if (name === '../conversation/account-native-source.cjs') return require('../main/conversation/account-native-source.cjs');
       if (name === '../conversation/shared-history.cjs') return require('../main/conversation/shared-history.cjs');
+      if (name === '../conversation/execution-outcome.cjs') return require('../main/conversation/execution-outcome.cjs');
       if (!['../native-locale.cjs', '../agent-runtime/runtime-catalog', '../access-control/policy', '../access-control/preferences', '../access-control/automation-access', '../platform-connections/runtime.cjs', '../conversation/history-access', '../conversation/requirement-context', '../conversation/acceptance-session', '../conversation/work-conversation-opening', '../conversation-connectors.cjs', './resume-cwd', './task-access'].includes(name)) throw Error('Unexpected dependency ' + name);
       return require(path.join(__dirname, '../main/pi-session', name));
     },

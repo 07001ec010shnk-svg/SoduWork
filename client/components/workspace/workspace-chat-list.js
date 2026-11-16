@@ -41,6 +41,21 @@
     return String(api?.taskStorageKey?.('tasks') || '');
   }
   let historyOwner = accountOwner(), historyEpoch = 0;
+  let presenceSequence = 0, presenceFloor = 0;
+  const presenceVersions = new Map();
+  const executionFields = ['state', 'status', 'live', 'runtimeUnavailable', 'runtimeFailure', 'executionOutcome'];
+  function executionState(row) {
+    return Object.fromEntries(executionFields.filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]]));
+  }
+  function preserveNewerPresence(rows, startedAt) {
+    return (rows || []).map(row => {
+      const id = canonicalLocalId(row.id) || row.id;
+      const aliases = [id, row.id, ...(row.historyAliasIds || [])];
+      if (startedAt >= presenceFloor && aliases.every(alias => (presenceVersions.get(alias) || 0) <= startedAt)) return row;
+      const current = ctx.chatItems.find(item => (canonicalLocalId(item.id) || item.id) === id);
+      return current ? { ...row, ...executionState(current) } : row;
+    });
+  }
   let mutationGeneration = 0, accountMutationGeneration = 0, lifecycleOverflow = false;
   const lifecycle = new Map(), MAX_LIFECYCLE_IDS = 1024;
   let localRows = [], localLoad = null, localReady = false, localNext = null, localRestart = false;
@@ -172,6 +187,7 @@
     historyOwner = next;
     accountDisplayLinks.clear();
     historyEpoch++;
+    presenceSequence++; presenceFloor = 0; presenceVersions.clear();
     mutationGeneration++;
     lifecycle.clear(); lifecycleOverflow = false;
     ctx.historyLoad = null;
@@ -365,6 +381,18 @@ function updateChatState(event) {
     const row = rememberChatName(event && event.presence);
     const id = String(event && event.sessionId || row && row.id || '');
     if (!id || !row) return;
+    if (Object.hasOwn(row, 'state') || Object.hasOwn(row, 'status')) {
+      const canonical = canonicalLocalId(id) || id;
+      presenceVersions.delete(canonical); presenceVersions.set(canonical, ++presenceSequence);
+      if (presenceVersions.size > 1024) {
+        const oldest = presenceVersions.keys().next().value;
+        presenceFloor = Math.max(presenceFloor, presenceVersions.get(oldest));
+        presenceVersions.delete(oldest);
+      }
+      // Account directory refreshes also reuse these cached local rows.
+      localRows = localRows.map(item => (canonicalLocalId(item.id) || item.id) === canonical
+        ? { ...item, ...executionState(row) } : item);
+    }
     const previous = ctx.chatItems.find(item => String(item.id || '') === id);
     if (!row.emptyPlaceholder && !row.accountConversation && !row.remoteProjection &&
         (event.kind === 'renamed' || event.kind === 'history-lifecycle' ||
@@ -886,6 +914,7 @@ function refreshAccountHistory() {
       return Promise.resolve(false);
     }
     const epoch = historyEpoch, generation = accountMutationGeneration, localRevision = localCatalog?.revision;
+    const presenceAtStart = presenceSequence;
     const current = () => { syncHistoryOwner(); return epoch === historyEpoch && generation === accountMutationGeneration; };
     const job = Promise.resolve().then(() => {
       if (!current()) return null;
@@ -913,7 +942,8 @@ function refreshAccountHistory() {
         // response's accepted cleanup IDs even when old ledger entries expire.
         forgetPinned([...archived], '这条会话暂时无法归档', true);
         forgetPinned([...deleted]);
-        ctx.setChats(supportsLocalHistory() ? [...localRows, ...(got.chats || []).filter(row => !isLocalId(row.id))] : got.chats || []);
+        const incoming = preserveNewerPresence(got.chats, presenceAtStart);
+        ctx.setChats(supportsLocalHistory() ? [...localRows, ...incoming.filter(row => !isLocalId(row.id))] : incoming);
       }
       else { accountError = 'unavailable'; ctx.chatsLoading = false; ctx.renderChats(); }
       return Boolean(got && got.ok);
@@ -939,6 +969,7 @@ function refreshAccountHistory() {
     if (localLoad) return localLoad;
     if (append && !localNext && !localRestart) return Promise.resolve(true);
     const workspace = localCatalog?.workspace, epoch = historyEpoch;
+    const presenceAtStart = presenceSequence;
     const current = () => { syncHistoryOwner(); return !closed && epoch === historyEpoch; };
     const options = { source: 'local', limit: 50, ...(refresh ? { refresh: true } : {}),
       ...(append && localNext && !localRestart ? { after: localNext } : {}),
@@ -972,7 +1003,7 @@ function refreshAccountHistory() {
       }
       const previousRevision = localCatalog?.revision;
       localCatalog = { workspace: catalog.workspace, revision: catalog.revision };
-      const oldRows = localRows.filter(localVisible), incoming = (got.chats || []).filter(localVisible);
+      const oldRows = localRows.filter(localVisible), incoming = preserveNewerPresence(got.chats, presenceAtStart).filter(localVisible);
       const ids = new Set(incoming.map(row => row.id));
       localRows = append ? [...oldRows.filter(row => !ids.has(row.id)), ...incoming]
         : [...incoming, ...oldRows.filter(row => !ids.has(row.id))];

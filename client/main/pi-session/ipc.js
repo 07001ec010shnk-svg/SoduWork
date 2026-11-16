@@ -855,6 +855,9 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
          * and draft discovery then use conversation time boundaries.
          */
         resumedConversation: Boolean(resume && !work.bootstrap),
+        // Replaying an archive is not evidence that a later failed attempt succeeded.
+        retainedHistoryId: local?.id,
+        retainedExecutionFailure: (require('../conversation/execution-outcome.cjs').recover(local) || local)?.state === 'failed',
         /* SDK uses the validated directory; the archive path remains separate. */
         resumeCwd: resume ? cwd : '',
         resumeAt: resume ? resume.at : 0,
