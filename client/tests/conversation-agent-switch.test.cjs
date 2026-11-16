@@ -18,7 +18,7 @@ test('completed goal conversations can switch while active goals remain protecte
   assert.equal(goalSwitchBlocked({ execution: { configured: true, harness: { state: 'completed' } } }), false);
 });
 
-function fixture(t) {
+function fixture(t, { nativeHistory = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-agent-switch-')), app = { getPath: () => root };
   const archives = new Map(), runs = new Map(), openings = [], requests = [];
   let serial = 0, unavailable = '', busy = false, gate = null, strictMissing = false;
@@ -44,6 +44,19 @@ function fixture(t) {
         selectModel(name) { model = name; return { ok: true, selection: raw.snapshot().modelSelection }; },
         close() { listeners.clear(); },
       };
+      if (nativeHistory) {
+        const ctx = { shared: { _presenceState: require('../main/pi-session/history-state').presenceState },
+          opts: options, ref: options.ref, effectiveCwd: root, displayTitle: 'Switch test',
+          piSession: { sessionId: id, sessionManager: { getSessionFile: () => file } },
+          goal: {}, prep: { model: {} }, acc: { state: { messages } }, handle: raw,
+          taskBinding: { taskIds: [], taskBindings: [] },
+          turnQueue: { size: () => 0 }, inFlight: false, _snapshot: () => raw.snapshot(),
+          failedLastTurn: options.retainedExecutionFailure === true };
+        raw.historyRow = require('../main/pi-session/session-handle').create(ctx).historyRow;
+        const submit = raw.submit;
+        // Match session-send's reset when a new turn passes preflight.
+        raw.submit = (...args) => { ctx.failedLastTurn = false; return submit(...args); };
+      }
       archives.set(file, { raw, messages }); return { ok: true, session: raw };
     },
     history: async () => ({ ok: true, chats: [...archives.values()].map(x => x.raw.historyRow()) }),
@@ -92,6 +105,37 @@ function fixture(t) {
     set strictMissing(v) { strictMissing = v; }, set absence(v) { absence = v; },
     set unavailable(v) { unavailable = v; }, set busy(v) { busy = v; }, set gate(v) { gate = v; } };
 }
+
+test('successful execution stays completed after switching away from and back to a retained failed Pi conversation', async t => {
+  const f = fixture(t, { nativeHistory: true }), actor = identity('owner');
+  const opened = await f.bridge.open({ ...options(f), identity: actor,
+    retainedHistoryId: 'original-history', retainedExecutionFailure: true });
+  assert.equal(opened.ok, true, opened.reason);
+  const handle = opened.session, id = handle.sessionId;
+  const native = [...f.archives.values()][0];
+  native.messages.push({ role: 'user', text: 'Earlier request' },
+    { role: 'assistant', text: 'Earlier saved answer', done: true });
+  assert.equal(handle.historyRow(handle.snapshot()).state, 'failed', 'opening still retains the genuine failure');
+  const store = require('../main/conversation/replica-store.cjs').create(path.join(f.root, 'history.sqlite'));
+  const history = require('../main/conversation/shared-history.cjs').create({
+    app: f.app, session: f.bridge, store, identityOf: () => actor });
+  try {
+    await send(handle, 'Successful Pi turn');
+    await history.capture(handle, actor);
+    assert.equal(store.get(id).state, 'completed');
+    assert.equal((await handle.selectAgent('qwen')).ok, true);
+    await send(handle, 'Successful Qwen turn');
+    assert.equal((await handle.selectAgent('pi')).ok, true);
+    assert.equal(handle.sessionId, id);
+    assert.ok(handle.snapshot().messages.some(message => message.text === 'Earlier request'));
+    await history.capture(handle, actor);
+    assert.equal(store.get(id).state, 'completed', 'a fresh segment cannot revive a superseded failure receipt');
+    assert.equal(handle.historyRow(handle.snapshot()).state, 'completed');
+    assert.equal(f.openings.at(-1).resumePath, '');
+    assert.equal(f.openings.at(-1).retainedExecutionFailure, false);
+    assert.equal(f.openings.at(-1).retainedHistoryId, '');
+  } finally { await history.close(); }
+});
 
 test('history and live presence retain used runtimes across switches and exclude unused choices', async t => {
   const f = fixture(t);

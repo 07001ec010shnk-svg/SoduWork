@@ -3,6 +3,7 @@
 const path = require('node:path');
 const access = require('./history-access');
 const { accountId } = require('../device-auth-request');
+const executionOutcome = require('./execution-outcome.cjs');
 
 function create({ app, session, identityOf = () => require('./requirement-context').cachedIdentity(app), store = require('./replica-store.cjs').createWorker(
   path.join(app.getPath('userData'), 'conversation-replicas', 'history.sqlite')) }) {
@@ -20,9 +21,9 @@ function create({ app, session, identityOf = () => require('./requirement-contex
     return current;
   }
   const isNative = row => row && !row.accountProjection && !row.remoteProjection && !row.cloud;
-  async function register(rows) {
+  async function register(rows, options) {
     const result = [];
-    for (let i = 0; i < rows.length; i += 200) result.push(...await store.register(rows.slice(i, i + 200)));
+    for (let i = 0; i < rows.length; i += 200) result.push(...await store.register(rows.slice(i, i + 200), options));
     return result;
   }
   async function projectRows(rows, archived = false, records) {
@@ -36,10 +37,19 @@ function create({ app, session, identityOf = () => require('./requirement-contex
       ])].filter(id => id !== row.id) };
     });
     for (const row of native) if (row.historyAliasIds.length) await store.join(row.id, row.historyAliasIds);
-    const registered = await register(native);
+    let registered = await register(native);
+    const actor = scoped.actor();
+    registered = await Promise.all(registered.map(async row => {
+      const recovered = executionOutcome.recover(row);
+      if (!recovered || row.state === recovered.state && row.status === recovered.status && row.live === false ||
+          !scoped.readable(row, actor)) return row;
+      scoped.guard(actor);
+      const [saved] = await register([recovered], { expectedRevision: row.revision });
+      scoped.guard(actor); return saved;
+    }));
+    registered = registered.filter(Boolean);
     const byId = new Map();
     for (const row of registered) for (const id of [row.id, ...row.historyAliasIds]) byId.set(id, row);
-    const actor = scoped.actor();
     return rows.map(row => byId.get(row.id) || row).filter(row => !row.deleted && (row.archived === true) === archived && scoped.readable(row, actor));
   }
   async function resolveRaw(id) {
@@ -220,7 +230,7 @@ function create({ app, session, identityOf = () => require('./requirement-contex
     await save();
     if (job.body.deleted) await store.lifecycle(id, 'delete', { account: accountId(identity), hub: job.hub });
   }
-  async function capture(handle, identity) {
+  async function capture(handle, identity, { initialReplay = false } = {}) {
     if (closed || handle.localReplica || typeof handle.snapshot !== 'function') return;
     const snapshot = handle.snapshot(), original = handle.historyRow?.(snapshot);
     if (!original?.id) return;
@@ -229,7 +239,24 @@ function create({ app, session, identityOf = () => require('./requirement-contex
     const remote = original.cloud || original.accountProjection;
     const id = remote ? 'copy-' + require('node:crypto').createHash('sha256').update(
       JSON.stringify([identity?.hub, accountId(identity), original.id])).digest('hex') : original.id;
-    const displayed = remote ? original : require('./acceptance-session').projectHistory(app, original);
+    let displayed = remote ? original : require('./acceptance-session').projectHistory(app, original);
+    if (!remote) {
+      let retainedFailure = false;
+      if (initialReplay) {
+        const previous = await store.get(id);
+        // An older successful answer cannot disprove a later preflight failure.
+        if (previous?.state === 'failed' && executionOutcome.recover(previous)?.state !== 'completed' && displayed.state === 'completed') {
+          displayed = { ...displayed, state: previous.state, status: previous.status };
+          retainedFailure = true;
+        }
+      }
+      const outcome = original.runtimeUnavailable && !retainedFailure ? original.executionOutcome : {
+        version: 1, source: 'runtime', state: displayed.state || '', status: displayed.status || snapshot.status || '',
+      };
+      displayed = { ...displayed, runtimeUnavailable: original.runtimeUnavailable === true,
+        runtimeFailure: original.runtimeUnavailable ? original.runtimeFailure : null,
+        executionOutcome: outcome ? { ...outcome, owner: accountId(identity), hub: identity?.hub } : null };
+    }
     const [row] = await register([{ ...displayed, id, cloud: false, accountProjection: false,
       accountConversation: false,
       ...(remote ? { historyProtection: 'account' } : {}),
@@ -256,7 +283,7 @@ function create({ app, session, identityOf = () => require('./requirement-contex
   }
   function observe(handle, identity) {
     if (!handle || observed.has(handle) || handle.localReplica) return;
-    let pending, timer, disposed = false, error = '', dirty = false;
+    let pending, timer, disposed = false, error = '', dirty = false, executionObserved = false;
     const flush = () => {
       if (timer) clearTimeout(timer); timer = null;
       dirty = true;
@@ -264,13 +291,14 @@ function create({ app, session, identityOf = () => require('./requirement-contex
       pending = (async () => {
         while (dirty) {
           dirty = false;
-          try { await capture(handle, identity); error = ''; }
+          try { await capture(handle, identity, { initialReplay: !executionObserved }); error = ''; }
           catch (failure) { error = failure.message; handle.localHistoryError = error; }
         }
       })().finally(() => { pending = null; });
       return pending;
     };
-    const dispose = handle.on?.(() => {
+    const dispose = handle.on?.(event => {
+      if (['run', 'turn-queued', 'turn-dequeued', 'turn-finished'].includes(event?.kind)) executionObserved = true;
       if (disposed || timer) return;
       timer = setTimeout(() => { timer = null; void flush(); }, 1000); timer.unref?.();
     });

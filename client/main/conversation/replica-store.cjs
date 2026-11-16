@@ -87,14 +87,18 @@ function create(file, { maxImportBytes = 512 * 1024 * 1024 } = {}) {
       .iterate(...rows.map(row => row.id))) aliases.get(row.replica).push(row.alias);
     return rows.map(row => project(row, aliases.get(row.id)));
   }
-  function register(rows) {
+  function register(rows, { expectedRevision } = {}) {
     if (!Array.isArray(rows) || rows.length > 500) throw Error('Invalid local history batch');
+    if (expectedRevision !== undefined && (!Number.isSafeInteger(expectedRevision) || expectedRevision < 0))
+      throw Error('Invalid local history revision');
     return transaction(() => rows.map(raw => {
       const id = key(raw.id), ids = [...new Set([id, ...(raw.historyAliasIds || [])].map(key))];
       if (ids.length > 100) throw Error('Too many conversation aliases');
       const matches = ids.map(exact).filter(Boolean), canonical = matches[0]?.id || id;
       if (matches.some(row => row.id !== canonical)) throw Error('Conflicting conversation aliases');
       const old = exact(canonical), previous = old ? JSON.parse(old.data) : {};
+      // A background repair cannot overwrite a more recent execution receipt.
+      if (expectedRevision !== undefined && old?.catalog_revision !== expectedRevision) return project(old);
       if (old && id !== canonical) return project(old);
       // Provenance is immutable. Registering a refreshed snapshot cannot revive
       // a deleted replica, change local lifecycle intent, or claim another user.

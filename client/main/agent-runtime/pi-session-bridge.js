@@ -229,6 +229,12 @@ function createPiSessionBridge(options) {
       for (const entry of new Set(byRef.values())) {
         if (entry.raw.snapshot?.().runtimeUnavailable) await closeEntry(entry);
       }
+      if ((legacyOptions.adapterId || 'pi') === 'pi' && legacyOptions.retainedHistoryId && replicaHistory?.indexedRow) {
+        // Disposal can flush a newer failed attempt after IPC read the initial row.
+        const indexed = await replicaHistory.indexedRow(legacyOptions.retainedHistoryId);
+        if (indexed) legacyOptions.retainedExecutionFailure =
+          (require('../conversation/execution-outcome.cjs').recover(indexed) || indexed).state === 'failed';
+      }
       ({ options: legacyOptions, row: restored } = switchable.resumeOptions(legacyOptions));
       if (legacyOptions.workConversation || legacyOptions.workConversationId) {
         workId = legacyOptions.workConversation?.id || legacyOptions.workConversationId;
