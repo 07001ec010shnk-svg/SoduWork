@@ -1,5 +1,6 @@
 """Execution receipts cannot replace confirmation that the trusted host exited."""
 from contextlib import ExitStack
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -9,7 +10,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 
-from app.services import access_transition, local_ctx, local_process, local_spool
+from app.services import access_transition, local_base, local_ctx, local_process, local_spool, local_stream
 
 
 class ExecutionHostCleanupTests(unittest.TestCase):
@@ -362,6 +363,64 @@ class ExecutionHostCleanupTests(unittest.TestCase):
         finished.assert_not_called()
         cleanup.assert_not_called()
         self.assertNotIn('piSettledByWatchdog', replacement)
+
+
+class ExecutionSettlementTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = self.enterContext(tempfile.TemporaryDirectory(prefix='soduwork-settlement-'))
+        self.ref = 'settlement-fixture'
+        self.run = {'state': 'running', 'cli': 'pi', 'ws': self.folder, 'cfg': {},
+                    'seq': 0, 'lines': [], 'round': 1, 'segment': 1,
+                    'conversationMode': 'interactive'}
+        self.enterContext(patch.dict(local_base._RUNS, {self.ref: self.run}))
+        self.enterContext(patch.object(local_base, '_STORE', self.folder))
+
+    def test_hard_failure_precedes_cancel_timeout_and_semantic_failures(self):
+        initial = dict(self.run)
+        error = 'Permission-controlled execution host exited abnormally'
+        for fields in (
+            {'timedOut': 'synthetic timeout'},
+            {'stopping': True},
+            {'failureKind': 'workspace_permission', 'failurePath': 'fixture'},
+            {'failureKind': 'execution_incomplete'},
+            {'failureKind': 'execution_host_cleanup'},
+        ):
+            with self.subTest(fields=fields):
+                self.run.clear()
+                self.run.update(initial, **fields)
+                terminal = {'overflow': True, 'outputTruncated': True}
+                with patch.object(local_stream, '_resume') as resume, \
+                        patch.object(local_stream, 'authorization_required_sync', return_value=False), \
+                        patch.object(local_ctx, '_recover_overflow') as recover:
+                    local_stream._finish(self.ref, 1, terminal, error)
+                resume.assert_not_called()
+                recover.assert_not_called()
+                expected_kind = ('execution_host_cleanup'
+                                 if fields.get('failureKind') == 'execution_host_cleanup' else None)
+                persisted = json.loads(Path(self.folder, self.ref, 'meta.json').read_text(encoding='utf-8'))
+                for result in (self.run, persisted):
+                    self.assertEqual(result['state'], 'failed')
+                    self.assertEqual(result['error'], error)
+                    self.assertEqual(result.get('failureKind'), expected_kind)
+                    self.assertFalse(result.get('failurePath'))
+                self.assertFalse(self.run['stopping'])
+
+    def test_confirmed_cancellation_remains_stopped(self):
+        self.run['stopping'] = True
+        with patch.object(local_stream, '_resume') as resume:
+            local_stream._finish(self.ref, 1, {}, '')
+        self.assertEqual(self.run['state'], 'stopped')
+        resume.assert_not_called()
+
+    def test_timeout_without_hard_failure_can_resume(self):
+        self.run['timedOut'] = 'synthetic timeout'
+        with patch.object(local_stream, '_STALL_RETRY_LIMIT', 1), \
+                patch.object(local_stream, 'authorization_required_sync', return_value=False), \
+                patch.object(local_stream, '_resume', return_value={'ok': True}) as resume:
+            local_stream._finish(self.ref, 1, {}, '')
+        resume.assert_called_once()
+        self.assertEqual(self.run['stallRetries'], 1)
+        self.assertEqual(self.run['state'], 'recovering')
 
 
 if __name__ == '__main__':
