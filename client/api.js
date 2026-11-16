@@ -1020,6 +1020,20 @@
       APP_AI_RESULT_UNKNOWN: '本地模型调用中断或超时，未能确认结果，请确认后再重试',
     };
     var message = messages[result?.code] || '本地模型需求解析失败，请检查本地模型后重试';
+    // The host supplies a numeric status, never upstream response text, URLs or
+    // credentials. Keep provider authentication distinct from SoduWork login.
+    var status = result?.httpStatus;
+    if (['APP_AI_PROVIDER_ERROR', 'APP_AI_RATE_LIMITED'].includes(result?.code) &&
+        Number.isInteger(status) && status >= 400 && status <= 599) {
+      var advice = status === 401 ? '模型服务拒绝了凭据，请在「我的模型」检查该服务的密钥' :
+        status === 403 ? '模型服务拒绝访问，请检查该模型的调用权限' :
+        [404,405].includes(status) ? '请检查服务地址、接口路径和模型名称是否正确' :
+        [400,422].includes(status) ? '模型服务不接受当前请求参数，请检查该模型的接口兼容配置' :
+        status === 429 ? '模型服务请求过多或配额受限，请检查该服务后稍后重试' :
+        [408,504].includes(status) ? '模型服务响应超时，请稍后重试' :
+        status >= 500 ? '模型服务暂时不可用，请检查服务状态或稍后重试' : '请检查模型服务配置后重试';
+      message = '本地模型服务返回错误（HTTP ' + status + '），' + advice;
+    }
     return { _parseError: message + '；原文已保留，也可手动填写' };
   }
   async function parseLocalTaskText(text, model, attachments, options) {

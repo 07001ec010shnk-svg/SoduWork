@@ -7,7 +7,8 @@ const now = Date.parse('2026-10-15T01:00:00Z');
 test('relative delays create one-off instants from the message time, including midnight and Chinese numbers', () => {
   const {timing} = runtime(), sentAt = Date.parse('2026-11-16T08:00:00Z');
   for (const [text, minutes] of [['五分钟后帮我生成日报',5], ['5分钟后生成日报',5], ['半小时后生成日报',30],
-    ['两小时后生成日报',120], ['一刻钟后生成日报',15], ['120分钟后生成日报',120]]) {
+    ['两小时后生成日报',120], ['一刻钟后生成日报',15], ['120分钟后生成日报',120],
+    ['10分钟以后生成日报',10], ['一刻钟过后生成日报',15]]) {
     const draft = timing.infer(text, {timeZone:'Asia/Shanghai'}, sentAt);
     assert.equal(draft.every, 'once', text);
     assert.equal(draft.runAt, new Date(sentAt + minutes * 60000).toISOString(), text);
@@ -68,7 +69,7 @@ function runtime() {
 test('only unambiguous time-only instructions bypass task extraction', () => {
   const {timing} = runtime();
   const prior = {every:'once',runAt:'2026-10-15T08:05:00.000Z',timeZone:'Asia/Shanghai'};
-  for (const text of ['修改为10分钟之后','再改为十五分钟后','请把执行时间调整为半小时后执行']) {
+  for (const text of ['修改为10分钟之后','修改为10分钟以后','修改为10分钟过后','再改为十五分钟后','请把执行时间调整为半小时后执行']) {
     assert.equal(timing.relativeEdit(text,prior,now).every,'once',text);
   }
   for (const text of ['不要改为10分钟之后','如果改为10分钟之后会怎样','把标题改为“10分钟后”',

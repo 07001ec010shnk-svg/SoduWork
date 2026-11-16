@@ -196,7 +196,7 @@
   // Resolve durations against the originating message, never the time an async
   // parser completes. Keep this instant when a later turn only changes the work.
   function delayMinutes(text) {
-    const match = String(text).match(/(?:([\d零一二两三四五六七八九十百]+)\s*(分钟|小时|天)|半\s*(小时)|一刻钟)\s*(?:之)?后/);
+    const match = String(text).match(/(?:([\d零一二两三四五六七八九十百]+)\s*(分钟|小时|天)|半\s*(小时)|一刻钟)\s*(?:之|以|过)?后/);
     if (!match) return null;
     const count = match[1] ? (/^\d+$/.test(match[1]) ? Number(match[1]) : cnNumber(match[1])) : 1;
     const minutes = match[3] ? 30 : /一刻钟/.test(match[0]) ? 15 : count * ({分钟:1,小时:60,天:1440}[match[2]] || 1);
@@ -228,7 +228,7 @@
     text = String(text || '').replace(/每周\s*[一二三四五六日天](?:\s*[、,，和及]\s*(?:周)?[一二三四五六日天])+|每月\s*\d{1,2}(?:\s*[日号])?(?:\s*[、,，和及]\s*\d{1,2}(?:\s*[日号])?)+/g,
       group => group.replace(/[,，]/g, '、'));
     text = String(text || '').split(/[，,。；;\n]/).map(clause => {
-      const first = clause.search(/\d{4}[-/年]|\d{1,2}月|今天|明天|后天|今晚|明晚|[本这下]周|每[天日周月小]|(?:仅|只|执行|运行)一次|一次性|单次|(?:半|[零一二两三四五六七八九十百\d]+)\s*(?:分钟|小时|天)\s*(?:之)?后|一刻钟后|[零一二两三四五六七八九十\d]+[:：点时]|\btoday\b|\btomorrow\b|\bonce\b/i);
+      const first = clause.search(/\d{4}[-/年]|\d{1,2}月|今天|明天|后天|今晚|明晚|[本这下]周|每[天日周月小]|(?:仅|只|执行|运行)一次|一次性|单次|(?:半|[零一二两三四五六七八九十百\d]+)\s*(?:分钟|小时|天)\s*(?:之|以|过)?后|一刻钟\s*(?:之|以|过)?后|[零一二两三四五六七八九十\d]+[:：点时]|\btoday\b|\btomorrow\b|\bonce\b/i);
       const before = first < 0 ? clause : clause.slice(0,first);
       if (/(?:不要|不用|不在|不需要|不是|取消|如果|假如|比如|例如|是否|能否|\bif\b|\bdo not\b|\bdon't\b)/i.test(before)) return '';
       // Only the text before the leading appointment determines whether it is

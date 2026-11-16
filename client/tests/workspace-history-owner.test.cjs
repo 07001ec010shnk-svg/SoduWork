@@ -96,6 +96,19 @@ test('account changes clear private rows and reject a late history response with
   assert.deepEqual(f.ctx.chatItems.map(item => item.id), ['private-b']);
 });
 
+test('a late history read cannot overwrite a newer draft selection event without execution status', async () => {
+  const f = fixture('user-a', { realHistory: true });
+  const draft = { id: 'automation-draft', title: 'Draft', workOnly: true, usedHarnesses: [], draftAdapterId: 'qwen' };
+  f.api.setChats([draft]);
+  const loading = f.api.refreshConversationHistory(); await tick();
+  f.api.updateChatState({ kind: 'work-draft-selection-saved', sessionId: draft.id,
+    presence: { ...draft, draftAdapterId: 'codex-harness' } });
+  assert.equal(f.ctx.chatItems[0].draftAdapterId, 'codex-harness');
+  f.pending[0].resolve({ ok: true, chats: [draft] }); await loading;
+  assert.equal(f.ctx.chatItems[0].draftAdapterId, 'codex-harness');
+  assert.equal(f.ctx.chatItems[0].workOnly, true);
+});
+
 test('A to B to A rejects both previous epochs and restores the current account title', async () => {
   const f = fixture();
   f.api.subscribeConversationPresence();

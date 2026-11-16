@@ -31,6 +31,13 @@
     return '<span class="agent-brand" data-agent-brand="' + id + '"><svg viewBox="0 0 24 24" aria-hidden="true">' +
       '<path d="m12 3 8 4v10l-8 4-8-4V7zM4 7l8 4 8-4M12 11v10"/></svg></span>';
   }
+  function displayedHarnesses(row) {
+    const ids = historyHarnesses(row);
+    const selected = historicalHarnessId(row.draftAdapterId);
+    const draft = !ids.length && row.workOnly === true && !row.live && !(row.count > 0) &&
+      selected !== 'custom' && Object.hasOwn(harnessNames(), selected);
+    return { ids: draft ? [selected] : ids, draft };
+  }
   function create(ctx) {
   function accountOwner() {
     const api = global.SoduWorkAPI;
@@ -43,7 +50,8 @@
   let historyOwner = accountOwner(), historyEpoch = 0;
   let presenceSequence = 0, presenceFloor = 0;
   const presenceVersions = new Map();
-  const executionFields = ['state', 'status', 'live', 'runtimeUnavailable', 'runtimeFailure', 'executionOutcome'];
+  const executionFields = ['state', 'status', 'live', 'runtimeUnavailable', 'runtimeFailure', 'executionOutcome',
+    'workOnly', 'draftAdapterId'];
   function executionState(row) {
     return Object.fromEntries(executionFields.filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]]));
   }
@@ -378,10 +386,11 @@ function updateChatState(event) {
       }
       return;
     }
-    const row = rememberChatName(event && event.presence);
+    const presence = rememberChatName(event && event.presence);
+    const row = presence?.live ? { ...presence, workOnly: false, draftAdapterId: '' } : presence;
     const id = String(event && event.sessionId || row && row.id || '');
     if (!id || !row) return;
-    if (Object.hasOwn(row, 'state') || Object.hasOwn(row, 'status')) {
+    if (Object.hasOwn(row, 'state') || Object.hasOwn(row, 'status') || Object.hasOwn(row, 'draftAdapterId')) {
       const canonical = canonicalLocalId(id) || id;
       presenceVersions.delete(canonical); presenceVersions.set(canonical, ++presenceSequence);
       if (presenceVersions.size > 1024) {
@@ -429,7 +438,8 @@ function updateChatState(event) {
     const nextState = ctx.chatState(row);
     const merged = { ...before, ...row };
     if (ctx.chatState(before) === nextState && before.title === row.title && before.live === row.live &&
-      JSON.stringify(historyHarnesses(before)) === JSON.stringify(historyHarnesses(merged))) return;
+      JSON.stringify(displayedHarnesses(before)) === JSON.stringify(displayedHarnesses(merged)) &&
+      before.workOnly === merged.workOnly && before.draftAdapterId === merged.draftAdapterId) return;
     if (row.accountConversation || row.cloud) {
       ctx.upsertChat({ ...row, id, pending: false });
       return;
@@ -702,8 +712,10 @@ function _paintChatLocale(button) {
     // the generic DOM adapter from interpreting the combined attribute text.
     button.setAttribute('data-user-attributes', 'title aria-label');
     const separator = global.SoduWorkI18n?.getLocale() === 'en-US' ? ', ' : '，';
-    button.setAttribute('aria-label', label + separator + status + (copy.harnesses ? separator + copy.harnesses : ''));
-    button.title = label + ' · ' + status + (copy.harnesses ? ' · ' + copy.harnesses : '');
+    const harnesses = (copy.draftHarness ? ctx.wsT('chat.harness.selected', '已选底座') + ' · ' : '') + copy.harnesses;
+    button.setAttribute('aria-label', label + separator + status + (harnesses ? separator + harnesses : ''));
+    button.title = label + ' · ' + status + (harnesses ? ' · ' + harnesses : '');
+    button.querySelector('.ws-chat-runtime').title = harnesses;
     const title = button.querySelector('.ws-chat-title');
     if (title.textContent !== label) title.textContent = label;
   }
@@ -727,9 +739,9 @@ function _paintChatRow(row, c, isPinned) {
       (selected ? ' is-active' : '');
     b.dataset.chatId = id; b.disabled = !id;
     b.setAttribute('aria-current', selected ? 'page' : 'false');
-    const harnesses = historyHarnesses(c);
+    const { ids: harnesses, draft } = displayedHarnesses(c);
     const runtimeName = harnesses.map(id => harnessNames()[id]).join('、');
-    b._localeChat = { title: c.title, state, harnesses: runtimeName };
+    b._localeChat = { title: c.title, state, harnesses: runtimeName, draftHarness: draft };
     _paintChatLocale(b);
     dot.className = 'st-chat st-chat-' + state;
     /* A local collaboration cache is presentation state, not proof that this
@@ -744,7 +756,6 @@ function _paintChatRow(row, c, isPinned) {
       runtime.innerHTML = markup;
       runtime._harnessMarkup = markup;
     }
-    runtime.title = runtimeName;
     runtime.setAttribute('aria-hidden', 'true');
     runtime.setAttribute('data-user-attributes', 'title');
     pin.title = isPinned ? '取消置顶' : '置顶聊天';

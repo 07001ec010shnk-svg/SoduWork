@@ -240,7 +240,7 @@
     const timing = value.relativeTiming;
     if (!timing || timing.runAt !== value.runAt) return value;
     const duration = '(?:[\\d零一二两三四五六七八九十百]+\\s*(?:分钟|小时|天)|半\\s*小时|一刻钟)';
-    const appointment = new RegExp('^(\\s*(?:(?:[-*]|\\d+[.、])\\s*)?(?:(?:执行|触发|运行)?时间\\s*[:：]\\s*)?(?:在\\s*)?)' + duration + '\\s*(?:之)?后');
+    const appointment = new RegExp('^(\\s*(?:(?:[-*]|\\d+[.、])\\s*)?(?:(?:执行|触发|运行)?时间\\s*[:：]\\s*)?(?:在\\s*)?)' + duration + '\\s*(?:之|以|过)?后');
     const countdown = new RegExp('^(\\s*(?:(?:[-*]|\\d+[.、])\\s*)?确认)' + duration + '(?=倒计时的起始时间点)');
     const update = text => {
       let fence = false;
@@ -256,7 +256,7 @@
   }
   function taskNeedsDetail(text) {
     const content = trim(text).replace(/【自动化】[:：]?|\/自动化/g, '')
-      .replace(/(?:[零一二两三四五六七八九十\d]+\s*(?:分钟|小时)|半小时|一刻钟)(?:之后|后|红)?/g, '')
+      .replace(/(?:[零一二两三四五六七八九十\d]+\s*(?:分钟|小时)|半小时|一刻钟)(?:(?:之|以|过)?后|红)?/g, '')
       .replace(/(?:今天|明天|后天|每天|每日)?(?:上午|下午|早上|晚上)?\s*[零一二两三四五六七八九十\d]+\s*[:：点时](?:[零一二两三四五六七八九十\d]+分?|半)?/g, '')
       .replace(/(?:今天|明天|后天|每天|每日|执行一次|仅一次)|[\s，,。！!]/g, '');
     return !content || /^(?:就是|是|对|没错|(?:把|将)?(?:执行时间|触发时间|时间)?(?:改为|改成|改到|设为)|(?:保存为)?(?:暂停|停用|启用)(?:状态)?)$/.test(content) ||

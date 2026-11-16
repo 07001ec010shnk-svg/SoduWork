@@ -1015,7 +1015,9 @@
     if (ticket ? !cards().valid(ticket) : !current()) return false;
     if (!timingEdit && (!parsed || !Object.keys(parsed).length || parsed._parseError)) {
       seed.attachmentContext = previousAttachments;
-      const error = (parsed?._parseError ? errorText(parsed._parseError) + '；' : '') + '这次没有解析成功，补充内容已保留，请重试或直接修改表单。';
+      // parseTaskText already returns a safe user-facing diagnostic. The generic
+      // error normalizer would replace it with an unrelated creation failure.
+      const error = (typeof parsed?._parseError === 'string' ? parsed._parseError + '；' : '') + '这次没有解析成功，补充内容已保留，请重试或直接修改表单。';
       if (ticket) cards().finish(ticket, { phase: 'error', proposal: before, error });
       else { state.proposal = before; render(error); }
       return false;

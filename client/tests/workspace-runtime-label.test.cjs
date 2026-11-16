@@ -60,6 +60,28 @@ test('minimal renderer boot preserves known provenance as labelled fallback icon
   }
 });
 
+test('work drafts display their persisted selection separately from execution provenance', () => {
+  const f = fixture();
+  const draft = { id: 'automation-draft', title: '8分钟后提醒我', adapterId: 'pi', workOnly: true,
+    usedHarnesses: [], count: 0, draftAdapterId: 'qwen' };
+  f.api._paintChatRow(f.row, draft, false);
+  assert.equal(f.node('.ws-chat-runtime').hidden, false);
+  assert.match(f.node('.ws-chat-runtime').innerHTML, /data-agent-brand="qwen"/);
+  assert.equal(f.node('.ws-chat-runtime').title, '已选底座 · Qwen Code');
+  assert.match(f.node('.ws-chat')['aria-label'], /已选底座 · Qwen Code/);
+  assert.deepEqual(draft.usedHarnesses, [], 'Selecting a draft runtime must not invent an execution');
+  f.api._paintChatRow(f.row, { ...draft, draftAdapterId: 'codex-harness' }, false);
+  assert.match(f.node('.ws-chat-runtime').innerHTML, /data-agent-brand="codex-harness"/);
+  for (const patch of [{ workOnly: false }, { live: true }, { count: 1 }, { draftAdapterId: 'constructor' },
+    { draftAdapterId: 'custom' }, { draftAdapterId: '' }]) {
+    f.api._paintChatRow(f.row, { ...draft, ...patch }, false);
+    assert.equal(f.node('.ws-chat-runtime').hidden, true);
+  }
+  f.api._paintChatRow(f.row, { ...draft, usedHarnesses: ['pi'] }, false);
+  assert.equal(f.node('.ws-chat-runtime').title, 'Pi');
+  assert.doesNotMatch(f.node('.ws-chat-runtime').innerHTML, /data-agent-brand="qwen"/);
+});
+
 test('persisted runtime manifest projects complete history icons without adding the selected unused runtime', () => {
   const history = require('../main/conversation/runtime-segments');
   const projected = history.row({id:'restored',title:'跨底座协作',cwd:'',at:1,

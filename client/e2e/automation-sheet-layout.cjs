@@ -317,7 +317,7 @@ if (typeof electron === 'string') {
           text:'五分钟后发送一句话提醒',requestedAt:messageTime,proposal:{timeZone:'Asia/Shanghai'}});
         SoduWorkAPI.parseTaskText=async()=>{timeEditParses++;throw Error('parser unavailable')};})()`);
       assert.equal(await js('automationControl("[name=runAt]").value'),'2099-11-16T20:18');
-      assert.equal((await js('sendAutomationChange("修改为10分钟之后")')).accepted,true);
+      assert.equal((await js('sendAutomationChange("修改为10分钟以后")')).accepted,true);
       assert.equal(await js('automationControl("[name=runAt]").value'),'2099-11-16T20:23');
       assert.equal(await js('automationControl("[name=title]").value'),'10分钟后发送一句话提醒');
       assert.match(await js('automationControl("[name=note]").value'),/时间：10分钟后/);

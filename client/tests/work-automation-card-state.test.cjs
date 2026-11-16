@@ -62,7 +62,7 @@ test('unconfirmed drafts accept repeated relative-time edits without a parser an
   await f.sheet.open({cardId:'repeat',cardState:restored({cardId:'repeat',proposal:original})});
   let parses = 0;
   f.api.parseTaskText = async () => { parses++; throw Error('parser unavailable'); };
-  assert.equal(await f.sheet.refine('修改为10分钟之后', {requestedAt:sentAt}), true);
+  assert.equal(await f.sheet.refine('修改为10分钟以后', {requestedAt:sentAt}), true);
   let updated = f.sheet.capture().proposal;
   assert.equal(updated.runAt, '2099-11-16T12:23:00.000Z');
   assert.equal(updated.title, '10分钟后发送一句话提醒');
@@ -506,6 +506,17 @@ test('补充解析失败保留原手动字段及错误状态，不能把网关�
   assert.equal(accepted, false); assert.equal(f.sheet.capture().phase, 'error');
   assert.equal(f.sheet.capture().proposal.title, proposal.title);
   assert.equal(f.sheet.capture().proposal.pluginInputs.audience, '研发组'); assert.equal(refined, 0);
+});
+
+test('refinement retains the safe provider cause instead of reporting an automation creation failure', async () => {
+  const f=fixture();
+  f.context._humanErr=(_error,fallback)=>fallback;
+  await f.sheet.open({cardId:'parse-error',cardState:restored()});
+  f.api.parseTaskText=async()=>({_parseError:'本地模型服务返回错误（HTTP 401），请检查模型服务凭据'});
+  assert.equal(await f.sheet.refine('标题改为巡检'),false);
+  assert.match(f.sheet.capture().error,/HTTP 401.*模型服务凭据/);
+  assert.doesNotMatch(f.sheet.capture().error,/没有创建成功/);
+  assert.equal(f.calls.create,0);
 });
 
 test('创建前等待提交意图写入会话，写入失败不调用服务端且允许明确重试', async () => {
