@@ -52,6 +52,17 @@ Installers stay on the ephemeral runner while binary distribution review remains
 pending. This workflow neither creates a Release nor supplies
 upgrade-acceptance receipts to `Draft release`.
 
+To exercise Linux signing with repository secrets before a Release, enable
+`signed_linux` in **Native package validation**. This runs only the Linux build,
+signs the actual installers, verifies the committed upgrade baselines and runs
+the native Linux installation matrix. It uploads `signed-linux-validation` with
+the installers, signatures, public key and a validation-only receipt. The ordinary
+unsigned matrix is skipped in this mode. The binary scope and third-party review
+must already permit distribution. This mode neither creates a Release nor emits
+the protected release pipeline's `linux-receipt.json`; it can also validate a fork
+against the committed upstream public baselines, always checking their pinned
+digests. Publication still requires the independent protected Release workflow.
+
 1. Set the repository variable `PUBLIC_RELEASE_REPOSITORY` to the final public repository's `owner/name`. The workflow must exist on the default branch before its manual entry appears in Actions.
 2. Protect every maintained `release/X.Y.x` branch, prohibit force pushes and restrict updates to maintainers. Protect `v*`; prohibit moving or deleting published tags. A new maintenance branch must be protected before its first release workflow run.
 3. Create the `public-release` Environment in advance, configure **Required reviewers**, restrict deployment to protected release branches and disable administrator bypass. Configure self-review according to team responsibilities. Preflight checks the actual reviewer gate through the GitHub API and fails if it is missing; it does not rely on YAML to create the environment automatically.

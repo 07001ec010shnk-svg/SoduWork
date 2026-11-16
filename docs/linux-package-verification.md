@@ -65,3 +65,8 @@ SoduWork-X.Y.Z-linux.tar.gz` 验证。GnuPG 的密钥身份信任提示与签名
 单独的打包验证工作流继续不签名，只输出哈希证据，不能将这些输出提升为公开发布。
 Linux CI 的真实签名回归使用临时测试密钥。测试包签名通过不表示生产密钥已配置，
 也不表示实际 SoduWork 桌面安装包已经通过完整原生安装矩阵。
+
+配置密钥后，可手动运行 **Native package validation** 并启用 `signed_linux`。
+该模式只构建 Linux，执行原生安装矩阵，将签名安装包、公钥、独立签名和仅用于验证的
+回执保留为 Actions 产物；不会创建 Release，也不授权后续公开发布这些产物。
+仓库需要已经完成二进制分发范围审核，并配置 `PACKAGE_VALIDATION_REPOSITORY`。

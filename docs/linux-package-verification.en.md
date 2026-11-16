@@ -81,3 +81,10 @@ evidence only; its outputs cannot be promoted into a public release. Real signin
 regressions use temporary fixture keys in Linux CI. A fixture round trip does not
 prove that a production key is configured or that an actual SoduWork desktop
 installer has passed the full native acceptance matrix.
+
+To test the configured key on real installers, manually run **Native package
+validation** with `signed_linux` enabled. It builds only Linux, runs the native
+installation matrix and retains signed packages, the public key, signatures and
+a validation-only receipt as Actions artifacts. It does not create a Release or
+authorize later publication of those artifacts. The repository must already have
+reviewed binary distribution scope and `PACKAGE_VALIDATION_REPOSITORY` configured.
