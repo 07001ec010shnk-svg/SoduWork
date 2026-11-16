@@ -1531,6 +1531,15 @@ async function createRunnerHandle(request, defaults, initialSession) {
         ok: false, reason: String(error && error.message || error),
       }),
     ).finally(() => {
+      // Preparation can fail before the explicit resume reaches Runner. Its
+      // last authoritative paused receipt still owns the goal, so a later
+      // user retry must carry the continue control again.
+      if (taskGoalSupported && next.options.taskGoalControl === 'continue' &&
+          ['paused', 'blocked'].includes(state.taskGoal?.status) && !turnQueue.active() &&
+          !state.recoveryRequired && !state.turnSubmissionPending && !state.stopPending &&
+          !state.cancelRequested && !['streaming', 'queued'].includes(state.status)) {
+        taskGoal.observe(state, state.taskGoal, true);
+      }
       if (state.manualStopRequested && !state.started && !state.preparingPlugins) releaseManualStop();
       emit('queue-changed');
       if (state.status !== 'streaming' && state.status !== 'queued') queueMicrotask(drainTurns);

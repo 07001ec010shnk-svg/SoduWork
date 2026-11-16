@@ -93,6 +93,16 @@ class TaskGoalIntegrationTests(unittest.TestCase):
         self.assertIn("工具", self.run["error"])
         self.assertEqual(self.run["goalState"]["outputRecoveries"], 0)
 
+    def test_resume_preparation_failure_pauses_goal_without_hiding_error(self):
+        profile = {**base._PROFILES["dsh"], "bin": lambda: None}
+        with patch.dict(base._PROFILES, {"dsh": profile}):
+            stream._finish(self.ref, 0, {}, "")
+        self.spawn.assert_not_called()
+        self.assertEqual(self.run["state"], "failed")
+        self.assertEqual(self.run["goalState"]["status"], "paused")
+        self.assertEqual(self.run["goalState"]["reason"], self.run["error"])
+        self.assertIn("CLI", self.run["error"])
+
     def test_protocol_failure_after_limit_is_not_recovered(self):
         self.tool()
         terminal = self.emit({"type": "step_finish", "part": {"reason": "max_tokens"}})

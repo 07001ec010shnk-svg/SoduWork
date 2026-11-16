@@ -198,6 +198,28 @@ test('a stop acknowledgment arriving during an old poll schedules a fresh termin
   assert.equal(f.count('job.comment'), 0);
 });
 
+test('failed preparation before a resumed goal admission keeps the original pause and the next user continue control', async t => {
+  const f = await fixture(t);
+  f.setObserved({ status: 'stopped', taskGoal: receipt('paused', { reason: '需要补充输入' }) });
+  await f.handle.submit(prompt, []).completion;
+  await delay(0);
+  const blocked = f.handle.submit('补充条件并继续', [], { beforeTurn: async () => { throw Error('Preparation denied'); } });
+  assert.equal((await blocked.completion).ok, false);
+  await delay(0);
+  assert.equal(f.count('job.comment'), 0);
+  assert.equal(f.handle.snapshot().execution.paused, true);
+  assert.equal(f.handle.snapshot().execution.limitRequest.reason, '需要补充输入');
+  f.setObserved({ status: 'done', taskGoal: receipt('completed') });
+  const retry = f.handle.submit('重新准备后继续', []);
+  assert.equal(retry.accepted, true);
+  assert.equal((await retry.completion).ok, true);
+  const comments = f.calls.filter(c => c.op === 'job.comment');
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0].input.taskGoalControl, 'continue');
+  assert.equal(comments[0].input.text, '重新准备后继续');
+  assert.equal(comments[0].input.taskGoal, undefined);
+});
+
 test('continue button resumes the first queued user instruction once after a goal pauses', async t => {
   const f = await fixture(t);
   f.setObserved({ status: 'running', taskGoal: receipt('working') });
