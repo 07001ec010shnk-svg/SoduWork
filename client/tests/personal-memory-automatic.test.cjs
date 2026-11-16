@@ -22,7 +22,7 @@ test('runtime identity and cutoff answers never become personal memory; ordinary
   const f = fixture(t);
   for (const [key, answer] of Object.entries({
     qwen: '我是 SoduWork 里的 AI 办公助手（Qwen Code），可以帮你处理工作。',
-    cutoff: '我的底层模型是 **sodu-prd-large（DeepSeek 训练）**，训练数据覆盖到 2024 年。',
+    cutoff: '我的底层模型是 **example-chat-large（DeepSeek 训练）**，训练数据覆盖到 2024 年。',
     english: 'I am Codex. My knowledge cutoff is 2024.',
   })) f.save(key, answer);
   assert.equal(f.read(), undefined);
