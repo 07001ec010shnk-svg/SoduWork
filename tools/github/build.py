@@ -77,6 +77,7 @@ def package_native(ctx, shard, scratch, *, validation=False):
            # runners. Retain pinned hashes, without domestic mirror fallbacks.
            "SODUWORK_NODE_MIRROR": "https://nodejs.org/download/release",
            "SODUWORK_PYTHON_MIRROR": "https://github.com/astral-sh/python-build-standalone/releases/download",
+           "SODUWORK_PORTABLE_GIT_MIRROR": "https://github.com/git-for-windows/git/releases/download",
            "SODUWORK_RUNTIME_MIRROR_ONLY": "1"}
     require(not env.get("SODUWORK_INTERNAL_BUILD"), "Internal-only builds cannot enter public workflows")
     if validation:
@@ -95,6 +96,10 @@ def package_native(ctx, shard, scratch, *, validation=False):
     if shard.startswith("macos-"):
         env["SODUWORK_MACOS_ARCH"] = target_arch
         run(npm, "run", "build:mac", cwd=ROOT / "client", env=env)
+        python = ROOT / "hub-backend/.venv/bin/python"
+        run(python, "-m", "unittest", "test_runner_tls", cwd=ROOT / "hub-backend", env=env)
+        run(python, ROOT / "hub-backend/scripts/check_runner_tls_bundle.py",
+            ROOT / "client/runner/soduwork-runner", env=env)
         run("node", "tools/ci/release-artifacts.cjs", "inventory", "macos", target_arch, env=env)
     else:
         run(npm, "run", "build" if shard == "windows" else "build:linux", "--", "--publish", "never", cwd=ROOT / "client", env=env)
