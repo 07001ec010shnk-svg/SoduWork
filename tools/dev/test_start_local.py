@@ -120,6 +120,14 @@ class LocalStartupTests(unittest.TestCase):
                 with self.subTest(version=version), patch.object(build.subprocess, 'check_output', return_value=version):
                     self.assertEqual(len(build.check_dependencies()), 2)
 
+    def test_unexecutable_node_reports_friendly_error(self):
+        for failure in (OSError('Permission denied'), OSError('Exec format error')):
+            with self.subTest(failure=str(failure)), \
+                    patch.object(build.shutil, 'which', side_effect=lambda name: name), \
+                    patch.object(build.subprocess, 'check_output', side_effect=failure), \
+                    self.assertRaisesRegex(build.StartupError, '22.19'):
+                build.check_dependencies()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="soduwork-start-unit-")
         self.addCleanup(self.temp.cleanup)

@@ -115,7 +115,7 @@ def check_dependencies() -> tuple[str, str]:
         parsed = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?", version)
         if parsed is None or tuple(map(int, parsed.groups())) < (22, 19, 0):
             raise ValueError(version)
-    except (ValueError, subprocess.SubprocessError) as exc:
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
         raise StartupError("Node.js 22.19 or newer is required. Check node --version.") from exc
     return node, npm
 
