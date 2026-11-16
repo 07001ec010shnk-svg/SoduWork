@@ -953,7 +953,7 @@ def _finish(ref: str, code: int, term: dict, hard_err: str) -> None:
                       and not (timed or stopping or overflow or term.get("outputTruncated")
                                or run.get("permissionDenied") or run.get("executionPolicyViolation")))
         bad = (code != 0 and not pi_settled) or term.get("isError") or hard_err
-    if stopping and not timed:
+    if stopping and not timed and not hard_err:
         with _LOCK:
             violation = dict(run.get("executionPolicyViolation") or {})
             run["state"] = "failed" if violation else "stopped"
@@ -981,7 +981,14 @@ def _finish(ref: str, code: int, term: dict, hard_err: str) -> None:
     if dialogue_failure:
         completion_recovery = {}
     with _LOCK:
-        if timed:
+        if hard_err:
+            run["state"] = "failed"
+            run["error"] = _friendly(hard_err)
+            # Keep authoritative cleanup evidence, clearing unrelated diagnoses.
+            if run.get("failureKind") != "execution_host_cleanup":
+                run.pop("failureKind", None)
+            run.pop("failurePath", None)
+        elif timed:
             retried = int(run.get("stallRetries") or 0)
             retry_stall = not stopping and not run.get("permissionDenied") and retried < _STALL_RETRY_LIMIT
             run["failureKind"] = "execution_stalled"
@@ -995,7 +1002,7 @@ def _finish(ref: str, code: int, term: dict, hard_err: str) -> None:
                                 "请查看最后一条实况后重试。")
         else:
             run["state"] = "failed" if bad else "done"
-            if truncated and bad and not hard_err:
+            if truncated and bad:
                 run["failureKind"] = "execution_incomplete"
                 run["error"] = local_turn_outcome.TRUNCATED
             elif dialogue_failure:
