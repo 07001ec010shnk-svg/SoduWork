@@ -24,11 +24,11 @@ macOS WSS connections add this bundle to the default trust context, retaining
 explicitly configured private CAs and hostname verification. Public Mac builds
 check both isolated TLS handshakes and the CA data/loader in the frozen Runner.
 
-## Python dependencies in the Hub image
+## Python dependencies in Hub and Runner
 
-The Hub image installs its Python dependencies with pip from `hub-backend/requirements.txt`. Each dependency's original license files stay in its `*.dist-info` directory under the image's Python `site-packages`.
+The Hub image installs its Python dependencies with pip from `hub-backend/requirements.txt`; the standalone Runner uses `hub-backend/requirements-runner.txt`. The Hub retains installed `*.dist-info` license files, and `runner.spec` copies dependency metadata and original notices into the frozen Runner.
 
-**Pillow**: the Hub uses it to validate and process images, including user avatars (validated and cropped to 256×256), format checks for AI-generated images (PNG, JPEG, WEBP), and file library thumbnails.
+**Pillow**: the Hub uses it to validate and process images, including user avatars (validated and cropped to 256×256), format checks for AI-generated images (PNG, JPEG, WEBP), and file library thumbnails. The Runner also uses it to verify the dimensions and decoded content of raster images embedded in SVG attachments.
 
 - Project: https://python-pillow.github.io/
 - Source: https://github.com/python-pillow/Pillow
@@ -36,6 +36,12 @@ The Hub image installs its Python dependencies with pip from `hub-backend/requir
 - License: MIT-CMU. Copyright Secret Labs AB, Fredrik Lundh, Jeffrey A. Clark and contributors.
 
 The MIT-CMU license requires the copyright and permission notices to be retained, and the authors' names may not be used in advertising for the distribution without prior written permission. SoduWork does not modify Pillow; the original license stays in Pillow's `dist-info` directory in the image. Pillow wheels also bundle image libraries such as libjpeg, libpng, zlib, libwebp and FreeType, whose licenses are included in the same directory's license file.
+
+**resvg_py 0.5.0**: the Runner uses this MIT-licensed Python binding to rasterize SVG attachments locally for supported non-Pi agents. Its wheel retains the wrapper license but omits notices for statically linked Rust libraries. `licenses/resvg_py-0.5.0-NOTICES.txt` therefore retains the original grants and provenance from the exact PyPI source distribution, checksum-verified packages in its Cargo.lock, and explicitly referenced upstream license materials, including resvg/usvg 0.48.1, tiny-skia 0.12.0 and their dependencies. This conservative inventory includes build and platform dependencies; it does not assert that every listed package is present in every wheel. Original dual-license options and additional third-party grants remain intact.
+
+The exact-version `pythonNoticeOverrides` entry makes `runner.spec` include this aggregate notice and reject a different installed resvg_py version until its notices are reviewed. Dependency metadata collection alone cannot discover Rust dependencies inside a Python extension. Rebuilding with other crate versions or updating the Python wheel requires a new artifact and notice review; GitHub's current branch is not evidence for the published 0.5.0 wheel. Fonts supplied by the execution machine are not copied into this distribution.
+
+The aggregate records one historical evidence limit: the original Getreuer GaussianIIR author page confirms the Simplified BSD option, but its 2011 ZIP could not be recovered. The 2013 author notices are explicitly supplemental, not a substitute for that missing archive. Source review and internal validation do not establish complete notice coverage for a public binary release; that gap remains part of its artifact review.
 
 ## Outstanding binary-release work
 

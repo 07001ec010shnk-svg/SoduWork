@@ -131,8 +131,17 @@ async def comment(machine, m, read_local_files, read_packet=None, drop_transfer=
             cfg["pluginResourceBundles"] = []
         if selected is not None:
             cfg["_executionSelection"] = selected
+        from . import local_base
+        agent = str((selected or {}).get("agentId") or "")
+        if not agent:
+            with local_base._LOCK:
+                archived = local_base._RUNS.get(ref)
+            if archived is None:
+                await asyncio.to_thread(local_base.rehydrate, ref)
+            with local_base._LOCK:
+                agent = str((local_base._RUNS.get(ref) or {}).get("cli") or "")
         turn_cfg = await asyncio.to_thread(runtime_images.prepare, cfg,
-            staged, os.path.join(ai_local._store_dir(ref), "inputs"))
+            staged, os.path.join(ai_local._store_dir(ref), "inputs"), agent=agent)
     except (runtime_images.ImageInputError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     result = await asyncio.to_thread(

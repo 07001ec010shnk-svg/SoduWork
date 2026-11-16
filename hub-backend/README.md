@@ -43,6 +43,18 @@ After a Runner restart, recovery terminals bind the same owned history without r
 
 To verify this path with a real Runner and Pi subprocess against a disposable authenticated Hub and loopback model, install the client dependencies and run `python3 e2e_pi_dispatch_config.py --output /absolute/evidence/directory` from the backend test environment. The check covers dispatch, follow-up, output files, native terminal recovery after restart, and preservation of personal model configuration. It does not exercise a production model or native desktop UI.
 
+## SVG image attachments
+
+For DeepSeek Harness, Codex, Codex Harness, OpenCode, Kimi and Qwen, Runner converts a staged SVG attachment to a PNG visual input before the first or follow-up turn. The original SVG remains available in the attachment archive for reading or editing. The same preparation runs on local and remote Runners; Pi and custom agents retain their existing input behavior. The selected model still needs image support.
+
+Static, self-contained SVGs support shapes, internal references, text and embedded PNG/JPEG/GIF/WebP images. External resources, scripts, animation, HTML content and invalid embedded images are rejected with an actionable message instead of passing an unsupported media type to the agent. Text uses fonts installed on the execution machine, so font substitution can differ across hosts. Export to PNG when exact typography is required.
+
+Source SVGs are limited to 2 MiB. Preview generation runs in a separate process with a 10-second deadline, at most 4096 pixels per edge and 8 megapixels in total. Existing image count and byte limits still apply. Install the updated Hub or Runner requirements for source deployments; packaged Runners include the pinned renderer and its notices.
+
+Run `python3 -m unittest test_svg_image smoke.smoke_runner_images` for rendering, attachment integrity and first/follow-up turn checks. `python3 e2e_dsh_svg_input.py --help` describes the opt-in check against explicitly selected installed DeepSeek binaries and a disposable loopback model. It verifies image transport, not production model design feedback.
+
+With `requirements-runner-build.txt` installed, `python3 e2e_runner_svg.py --output /absolute/evidence/directory` builds the complete Runner in a temporary directory, verifies rendered pixels and embedded image decoding, and checks bundled notices. CI runs this check on Windows, macOS and Linux without model credentials.
+
 ## Offline quality gate
 
 Use the dedicated test environment, not a production service environment:

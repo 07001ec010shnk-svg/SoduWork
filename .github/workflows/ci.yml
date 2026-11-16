@@ -160,6 +160,12 @@ jobs:
           package-manager-cache: false
       - name: Verify DeepSeek parent and child settlement
         run: node --test client/tests/dsh-acp-settlement.test.cjs client/tests/dsh-session-storage.test.cjs
+      - name: Verify bounded SVG rendering and image dependency notices
+        run: python -m unittest -v test_svg_image test_runner_licenses
+        working-directory: hub-backend
+      - name: Verify SVG pixels in the complete frozen Runner
+        run: python e2e_runner_svg.py --output ../runner-svg-evidence
+        working-directory: hub-backend
       - name: Verify frozen Runner network components over real HTTPS
         run: python e2e_runner_tls.py --output ../runner-tls-evidence
         working-directory: hub-backend
@@ -169,6 +175,14 @@ jobs:
         with:
           name: runner-tls-${{ matrix.os }}
           path: runner-tls-evidence/*.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Retain synthetic SVG acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: runner-svg-${{ matrix.os }}
+          path: runner-svg-evidence/*
           if-no-files-found: warn
           retention-days: 14
 

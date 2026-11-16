@@ -38,7 +38,8 @@ class RunnerLicenseTest(unittest.TestCase):
             runpy.run_path(str(ROOT / "hub-backend/runner.spec"), init_globals=namespace)
         metadata = [(Path(source), target) for source, target in captured["datas"] if ".dist-info" in target]
         self.assertTrue(metadata)
-        for prefix in ("websockets-", "pyyaml-", "pg8000-", "pymysql-", "pymongo-", "redis-", "cryptography-", "certifi-"):
+        for prefix in ("websockets-", "pyyaml-", "pg8000-", "pymysql-", "pymongo-", "redis-",
+                       "cryptography-", "certifi-", "resvg_py-", "pillow-"):
             matches = [source for source, target in metadata if target.lower().startswith(prefix)]
             self.assertTrue(matches, prefix)
             self.assertTrue(any(p.is_file() and any(word in p.name.lower() for word in ("license", "copying"))

@@ -30,6 +30,18 @@ Runner 重启后，恢复终端仍绑定原执行的会话历史，不恢复模�
 
 安装客户端依赖后，可在后端测试环境运行 `python3 e2e_pi_dispatch_config.py --output /absolute/evidence/directory`，通过隔离鉴权 Hub、真实 Runner 和 Pi 子进程及本机回环模型验证派发、后续轮次、文件产物、重启后的原生终端恢复与个人模型配置保护。该验证不覆盖生产模型或原生桌面界面。
 
+## SVG 图片附件
+
+使用 DeepSeek Harness、Codex、Codex Harness、OpenCode、Kimi 和 Qwen 时，Runner 会在首次发送或继续会话前，将已暂存的 SVG 附件转换为 PNG 图片输入。原始 SVG 保留在附件存档中，仍可供读取和编辑。本地和远程 Runner 使用相同的准备流程；Pi 和自定义 Agent 保持现有输入行为。所选模型仍需支持图片输入。
+
+支持独立静态 SVG 中的图形、内部引用、文字，以及内嵌的 PNG/JPEG/GIF/WebP 图片。外部资源、脚本、动画、HTML 内容和无效内嵌图片会得到明确错误提示，避免把不支持的媒体类型直接传给 Agent。文字使用执行机器安装的字体，不同机器可能发生字体替换；需要精确保留字体效果时，请导出为 PNG。
+
+原始 SVG 上限为 2 MiB。预览生成在独立进程中运行，限时 10 秒，输出每边不超过 4096 像素，总像素不超过 8 百万。现有图片数量和字节上限继续生效。源码部署需安装更新后的 Hub 或 Runner 依赖；打包版 Runner 包含固定版本的渲染组件及其许可声明。
+
+运行 `python3 -m unittest test_svg_image smoke.smoke_runner_images` 可验证渲染、附件完整性及首次发送和继续会话。`python3 e2e_dsh_svg_input.py --help` 说明如何显式选择已安装的 DeepSeek 可执行文件，通过临时本机模型服务验证图片传输；该检查不验证生产模型的设计评价质量。
+
+安装 `requirements-runner-build.txt` 后，可运行 `python3 e2e_runner_svg.py --output /absolute/evidence/directory`，在临时目录构建完整 Runner，验证真实渲染像素、内嵌图片解码和随包许可。CI 会在 Windows、macOS 和 Linux 上运行该检查，无需模型凭据。
+
 ## 质量门禁
 
 所有后端冒烟都登记在 `quality_manifest.py`，新增脚本未登记会直接阻断发布：
