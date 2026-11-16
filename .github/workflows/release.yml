@@ -10,7 +10,7 @@ on:
         default: all
         required: true
       version:
-        description: Unified version X.Y.Z matching the protected release/X.Y.Z branch
+        description: Unified version X.Y.Z from the protected release/X.Y.x maintenance branch
         type: string
         required: true
 
@@ -18,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: draft-release-${{ inputs.version }}
+  group: draft-release-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -112,6 +112,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y clang-15 rpm libarchive-tools
+      - name: Use TCP for Apple ticket downloads on Intel macOS
+        if: matrix.shard == 'macos-x64'
+        shell: bash
+        run: |
+          # GitHub-hosted Intel runners can drop Apple's HTTP/3 connections.
+          # https://github.com/actions/runner-images/issues/14924
+          # Apply the runner workaround before both stapling and validation.
+          printf '%s\n' 'block return out quick proto udp from any to any port 443' | sudo pfctl -f -
+          sudo pfctl -E
       - name: Prepare macOS signing and notarization
         if: startsWith(matrix.shard, 'macos-')
         run: bash tools/ci/prepare-macos-signing.sh

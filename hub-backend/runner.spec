@@ -58,6 +58,11 @@ for notice in pyinstaller_notices:
     license_data.append((str(notice), "third-party/python/pyinstaller-" + pyinstaller_dist.version))
 license_data = sorted(set(license_data))
 
+# The frozen Runner cannot depend on the build host's Python/Homebrew CA path.
+ca_data = collect_data_files("certifi", includes=["cacert.pem"])
+if not ca_data:
+    raise RuntimeError("Runner CA bundle is missing; install requirements-runner-build.txt")
+
 hidden = [
     "app.services.connector_database", "app.services.connector_database_extra",
     "pg8000.dbapi", "pymysql", "redis", "pymongo", "bson", "dns.resolver",
@@ -71,16 +76,6 @@ hidden = [
     "app.services.opencode_access",
     "app.services.acp_agents",
     "app.services.acp_bridge",
-    "app.services.harness2_runtime",
-    "app.services.harness2_bridge",
-    "app.services.harness2_native",
-    "app.services.harness2_provider",
-    "app.services.harness2_streaming",
-    "app.services.harness2_session",
-    "app.services.harness2_tools",
-    "app.services.harness2_mcp",
-    "app.services.harness2_engine",
-    "app.services.agent_setup_harness2",
     "app.services.runtime_images",
     "app.services.ai_local",
     "app.services.local_base",
@@ -111,14 +106,12 @@ a = Analysis(
     [os.path.join(backend, "runner_main.py")],
     pathex=[backend],
     binaries=winpty_binaries,
-    datas=(winpty_datas + collect_data_files("certifi") + [
+    datas=(winpty_datas + [
         (os.path.join(backend, "app", "agent_catalog.json"), "app"),
         (os.path.join(backend, "app", "services", "dsh_session_storage.mjs"), "app/services"),
         (os.path.join(backend, "app", "services", "codex_gateway_startup.mjs"), "app/services"),
         (os.path.join(backend, "app", "services", "dsh_gateway_bundle"), "app/services/dsh_gateway_bundle"),
-        (os.path.join(backend, "app", "services", "harness2_vendor", "LICENSE"), "app/services/harness2_vendor"),
-        (os.path.join(backend, "app", "services", "harness2_vendor", "UPSTREAM.md"), "app/services/harness2_vendor"),
-    ] + skill_data + license_data),
+    ] + skill_data + license_data + ca_data),
     hiddenimports=hidden,
     hookspath=[],
     hooksconfig={},

@@ -33,7 +33,7 @@ import sys
 import urllib.request
 
 import certifi
-from app.services import harness2_provider, local_stream, managed_agent_network
+from app.services import local_stream, managed_agent_network
 
 root, good, unknown, wrong_host, mode = sys.argv[1:]
 root = Path(root)
@@ -82,17 +82,6 @@ for name, url in (("trusted", good), ("unknown", unknown), ("hostname", wrong_ho
                    "expected": expected, "reason": reason})
     reason = local_stream._llm_gate_check({"needs_llm": True}, {"llm": {"base": url}})
     checks.append({"path": "gateway-preflight", "target": name, "accepted": not reason,
-                   "expected": expected, "reason": reason})
-    try:
-        message, usage = harness2_provider.request(
-            {"base": url, "model": "tls-fixture", "localOnly": True},
-            [{"role": "user", "content": "TLS fixture request"}], [], timeout=5, planning=True)
-        accepted = message["content"] == "TLS fixture response" and usage.get("total") == 3
-        reason = ""
-    except Exception as error:
-        accepted = False
-        reason = type(error).__name__
-    checks.append({"path": "harness2-model-request", "target": name, "accepted": accepted,
                    "expected": expected, "reason": reason})
 report = {"frozen": frozen, "python": sys.version.split()[0], "openssl": ssl.OPENSSL_VERSION,
           "defaultCAcount": empty.cert_store_stats()["x509_ca"],
@@ -148,20 +137,6 @@ def serve(stack: ExitStack, leaf: Path, key: Path) -> ThreadingHTTPServer:
         def do_GET(self):
             body = PAYLOAD if self.path == "/archive" else b'{"data":[]}'
             self.send_response(200)
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def do_POST(self):
-            request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if self.path != "/chat/completions" or request.get("model") != "tls-fixture":
-                self.send_error(400)
-                return
-            body = json.dumps({"choices": [{"message": {"role": "assistant", "content": "TLS fixture response"},
-                                           "finish_reason": "stop"}],
-                               "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -254,7 +229,7 @@ def main() -> int:
                     "scope": "source networking components" if args.source_only else "frozen networking components",
                     "completeRunnerBuild": False, "productionRequests": False, "platform": sys.platform,
                     "sourceHashes": {name: hashlib.sha256((backend / "app/services" / name).read_bytes()).hexdigest()
-                                     for name in ("managed_agent_network.py", "local_stream.py", "harness2_provider.py", "runtime_tls.py")
+                                     for name in ("managed_agent_network.py", "local_stream.py", "runtime_tls.py")
                                      if (backend / "app/services" / name).is_file()}, "runs": reports}
         (output / "report.json").write_text(json.dumps(evidence, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         return 0 if evidence["ok"] else 1

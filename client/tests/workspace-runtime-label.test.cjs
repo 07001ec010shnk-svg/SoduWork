@@ -24,7 +24,7 @@ test('sidebar shows one icon per actual harness across the whole conversation, w
   f.api._paintChatRow(f.row, {id:'whole-chat',title:'多轮协作',adapterId:'claude',
     usedHarnesses:['pi','codex-harness','Pi','Google Harness²','harness2','codex','codex-harness']}, false);
   const icons = [...f.node('.ws-chat-runtime').innerHTML.matchAll(/data-agent-brand="([^"]+)"/g)].map(match=>match[1]);
-  assert.deepEqual(icons, ['pi','codex-harness','harness2','codex']);
+  assert.deepEqual(icons, ['pi','codex-harness','custom','codex']);
   assert.equal(f.node('.ws-chat-runtime').hidden, false);
   assert.equal(f.node('.ws-chat-runtime').title, 'Pi、Codex Harness、Google Harness²、Codex');
   assert.match(f.node('.ws-chat')['aria-label'], /多轮协作.*Pi、Codex Harness、Google Harness²、Codex/);

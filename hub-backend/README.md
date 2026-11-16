@@ -60,25 +60,7 @@ Permission-controlled turns confirm that their execution host has exited before 
 
 Smoke checks live in [`smoke/`](smoke/). To run one directly, use its module from the `hub-backend/` directory, for example `python3 -m smoke.smoke_capabilities`. The quality gate selects the appropriate registered modules. Unit tests and `tests/` integration helpers keep their existing locations.
 
-## Harness² planning recovery
-
-Harness² completes seven tool-free planning stages before native execution. If a
-complete provider response explicitly reaches its output-token limit, the whole
-turn permits one retry of that same stage with up to 16,384 output tokens, capped
-by the configured model output limit, instead of doubling the small initial
-planning allowance. Both attempts
-retain their reported usage and share the existing turn deadline and token budget.
-The client receives a retry progress message. Successful recovery headroom is reused
-for all later planning stages within the configured cap, without more retries.
-Increasing the model's maximum output gives recovery more room up to 16,384 tokens;
-it does not increase the seven-stage count, turn deadline, or total token budget.
-Partial plans are discarded; broken
-streams, HTTP failures and native execution are not retried by this recovery path.
-Persistent truncation or a lower configured cap still fails before execution.
-
-Native Harness² model requests connect directly to the configured endpoint. Each
-request has a 120-second network idle timeout and a 300-second total deadline.
-The SSE transport and the assembled output have separate size limits.
+## DeepSeek Harness turn completion
 
 DeepSeek Harness can continue once within the same native session when the model
 reports `max_tokens` and tool activity has settled. It asks the model to finish
@@ -110,7 +92,7 @@ Native and ACP OpenCode executions preserve the current turn's provider finish r
 
 ## OpenCode installation and network diagnostics
 
-Runner archive downloads, model-gateway reachability checks and Harness² model requests share a strict HTTPS trust configuration. By default, they retain Python/OpenSSL system roots and add the packaged `certifi` public CA bundle, including in frozen executables whose build-time OpenSSL certificate paths do not exist on the user's machine. Certificate chains and hostnames remain verified. This does not change external native harnesses' own HTTPS configuration.
+Runner archive downloads, model-gateway reachability checks and the macOS Runner's secure control connection share a strict TLS trust configuration. By default, they retain Python/OpenSSL system roots and add the packaged `certifi` public CA bundle, including in frozen executables whose build-time OpenSSL certificate paths do not exist on the user's machine. Certificate chains and hostnames remain verified. This does not change external native harnesses' own HTTPS configuration.
 
 Nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR` values explicitly replace that default trust selection; a missing or invalid path fails without falling back to public roots. Supply the complete required trust set when configuring a private CA. Empty values do not select an exclusive override; default path discovery still follows Python/OpenSSL environment semantics. Trust is loaded only for HTTPS requests, including redirects from HTTP; plain HTTP does not depend on certificate configuration. Existing download proxy selection and direct model-gateway routing are unchanged.
 

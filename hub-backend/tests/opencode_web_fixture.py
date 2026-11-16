@@ -1,4 +1,4 @@
-"""Native Harness² web tools, streaming and permissions without an external agent."""
+"""Synthetic model and approval server for native OpenCode tool-loop checks."""
 from __future__ import annotations
 
 import json
@@ -12,7 +12,7 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
-from app.services import harness2_bridge, harness2_runtime, local_base
+from app.services import local_base
 
 
 class _WebFixture:
@@ -118,7 +118,6 @@ class _WebFixture:
         self.calls.append({"phase": self.phase, "model": body.get("model"),
                            "stream": body.get("stream"), "webfetch": "webfetch" in names,
                            "auxiliary": auxiliary,
-                           "harness_identity": "You are the Google Harness² assistant" in system,
                            "executor_identity": "you are opencode" in system.lower()})
         if body.get("stream") is not True or self.phase_calls > 2:
             self.bad_requests.append("unexpected inference")
@@ -162,76 +161,7 @@ class _WebFixture:
         handler.reply(200, payload, "text/event-stream")
 
 
-class Harness2NativeWebTests(unittest.TestCase):
-    def test_native_webfetch_resume_and_readonly_without_refinement(self):
-        executable = Path("must-not-launch-opencode.exe")
-        fixture = _WebFixture()
-        self.fixture = fixture
-        fixture.start()
-        self.addCleanup(fixture.close)
-        with tempfile.TemporaryDirectory(prefix="soduwork-harness2-native-web-") as directory:
-            root = Path(directory)
-            work = root / "中文 workspace"
-            work.mkdir()
-            sentinel = work / "unchanged.txt"
-            sentinel.write_bytes(b"Unchanged fixture file.")
-            original = {path.relative_to(work): path.read_bytes() for path in work.rglob("*")
-                        if path.is_file()}
-            env, permission = self.environment(root, work, fixture, executable, "standard")
-            self.assertEqual(permission["mode"], "standard")
-            self.assertFalse(any(key.startswith("OPENCODE_") for key in env))
-            first = self.run_turn(work, env,
-                                  f"Fetch {fixture.weather_url} using webfetch and report the weather.")
-            sid = self.session(first)
-            self.assertTrue(sid.startswith("h2_"))
-            self.assert_stream(first, "WEATHER-VERIFIED")
-            self.assertEqual(fixture.gets, ["/weather"], {
-                "grants": fixture.grants,
-                "calls": fixture.calls,
-                "applied": fixture.applied,
-                "types": [row.get("type") for row in first],
-                "tools": [row for row in first if row.get("type") == "tool_execution_end"],
-            })
-            self.assertTrue(fixture.weather_in_history)
-            self.assertEqual(len(fixture.grants), 1, fixture.grants)
-            self.assertTrue(fixture.grants[0]["approved"], fixture.grants)
-            self.assertTrue(any(row.get("type") == "tool_execution_end"
-                                and not row.get("isError") for row in first))
-            self.assertEqual(len([row for row in fixture.calls if not row["auxiliary"]]), 2)
-
-            fixture.next_phase("resume")
-            resumed = self.run_turn(work, env, "Confirm the previous answer without calling tools.", sid)
-            self.assertEqual(self.session(resumed), sid)
-            self.assert_stream(resumed, "RESUME-VERIFIED")
-            self.assertTrue(fixture.reply_in_history)
-            self.assertEqual(fixture.gets, ["/weather"])
-
-            fixture.next_phase("readonly")
-            readonly, permission = self.environment(root, work, fixture, executable, "readonly")
-            self.assertEqual(permission["mode"], "readonly")
-            denied = self.run_turn(work, readonly,
-                                   f"Fetch {fixture.weather_url} if webfetch is permitted.", sid)
-            self.assertEqual(self.session(denied), sid)
-            self.assert_stream(denied, "READONLY-BLOCKED")
-            self.assertEqual(fixture.gets, ["/weather"], "Readonly must not fetch again")
-            readonly_calls = [row for row in fixture.calls if row["phase"] == "readonly"]
-            self.assertTrue(readonly_calls)
-            if readonly_calls[0]["webfetch"]:
-                self.assertTrue(any(row.get("type") == "tool_execution_end"
-                                    and row.get("isError") for row in denied))
-            self.assertEqual(fixture.applied, ["standard", "standard", "readonly"])
-            self.assertTrue(all(row["stream"] and row["model"] == "fixture" for row in fixture.calls))
-            execution_calls = [row for row in fixture.calls if not row["auxiliary"]]
-            self.assertTrue(all(row["harness_identity"] for row in execution_calls), fixture.calls)
-            self.assertFalse(any(row["executor_identity"] for row in execution_calls), fixture.calls)
-            self.assertFalse(fixture.bad_requests, fixture.bad_requests)
-            self.assertEqual(fixture.dependency_requests, 0)
-            self.assertEqual(list((root / "refinement").glob("turn-*")), [])
-            self.assertTrue((root / "refinement/sessions").is_dir())
-            self.assertEqual(
-                {path.relative_to(work): path.read_bytes() for path in work.rglob("*")
-                 if path.is_file()}, original)
-
+class OpenCodeWebChecks(unittest.TestCase):
     def environment(self, root, work, fixture, executable, mode):
         allowed = {"PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC",
                    "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA"}
@@ -263,11 +193,10 @@ class Harness2NativeWebTests(unittest.TestCase):
                        "model": "fixture", "kind": "openai-compat"},
                "accessPolicy": policy, "workRoot": str(work)}
         with (patch.dict(os.environ, clean, clear=True),
-              patch.object(local_base, "_opencode_bin", side_effect=AssertionError("Unexpected OpenCode lookup"))):
-            env = harness2_runtime.environment(clean, cfg)
+              patch.object(local_base, "_data_root", return_value=str(root / "runner"))):
+            env = local_base._env_for(local_base._PROFILES["opencode"], cfg)
         permission = policy
         env.update({
-            harness2_runtime.ROOT_ENV: str(root / "refinement"),
             "SODUWORK_APPROVAL_CHANNEL": json.dumps({
                 "url": fixture.url, "token": "fixture-approval", "policy": policy,
             }),
@@ -275,45 +204,6 @@ class Harness2NativeWebTests(unittest.TestCase):
             "NO_PROXY": "127.0.0.1,localhost", "no_proxy": "127.0.0.1,localhost",
         })
         return env, permission
-
-    def run_turn(self, work, env, prompt, session=""):
-        command = [sys.executable, str(Path(harness2_bridge.__file__)),
-                   "--cwd", str(work), "--session", session, "--probe"]
-        flags = ({"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt"
-                 else {"start_new_session": True})
-        process = subprocess.Popen(command, env=env, stdin=subprocess.PIPE,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, encoding="utf-8", errors="replace", **flags)
-        try:
-            stdout, stderr = process.communicate(prompt, timeout=45)
-        except subprocess.TimeoutExpired:
-            if os.name == "nt":
-                subprocess.run(["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                               capture_output=True, timeout=10,
-                               creationflags=subprocess.CREATE_NO_WINDOW)
-            else:
-                from app.services.local_stream import _kill_pid_tree
-                _kill_pid_tree(process.pid, process)
-            stdout, stderr = process.communicate(timeout=5)
-            types = []
-            for line in stdout.splitlines():
-                try:
-                    types.append(json.loads(line).get("type", "error"))
-                except ValueError:
-                    types.append("unparsed")
-            self.fail("The local native web fixture timed out: " + repr({
-                "events": types, "calls": self.fixture.calls, "gets": self.fixture.gets,
-                "grants": self.fixture.grants, "applied": self.fixture.applied,
-                "bad_requests": self.fixture.bad_requests, "stderr_bytes": len(stderr),
-            }))
-        self.assertEqual(process.returncode, 0, stdout + stderr)
-        self.assertNotIn("fixture-key", stdout + stderr)
-        self.assertNotIn("fixture-approval", stdout + stderr)
-        self.assertNotIn("Harness²：", stdout)
-        events = [json.loads(line) for line in stdout.splitlines() if line.strip()]
-        self.assertFalse(any(row.get("error") for row in events))
-        self.assertIn({"type": "harness2_probe_complete", "coverage": "native-execute-v1", "stages": 0}, events)
-        return events
 
     @staticmethod
     def session(events):
@@ -323,7 +213,3 @@ class Harness2NativeWebTests(unittest.TestCase):
         self.assertTrue(any(row.get("type") == "text"
                             and row.get("part", {}).get("delta") == expected
                             and row.get("part", {}).get("done") is False for row in events), events)
-
-
-if __name__ == "__main__":
-    unittest.main()

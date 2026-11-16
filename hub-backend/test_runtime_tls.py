@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from contextlib import ExitStack
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-import json
 import os
 from pathlib import Path
 import ssl
@@ -14,8 +13,7 @@ from unittest.mock import patch
 import urllib.error
 import urllib.request
 
-from app.services import harness2_provider, local_stream, managed_agent_network as network, runtime_tls
-from app.services.harness2_errors import StructuredFailure
+from app.services import local_stream, managed_agent_network as network, runtime_tls
 import test_managed_agent_tls as fixtures
 
 
@@ -49,20 +47,6 @@ class RuntimeTLSTest(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(b"ok")
 
-            def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
-                requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
-                payload = json.dumps({"choices": [{"finish_reason": "stop", "message": {
-                    "role": "assistant", "content": "verified fixture response"}}],
-                    "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}}).encode()
-                self.send_response(307 if redirect else status)
-                if redirect:
-                    self.send_header("Location", redirect)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                self.wfile.write(payload)
-
             def log_message(self, *_args):
                 pass
 
@@ -91,43 +75,13 @@ class RuntimeTLSTest(unittest.TestCase):
     def gate(self, url):
         return local_stream._llm_gate_check({"needs_llm": True}, {"llm": {"base": url}})
 
-    def provider(self, url):
-        return harness2_provider.request(
-            {"base": url, "model": "fixture-model", "key": "synthetic-fixture-key"},
-            [{"role": "user", "content": "Synthetic TLS regression"}], [], timeout=2)
-
     def assert_rejected(self, url):
         before = len(self.requests)
         with self.assertRaises(urllib.error.URLError) as raised:
             self.download(url)
         self.assertIsInstance(raised.exception.reason, ssl.SSLCertVerificationError)
         self.assertIn("TLS 证书校验失败", self.gate(url))
-        with self.assertRaises(StructuredFailure) as provider_error:
-            self.provider(url)
-        self.assertEqual(provider_error.exception.code, "model_connection")
         self.assertEqual(len(self.requests), before)
-
-    def test_harness2_model_request_uses_bundle_without_platform_roots_or_proxy(self):
-        url = self.server(leaf=self.leaf, key=self.key)
-        with patch.dict(os.environ, {"HTTPS_PROXY": "http://127.0.0.1:1"}):
-            message, usage = self.provider(url)
-        self.assertEqual(message, {"role": "assistant", "content": "verified fixture response"})
-        self.assertEqual(usage["input"], 2)
-        self.assertEqual(usage["output"], 3)
-        self.assertEqual(len(self.requests), 1)
-        self.assertEqual(self.requests[0]["path"], "/chat/completions")
-        self.assertEqual(self.requests[0]["body"]["model"], "fixture-model")
-        self.assertEqual(self.requests[0]["headers"].get("Authorization"), "Bearer synthetic-fixture-key")
-        self.assertNotIn("Proxy-Authorization", self.requests[0]["headers"])
-
-    def test_harness2_model_request_keeps_redirects_disabled(self):
-        destination = self.server(leaf=self.leaf, key=self.key)
-        url = self.server(leaf=self.leaf, key=self.key, redirect=destination)
-        with self.assertRaises(StructuredFailure) as raised:
-            self.provider(url)
-        self.assertEqual(raised.exception.code, "model_http")
-        self.assertEqual(raised.exception.http_status, 307)
-        self.assertEqual(len(self.requests), 1)
 
     def test_missing_platform_roots_reproduces_old_failure_and_both_clients_use_the_bundle(self):
         url = self.server(leaf=self.leaf, key=self.key)
@@ -207,10 +161,6 @@ class RuntimeTLSTest(unittest.TestCase):
                 self.assertIn("直连失败", message)
                 self.assertNotIn(str(self.root), message)
                 self.assertNotIn("private-", message)
-                with self.assertRaises(StructuredFailure) as raised:
-                    self.provider(url)
-                self.assertEqual(raised.exception.code, "model_connection")
-                self.assertNotIn(str(self.root), str(raised.exception))
         self.assertEqual(self.requests, [])
 
     def test_invalid_bundled_ca_fails_closed(self):
@@ -236,7 +186,6 @@ class RuntimeTLSTest(unittest.TestCase):
             url = self.server()
             self.download(url)
             self.assertEqual(self.gate(url), "")
-            self.assertEqual(self.provider(url)[0]["content"], "verified fixture response")
             self.bundle.assert_not_called()
             self.default_roots.assert_not_called()
 

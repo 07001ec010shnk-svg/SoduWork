@@ -3,7 +3,7 @@
  * Hub is authoritative for tasks. store.js queues per-task put/patch/delete
  * operations and replays them on reconnect instead of overwriting the task table.
  * Exposes task operations, configuration sync, registerClient, and connectWS.
- * The default Hub is http://127.0.0.1:18989; the login gate can change it through
+ * The default Hub is https://service.soduwork.ai; the login gate can change it through
  * the main-process hub-endpoint policy. Identities and pending operations remain
  * isolated by service. X-Soduwork-Device identifies the installation using Electron
  * secure storage; User.id is only a legacy first-migration hint.
@@ -52,7 +52,7 @@
   var LS_CFG = 'soduwork_work_cfg_v5';
   // An unscoped legacy credential has no trustworthy destination. Quarantine it
   // rather than guessing a former deployment or sending it to a new service.
-  var DEFAULT_PRODUCTION_HUB = 'http://127.0.0.1:18989';
+  var DEFAULT_PRODUCTION_HUB = 'https://service.soduwork.ai';
   var LEGACY_PRODUCTION_HUB = 'https://unassigned-legacy-hub.invalid';
   var DEFAULT_DEVELOPMENT_HUB = 'http://127.0.0.1:18989';
   var HUB_CONNECTIONS_KEY = 'soduwork_work_hub_connections_v2';
@@ -851,7 +851,7 @@
   function localAutomationAgent(value, mode, clientId) {
     var id = String(value || '').trim();
     var runtime = id.replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
-    var managed = runtime && !['codex', 'claude'].includes(runtime);
+    var managed = runtime && !['codex'].includes(runtime);
     var current = String(_deviceId || '').trim(), selected = String(clientId || '').trim();
     return (id.startsWith('local:') && managed) || (String(mode || '').trim() === 'local' &&
       /^runner:[^:]+:[a-z][a-z0-9-]{0,39}$/.test(id) && managed &&
@@ -1760,13 +1760,14 @@
       });
       if (!machine) return unavailable();
       machine = Object.assign({}, machine, { runnerId: selectedId, scope: 'current-instance', isCurrentDevice: true });
-      var agents = Array.isArray(machine.agents) ? machine.agents : [];
+      var agents = (Array.isArray(machine.agents) ? machine.agents : [])
+        .filter(function (agent) { return !['claude', 'harness2'].includes(agent.key); });
       var hubModels = Array.isArray(data.models) ? data.models : [];
       var models = localRows.concat(hubModels);
       var firstModel = models[0];
       agents = agents.map(function (agent) {
         var selected = localDefaults?.selections?.[agent.key];
-        if (agent.modelPick === false || ['codex', 'claude'].includes(agent.key)) return agent;
+        if (agent.modelPick === false || ['codex'].includes(agent.key)) return agent;
         var savedModel = selected?.configured ? selected.modelName : agent.model || '';
         var missing = selected?.configured ? selected.unavailable : agent.modelGone ||
           (savedModel && !models.some(row => row.name === savedModel));
@@ -1826,7 +1827,7 @@
       var scope = domainScope(), defaults = !model || isLocalModelChoice(model) ? await localAgentDefaults(scope) : null;
       var probeAgent = null;
       var preferred = !model && defaults?.selections?.[key];
-      var inherited = !model && defaults && !['codex', 'claude'].includes(key);
+      var inherited = !model && defaults && !['codex'].includes(key);
       if (isLocalModelChoice(model) || preferred?.configured || inherited) {
         if (!defaults) throw new Error('本地模型测试不可用，请更新客户端');
         var setup = await this.localAgentSetup();

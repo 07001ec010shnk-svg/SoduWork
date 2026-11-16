@@ -106,7 +106,8 @@ class PersonalModelQuotaTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(own.json()["quotaScope"], "personal")
 
     async def test_runtime_bound_receipts_apply_only_to_the_authorized_executor(self):
-        for index, agent in enumerate(("qwen", "opencode", "codex-harness", "dsh", "kimi", "harness2", "custom-acp")):
+        agents = ("qwen", "opencode", "codex-harness", "dsh", "kimi", "custom-acp")
+        for index, agent in enumerate(agents):
             with self.subTest(agent=agent):
                 configured = await self.config(agent=agent)
                 self.assertEqual(configured.status_code, 200, configured.text)
@@ -126,8 +127,8 @@ class PersonalModelQuotaTests(unittest.IsolatedAsyncioTestCase):
             provider="custom-local", model="local-model", agent="custom-device-example")
         self.assertEqual(reported.status_code, 200, reported.text)
         async with self.sessions() as session:
-            self.assertEqual(await client_access.monthly_tokens(session, self.user.id), 7)
-        for agent in ("codex", "claude"):
+            self.assertEqual(await client_access.monthly_tokens(session, self.user.id), len(agents))
+        for agent in ("codex",):
             configured = await self.config(agent=agent)
             self.assertFalse(configured.json()["ok"])
             self.assertNotIn("quotaUsageToken", configured.json())

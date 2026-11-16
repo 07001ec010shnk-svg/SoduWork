@@ -34,6 +34,12 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def release_branch(version):
+    match = re.fullmatch(VERSION, version)
+    require(match is not None, "Invalid release version")
+    return f"release/{match[1]}.{match[2]}.x"
+
+
 def context(env=None):
     env = os.environ if env is None else env
     component, version = env.get("RELEASE_COMPONENT"), env.get("RELEASE_VERSION", "")
@@ -41,7 +47,8 @@ def context(env=None):
     repo = env.get("GITHUB_REPOSITORY", "")
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo), "Invalid repository")
     require(env.get("GITHUB_EVENT_NAME") == "workflow_dispatch", "Release requires workflow_dispatch")
-    require(env.get("GITHUB_REF") == f"refs/heads/release/{version}", "Use the matching unified release branch")
+    require(env.get("GITHUB_REF") == f"refs/heads/{release_branch(version)}",
+            "Use the matching release/X.Y.x maintenance branch")
     require(env.get("GITHUB_REF_PROTECTED") == "true", "Release branch must be protected")
     require(env.get("PUBLIC_RELEASE_REPOSITORY") == repo, "Configure PUBLIC_RELEASE_REPOSITORY explicitly")
     sha, run = env.get("GITHUB_SHA", ""), env.get("GITHUB_RUN_ID", "")
@@ -95,7 +102,9 @@ def policy(ctx, root=ROOT):
             require(item.get("productName") == "SoduWork" and re.fullmatch(VERSION, item.get("version", "")), "Missing public upgrade baseline: " + key)
             require(tuple(map(int, item["version"].split("."))) < tuple(map(int, ctx["version"].split("."))), "Baseline must be older")
             require(re.fullmatch(r"[a-f0-9]{64}", item.get("sha256", "")), "Baseline digest required")
-            require(re.fullmatch(r"https://github\.com/" + re.escape(ctx["repository"]) + r"/releases/download/client-v[0-9.]+/[^/?#]+", item.get("url", "")), "Baseline must be a public release asset in this repository")
+            require(re.fullmatch(r"https://github\.com/" + re.escape(ctx["repository"]) +
+                                r"/releases/download/(?:client-)?v" + re.escape(item["version"]) + r"/[^/?#]+",
+                                item.get("url", "")), "Baseline must be a public release asset in this repository at its declared version")
             require(not any(k in item for k in ["path", "fallbackUrl"]), "Local/private baseline overrides are forbidden")
 
 
@@ -107,7 +116,7 @@ def preflight(ctx):
     environment = api("/environments/public-release")
     require(any(rule.get("type") == "required_reviewers" and rule.get("reviewers")
                 for rule in environment.get("protection_rules", [])), "Configure required reviewers on public-release")
-    require(api("/git/ref/heads/release/" + ctx["version"])["object"]["sha"] == ctx["commit"], "Release branch moved")
+    require(api("/git/ref/heads/" + release_branch(ctx["version"]))["object"]["sha"] == ctx["commit"], "Release branch moved")
 
 
 def fingerprint(file):

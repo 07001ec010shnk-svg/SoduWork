@@ -113,7 +113,7 @@ if (typeof electron === 'string') {
       assert.equal(preferences.forNewChat(app, opts, true), opts);
     }
     for (const opts of [{ taskSession: true }, { taskRef: 'task' },
-      ...['pi', 'opencode', 'codex-harness', 'qwen', 'kimi', 'claude', 'codex', 'dsh', 'harness2'].map(adapterId => ({ adapterId }))]) {
+      ...['pi', 'opencode', 'codex-harness', 'qwen', 'kimi', 'codex', 'dsh'].map(adapterId => ({ adapterId }))]) {
       assert.deepEqual(preferences.forNewChat(app, opts, true), { ...opts, accessMode: 'full' });
     }
     report.cases.push('Checked native consent persists through reload; all supported new chats and new local tasks inherit it, while existing chats, automation and explicit session modes retain their grants.');

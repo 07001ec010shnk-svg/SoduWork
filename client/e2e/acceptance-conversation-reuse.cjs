@@ -59,9 +59,9 @@ app.whenReady().then(async () => {
     await js(read('core/task-conversation-navigation.js') + '\nvoid 0;');
     await js(read('core/requirements.js') + '\nvoid 0;');
     await js(read('components/panels/task-trace-approval.js') + '\nvoid 0;');
-    const runtimes = ['pi', 'qwen', 'opencode', 'dsh', 'kimi', 'harness2', 'codex-harness', 'codex', 'claude'];
+    const runtimes = ['pi', 'qwen', 'opencode', 'dsh', 'kimi', 'codex-harness', 'codex'];
     await js(`window.runtimeRows=${JSON.stringify(runtimes)}.map(id=>({id,displayName:id,
-        modelMode:['codex','claude'].includes(id)?'account':'managed'}));
+        modelMode:['codex'].includes(id)?'account':'managed'}));
       low.runtimes=async()=>({ok:true,runtimes:runtimeRows,availableRuntimes:runtimeRows});low.conversationRuntimes=low.runtimes;
       low.history=async()=>{calls.push({kind:'history'});return {ok:true,chats:[]};};
       window.liveId='';window.liveRef='';window.liveMessages=[];
@@ -86,7 +86,7 @@ app.whenReady().then(async () => {
       window.__teamCap={meId:'fixture-owner'};void 0;`);
     for (const runtime of runtimes) for (const mode of ['manual', 'auto']) for (const availability of ['exists', 'missing', 'unreadable']) {
       const id = runtime + '-' + mode + '-' + availability;
-      const model = ['codex', 'claude'].includes(runtime)
+      const model = ['codex'].includes(runtime)
         ? { id: runtime + '-account-model', label: runtime + ' account model' }
         : { id: 'local:model-' + 'd'.repeat(32), label: 'Private review model', localOnly: true };
       await js(`NativeChat.reset();calls=[];toasts=[];errors=[];modelCalls=0;catalogMode='ok';
@@ -151,7 +151,7 @@ app.whenReady().then(async () => {
         assert.equal(sent.options.taskExecution.acceptanceMode, mode); assert.equal(sent.options.taskExecution.approvalId, 'approval-' + id);
         assert.equal(sent.options.taskExecution.acceptanceExecutionSession === true, availability === 'exists');
         assert.equal(sent.history.length, availability === 'exists' ? 2 : 0);
-        assert.equal(await js('modelCalls>0'), !['codex', 'claude'].includes(runtime));
+        assert.equal(await js('modelCalls>0'), !['codex'].includes(runtime));
         assert.equal(await js('openTaskConversation(task.id,task.title,reviewOptions)'), true);
         assert.equal(await js('NativeChat.sessionInfo().sessionId'), expectedId, 'Repeated review opens must keep the confirmed archive');
         assert.equal(await js('calls.filter(row=>row.kind==="open").length'), opens.length);

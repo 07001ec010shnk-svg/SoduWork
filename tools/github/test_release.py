@@ -21,7 +21,7 @@ class ReleaseTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.env = dict(RELEASE_COMPONENT="source", RELEASE_VERSION="1.2.3",
                         GITHUB_REPOSITORY="example/project", PUBLIC_RELEASE_REPOSITORY="example/project",
-                        GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/heads/release/1.2.3",
+                        GITHUB_EVENT_NAME="workflow_dispatch", GITHUB_REF="refs/heads/release/1.2.x",
                         GITHUB_REF_PROTECTED="true", GITHUB_SHA="a" * 40, GITHUB_RUN_ID="123")
         self.ctx = release.context(self.env)
 
@@ -38,14 +38,31 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 release.context({**self.env, key: value})
 
+    def test_patch_releases_share_a_branch_and_keep_exact_version_tags(self):
+        for version, branch in [("1.2.0", "1.2.x"), ("1.2.3", "1.2.x"),
+                                ("1.2.24", "1.2.x"), ("10.20.30", "10.20.x")]:
+            with self.subTest(version=version):
+                ctx = release.context({**self.env, "RELEASE_VERSION": version,
+                                       "GITHUB_REF": "refs/heads/release/" + branch})
+                self.assertEqual(ctx["version"], version)
+                self.assertEqual(ctx["tag"], "v" + version)
+
+    def test_context_rejects_other_series_and_version_specific_branches(self):
+        for ref in ["refs/heads/release/1.2.3", "refs/heads/release/1.3.x",
+                    "refs/heads/release/2.2.x", "refs/heads/release/1.20.x",
+                    "refs/heads/release/1.2.X", "refs/heads/main", "refs/tags/v1.2.3"]:
+            with self.subTest(ref=ref), self.assertRaisesRegex(ValueError, "maintenance branch"):
+                release.context({**self.env, "GITHUB_REF": ref})
+
     def test_complete_candidate_verifies(self):
         self.bundle()
         manifest = release.candidate(self.ctx, self.root)
         self.assertEqual(release.verify(self.ctx, self.root), manifest)
 
-    def test_other_run_and_commit_are_rejected(self):
+    def test_other_run_commit_and_patch_version_are_rejected(self):
         self.bundle()
-        for key, value in [("runId", "124"), ("commit", "b" * 40), ("repository", "fork/repo")]:
+        for key, value in [("runId", "124"), ("commit", "b" * 40), ("repository", "fork/repo"),
+                           ("version", "1.2.4"), ("tag", "v1.2.4")]:
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, "another run"):
                 release.candidate({**self.ctx, key: value}, self.root)
 
@@ -111,7 +128,7 @@ class ReleaseTests(unittest.TestCase):
                 release.preflight(self.ctx)
         with patch.object(release, "api", side_effect=[{"private": False}, gate, branch]) as api:
             release.preflight(self.ctx)
-            api.assert_called_with('/git/ref/heads/release/1.2.3')
+            api.assert_called_with('/git/ref/heads/release/1.2.x')
 
     def test_annotated_tag_is_peeled_and_wrong_commit_is_rejected(self):
         with patch.object(release, "preflight"), patch.object(release, "api", side_effect=[
@@ -325,9 +342,15 @@ class ReleaseTests(unittest.TestCase):
         baselines = {key: {'productName': 'SoduWork', 'version': '1.2.2', 'sha256': 'a' * 64,
                           'url': 'https://github.com/example/project/releases/download/client-v1.2.2/installer'} for key in keys}
         file = self.root / 'tools/ci/soduwork-acceptance-baselines.json'
-        release.write(file, baselines)
-        release.policy(ctx, self.root)
-        for field, value in [('version', '1.2.3'), ('url', 'https://example.test/installer'), ('path', '/local/installer')]:
+        for prefix in ['client-v', 'v']:
+            for item in baselines.values():
+                item['url'] = f'https://github.com/example/project/releases/download/{prefix}1.2.2/installer'
+            release.write(file, baselines)
+            release.policy(ctx, self.root)
+        for field, value in [('version', '1.2.3'), ('url', 'https://example.test/installer'),
+                             ('url', 'https://github.com/example/project/releases/download/v1.2.1/installer'),
+                             ('url', 'https://github.com/other/project/releases/download/v1.2.2/installer'),
+                             ('path', '/local/installer')]:
             changed = copy.deepcopy(baselines)
             changed[keys[0]][field] = value
             release.write(file, changed)

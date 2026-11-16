@@ -611,8 +611,10 @@ class Runner:
                                     "X-SoduWork-Runner-Key": self.key})
                 if self.token:
                     headers["X-SoduWork-Runner-Token"] = self.token
+                from app.services.runner_tls import websocket_options
                 async with websockets.connect(self.url, max_size=8 * 1024 * 1024,
-                                              additional_headers=headers, proxy=None) as ws:
+                                              additional_headers=headers, proxy=None,
+                                              **websocket_options(self.url)) as ws:
                     self.ws = ws
                     prefetched = await self._hello()
                     # Open the control channel before scanning local CLIs/Skills. A large
@@ -2235,14 +2237,7 @@ def main() -> None:
         from app.services import acp_bridge
         raise SystemExit(acp_bridge.main())
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--harness2-native":
-        from app.services import harness2_native
-        raise SystemExit(harness2_native.main())
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--harness2-bridge":
-        sys.argv = [sys.argv[0], *sys.argv[2:]]
-        from app.services import harness2_bridge
-        raise SystemExit(harness2_bridge.main())
 
     ap = argparse.ArgumentParser(description="SoduWork 执行机")
     ap.add_argument("--doctor", action="store_true", help="检查 CLI、真终端和内置技能后退出")
