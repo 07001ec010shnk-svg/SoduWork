@@ -1630,7 +1630,7 @@ class Runner:
             from app.services import access_broker
             result = access_broker.respond(
                 str(m.get("ref") or ""), str(m.get("requestId") or ""),
-                str(m.get("decision") or ""), m.get("policyRevision"))
+                str(m.get("decision") or ""), m.get("policyRevision"), m.get("optionId"))
             return {"ok": bool(result.get("ok")), "data": result,
                     "error": result.get("error", ""), "code": result.get("code", "")}
         if op == "job.status":
@@ -2237,14 +2237,7 @@ def main() -> None:
         from app.services import acp_bridge
         raise SystemExit(acp_bridge.main())
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--harness2-native":
-        from app.services import harness2_native
-        raise SystemExit(harness2_native.main())
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--harness2-bridge":
-        sys.argv = [sys.argv[0], *sys.argv[2:]]
-        from app.services import harness2_bridge
-        raise SystemExit(harness2_bridge.main())
 
     ap = argparse.ArgumentParser(description="SoduWork 执行机")
     ap.add_argument("--doctor", action="store_true", help="检查 CLI、真终端和内置技能后退出")

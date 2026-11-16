@@ -10,7 +10,8 @@ def check(binary, *, platform=sys.platform):
     modules = archive.open_embedded_archive("PYZ.pyz").toc
     backend = {"darwin": "truststore._macos", "win32": "truststore._windows"}.get(
         platform, "truststore._openssl")
-    required = {"truststore", "truststore._api", backend, "app.services.runner_tls"}
+    required = {"truststore", "truststore._api", backend,
+                "app.services.runner_tls", "app.services.runtime_tls"}
     if not required.issubset(modules):
         raise AssertionError("Frozen Runner is missing its native system trust verifier")
     print(f"PASS frozen Runner native system trust verifier ({platform})")

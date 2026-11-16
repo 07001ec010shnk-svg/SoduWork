@@ -6,6 +6,8 @@ Workflow documentation, release procedures, issue forms and the pull request tem
 
 `workflows/ci.yml` checks source boundaries, documentation, frontend builds, client contracts, backend offline checks, and isolated HTTP startup on Windows, macOS, and Linux. HTTP startup does not prove native Electron desktop, Docker deployment, provider OAuth, or real-model execution acceptance. Those need separate environments and evidence.
 
+The Runner compatibility matrix runs strict TLS and execution-host cleanup regressions on Windows, macOS, and Linux. It also freezes the production network modules and checks real loopback HTTPS with synthetic certificates. This covers packaged native trust verifiers, exclusive CA overrides and certificate rejection, without changing machine trust stores or contacting real model services. It does not replace full native desktop package acceptance.
+
 `workflows/security.yml` runs the [pinned local secret scanner](../tools/security/README.md) on the current source inventory, including tests. It does not scan private development history. Before publication, use a verified source export or squash the reviewed source into the public branch without private history.
 
 Ordinary checks use read-only permissions, do not persist checkout credentials, and pin actions to reviewed commit SHAs. Branch pushes and pull requests run without release or production credentials. Release branch pushes and tags do not duplicate checks. See [GitHub's secure-use guidance](https://docs.github.com/en/actions/reference/security/secure-use).
@@ -17,10 +19,3 @@ Dependabot proposes updates for GitHub Actions, both npm lockfiles, and backend 
 These workflows must run in the target GitHub repository before their platform results can be claimed. Local Windows checks do not constitute a successful GitHub Actions run.
 
 Runner dialogue regression checks follow the shared public model-error guidance.
-Harness2 performs seven refinement stages before each executor turn. One explicit
-planning token-limit response may add one bounded request, with both attempts
-accounted, before native execution. Incomplete streams are not retried. An empty
-executor reply with retained planning is an incomplete response, not a successful
-answer or a wholly empty turn. Tests require all seven usage events, retained
-planning, no answer or tool activity, failed settlement, sanitized provider errors,
-the same native session and exactly the requested number of turns.

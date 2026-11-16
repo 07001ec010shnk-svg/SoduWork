@@ -851,7 +851,7 @@
   function localAutomationAgent(value, mode, clientId) {
     var id = String(value || '').trim();
     var runtime = id.replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
-    var managed = runtime && !['codex', 'claude'].includes(runtime);
+    var managed = runtime && !['codex'].includes(runtime);
     var current = String(_deviceId || '').trim(), selected = String(clientId || '').trim();
     return (id.startsWith('local:') && managed) || (String(mode || '').trim() === 'local' &&
       /^runner:[^:]+:[a-z][a-z0-9-]{0,39}$/.test(id) && managed &&
@@ -1078,6 +1078,38 @@
       throw new Error('本地模型配置无法读取，请检查系统安全存储后重试');
     }
     return catalog;
+  }
+  async function managedModelOwners(scope, signal) {
+    // Edit permissions must come from a current Hub response, not a cached
+    // renderer row or personal/localOnly flags supplied by the caller.
+    var catalog = await jfetch('/my-models', { cache: 'no-store',
+      ...(signal ? { signal: AbortSignal.any([signal, _abortSignal(DEFAULT_TIMEOUT)]) } : {}) });
+    if (!sameDomainScope(scope)) throw staleTaskScope();
+    if (catalog?.ok === false || !Array.isArray(catalog?.providers)) {
+      throw new Error('模型服务来源暂时无法确认，请刷新目录后重试');
+    }
+    return new Map(catalog.providers.filter(row => row && !deviceProvider(row.id) && row.localOnly !== true)
+      .map(row => [String(row.id || '').trim().toLowerCase(), row.personal === true]));
+  }
+  function requirePersonalProvider(id, owners, created = new Set()) {
+    var key = String(id || '').trim().toLowerCase();
+    if (owners.get(key) === true || !owners.has(key) && created.has(key)) return;
+    throw Object.assign(new Error(owners.has(key)
+      ? '服务端同步的模型服务为只读，请添加自己的服务'
+      : '模型服务不存在或来源无法确认，请刷新目录后重试'),
+    { code: owners.has(key) ? 'MODEL_PROVIDER_READ_ONLY' : 'MODEL_PROVIDER_UNAVAILABLE' });
+  }
+  async function validateManagedModelWrite(body, scope) {
+    var providers = Array.isArray(body.providers) ? body.providers : [];
+    var models = Array.isArray(body.models) ? body.models : [];
+    var keys = Object.keys(body.keys || {});
+    if (!providers.length && !models.length && !keys.length) return;
+    var owners = await managedModelOwners(scope);
+    var created = new Set(providers.map(row => String(row?.id || '').trim().toLowerCase())
+      .filter(id => /^custom-[a-z0-9_-]+$/.test(id) && !owners.has(id)));
+    for (var provider of providers) requirePersonalProvider(provider?.id, owners, created);
+    for (var model of models) requirePersonalProvider(model?.providerId, owners, created);
+    for (var id of keys) requirePersonalProvider(id, owners, created);
   }
   global.soduWorkAPI?.onClientDomainChanged?.(value => {
     if (!sameDomainScope(value?.scope)) return;
@@ -1521,8 +1553,8 @@
       };
     },
     /*
-     * Accept provider overrides, keys, and models. Omitted keys remain unchanged; null removes
-     * the personal key and restores the company fallback.
+     * Accept personal providers, keys, and models. Organization services are read-only.
+     * Omitted keys remain unchanged; null removes the personal service's key.
      */
     async saveMyModels(body) {
       body = body || {};
@@ -1603,6 +1635,8 @@
         (explicitLocal || (!localProviderInput.length && !localModelInput.length));
       var hasManaged = managedBody.providers?.length || managedBody.models?.length || Object.keys(managedBody.keys || {}).length ||
         managedReplacement;
+      if (hasManaged) await validateManagedModelWrite(managedBody, scope);
+      if (!sameDomainScope(scope)) throw staleTaskScope();
       if (hasLocal) {
         if (!local || typeof local.save !== 'function') throw new Error('本地模型存储不可用');
         localResult = projectLocalModelCatalog(await local.save({ providers: localProviders.map(nativeLocalProvider),
@@ -1634,8 +1668,7 @@
       return local.test(deviceProviderId(providerId), modelName || '');
     },
     /*
-     * Test the effective key immediately: use a personal override when configured, otherwise
-     * the company key.
+     * Test only a saved personal service; synchronized organization services are read-only.
      */
     async testMyModel(providerId, options) {
       var scope = domainScope();
@@ -1650,6 +1683,7 @@
       }
       if (localProvider && options?.localOnly !== false) throw new Error('模型服务来源不明确，请刷新模型目录后重试');
       if (!sameDomainScope(scope)) throw staleTaskScope();
+      requirePersonalProvider(providerId, await managedModelOwners(scope));
       var r = await jfetch('/my-models/test', { method: 'POST',
         body: JSON.stringify({ providerId: providerId }) });
       mark(true); return r;
@@ -1678,6 +1712,8 @@
       }
       if (localProvider && body.localOnly !== false) throw new Error('模型服务来源不明确，请刷新模型目录后重试');
       if (!sameDomainScope(scope)) throw staleTaskScope();
+      requirePersonalProvider(body.providerId, await managedModelOwners(scope, options?.signal));
+      options?.signal?.throwIfAborted();
       var result = await jfetch('/my-models/capabilities/check', { method: 'POST',
         body: JSON.stringify({ providerId: body.providerId, model: body.model,
           ...(Array.isArray(body.checks) ? { checks: body.checks } : {}) }),
@@ -1760,13 +1796,14 @@
       });
       if (!machine) return unavailable();
       machine = Object.assign({}, machine, { runnerId: selectedId, scope: 'current-instance', isCurrentDevice: true });
-      var agents = Array.isArray(machine.agents) ? machine.agents : [];
+      var agents = (Array.isArray(machine.agents) ? machine.agents : [])
+        .filter(function (agent) { return !['claude', 'harness2'].includes(agent.key); });
       var hubModels = Array.isArray(data.models) ? data.models : [];
       var models = localRows.concat(hubModels);
       var firstModel = models[0];
       agents = agents.map(function (agent) {
         var selected = localDefaults?.selections?.[agent.key];
-        if (agent.modelPick === false || ['codex', 'claude'].includes(agent.key)) return agent;
+        if (agent.modelPick === false || ['codex'].includes(agent.key)) return agent;
         var savedModel = selected?.configured ? selected.modelName : agent.model || '';
         var missing = selected?.configured ? selected.unavailable : agent.modelGone ||
           (savedModel && !models.some(row => row.name === savedModel));
@@ -1826,7 +1863,7 @@
       var scope = domainScope(), defaults = !model || isLocalModelChoice(model) ? await localAgentDefaults(scope) : null;
       var probeAgent = null;
       var preferred = !model && defaults?.selections?.[key];
-      var inherited = !model && defaults && !['codex', 'claude'].includes(key);
+      var inherited = !model && defaults && !['codex'].includes(key);
       if (isLocalModelChoice(model) || preferred?.configured || inherited) {
         if (!defaults) throw new Error('本地模型测试不可用，请更新客户端');
         var setup = await this.localAgentSetup();

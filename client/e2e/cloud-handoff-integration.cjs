@@ -86,12 +86,7 @@ app.whenReady().then(async () => {
     await until(() => current.snapshot().messages.some(row => row.blocks?.some(block =>
       block.kind === 'thinking' && block.text === thought)), agent.id + ': native thought replay');
     const thoughtBlocks = current.snapshot().messages.flatMap(row => row.blocks || []).filter(block => block.kind === 'thinking');
-    // Harness2 emits its own refinement progress before the vendor's reasoning.
-    // Keep that separate phase while asserting the final vendor thought replaces
-    // all of its streamed fragments, rather than counting unrelated progress.
-    const refinement = thoughtBlocks.filter(block => agent.id === 'harness2' && block.text.startsWith('Harness²：'));
-    assert.equal(refinement.length, agent.id === 'harness2' ? 1 : 0);
-    const nativeThoughts = thoughtBlocks.filter(block => !refinement.includes(block));
+    const nativeThoughts = thoughtBlocks;
     assert.equal(nativeThoughts.length, 1, agent.id + ': final thought must replace delta chunks');
     assert.equal(nativeThoughts[0].text, thought);
     assert.equal(nativeThoughts[0].done, true);
@@ -99,7 +94,7 @@ app.whenReady().then(async () => {
     const page = await request('/tasks/' + taskId + '/ai-session');
     assert.ok(page.items.some(row => row.kind === 'thinking'));
     // The vendor fixture emits model tokens for native/fallback runtimes, and
-    // Harness2 reports refinement tokens. These four ACP peers emit occupancy only.
+    // These four ACP peers emit occupancy only, without native usage receipts.
     const billed = !['codex-harness', 'qwen', 'opencode', 'dsh'].includes(agent.id);
     assert.equal(page.items.some(row => row.kind === 'usage'), billed,
       agent.id + ': bill reported model tokens, never ACP context occupancy');

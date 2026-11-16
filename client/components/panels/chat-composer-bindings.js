@@ -224,6 +224,11 @@ function _loadChatSkills(force) {
     const picker = ctx._skillPicker;
     const api = global.soduWorkAPI && (global.soduWorkAPI.conversationSession || global.soduWorkAPI.piSession);
     if (!picker) return;
+    const auth = global.SoduWorkAPI?.clientAuthSnapshot?.();
+    if (auth?.state && auth.state !== 'active') {
+      ctx._skillLoadSeq++; skillRefreshQueued = false; picker.setItems([]);
+      return Promise.resolve();
+    }
     // A changed catalog invalidates the active response, but only one trailing
     // request is needed even when several install or preference events arrive.
     if (force === true) ctx._skillLoadSeq++;

@@ -716,12 +716,8 @@
     "已安装，实际测试未通过。请查看下方测试结果并处理后重试。": "Installed, but the live test did not pass. Review the test result below, resolve the issue, and retry.",
     "还没有测通的助手": "No agents have passed the live test yet",
     "通过 OpenCode 直接执行；Google Research 推演核心用于显式诊断": "Executes directly through OpenCode; Google Research refinement is available for explicit diagnostics",
-    "Google Research Harness² 核心随 SoduWork 升级；首次使用点击「装上」准备执行组件。「重装 / 升到最新」会准备 SoduWork 支持的执行组件版本；卸载仅停用本底座，保留共享 OpenCode。": "The Google Research Harness² core updates with SoduWork. Click Install before first use to prepare its execution component. Reinstall / update prepares the version supported by SoduWork. Uninstall disables Harness² and keeps the shared OpenCode component.",
-    "停用这台机器上的 Harness²，新任务不能再派给它；保留内置核心、共享 OpenCode 和任务记录。点「装上」可重新启用。": "Disable Harness² on this computer so it cannot receive new tasks. Its bundled core, shared OpenCode component, and task history are kept. Click Install to enable it again.",
     "验证日常执行与完整回复；会使用所选模型额度，最多 3 分钟。": "Checks everyday execution and a complete reply. This uses your selected model's quota and takes up to 3 minutes.",
-    "日常对话通过 OpenCode 直接执行；Google Research Harness² 的实验性推演仅用于显式诊断。": "Everyday conversations execute directly through OpenCode; Google Research Harness² experimental refinement runs only in explicit diagnostics.",
     "直接使用「我的模型」中选定的企业模型；模型凭据仅注入本次进程，不写入文件。": "Uses the enterprise model selected in My Models. Model credentials are provided only to the current process and are not written to files.",
-    "Harness² 核心随 SoduWork 内置；首次使用时点「装上」准备执行组件。": "The Harness² core is bundled with SoduWork. Before first use, click Install to prepare the execution component."
   };
   if (typeof module !== 'undefined' && module.exports) { module.exports = Object.freeze(messages); return; }
   global.SoduWorkLocaleMessages = Object.freeze(Object.assign(Object.create(null), global.SoduWorkLocaleMessages, { 'en-US': Object.freeze(Object.assign(Object.create(null), global.SoduWorkLocaleMessages['en-US'], messages)) }));

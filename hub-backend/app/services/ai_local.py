@@ -15,7 +15,7 @@ from types import SimpleNamespace
 # ai_exec uses ai_local._RUNS for routing, so object identity must be preserved.
 from .local_base import (_CTX_WINDOW_DEFAULT, _LOCK, _PROFILES, _RUNS, _STORE,  # noqa: F401
                          _cfg_profile, _data_root, _env_for, _workspace_root,
-                         _claude_bin, _opencode_bin)
+                         _opencode_bin)
 from .local_base import (_load_baseline, _read_events, _record_event, _save_baseline, _save_meta,  # noqa: F401
                          _pid_alive, _store_dir, raw_tail_sync, reclaim,
                          _friendly, ctx_pct)
@@ -524,7 +524,8 @@ def _dispatch_sync_once(cfg: dict, t, files: list | None = None,
     key = ((assignee or {}).get("id") or default_assignee(cfg)["id"]).split(":", 1)[-1]
     prof = _PROFILES.get(key)
     if not prof:
-        return {"ok": False, "error": f"不认识的本地 CLI：{key}"}
+        return {"ok": False, "code": "AGENT_UNAVAILABLE",
+                "error": f"执行底座 {key} 已不可用，请选择其他底座；原会话历史已保留"}
     if (ctx.get("personalPlugin") or {}).get("key") and not str(
             ctx.get("personalPluginContext") or "").strip():
 

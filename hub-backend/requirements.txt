@@ -25,7 +25,7 @@ python-docx>=1.1,<2
 openpyxl>=3.1,<4
 python-pptx>=1.0,<2
 httpx>=0.28,<0.29
-# MIT: use the installed OS trust for Runner WSS and gateway HTTPS.
+# MIT: use installed OS trust for Runner WSS, gateway HTTPS and downloads.
 truststore==0.10.5
 Pillow>=12.3,<13
 PyJWT[crypto]>=2.10,<3

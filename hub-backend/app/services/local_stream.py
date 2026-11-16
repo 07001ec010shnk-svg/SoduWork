@@ -42,7 +42,8 @@ def _pid_alive(pid: int) -> bool:
             # Compare the PID column in CSV output, not substrings that may match memory values.
             result = subprocess.run(
                 ["tasklist", "/FI", "PID eq %d" % int(pid), "/NH", "/FO", "CSV"],
-                capture_output=True, timeout=10)
+                capture_output=True, timeout=10,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             if result.returncode != 0:
                 return True  # A failed process query cannot confirm that execution stopped.
             out = result.stdout.decode("utf-8", "replace")
@@ -107,10 +108,17 @@ def _kill_pid_tree(pid: int, proc=None) -> bool:
     return False
 
 
-def _kill_tree(ref: str) -> bool:
+def _kill_tree(ref: str, *, expected_pid=None, expected_proc=None, skip_host_cleanup=False) -> bool:
     with _LOCK:
         run = _RUNS.get(ref) or {}
         proc, pid = run.get("proc"), run.get("pid")
+        if skip_host_cleanup and run.get('_hostCleanup'):
+            return False
+        if ((expected_pid is not None and pid != expected_pid)
+                or (expected_proc is not None and proc is not expected_proc)):
+            return False
+    # Resolve identity once; slow platform termination must not hold the global
+    # session lock or look up a replacement execution by ref after yielding.
     return _kill_pid_tree(pid, proc)
 
 
@@ -660,12 +668,12 @@ def _llm_gate_check(prof: dict, cfg: dict) -> str:
     import urllib.error
     import urllib.request
     from urllib.parse import urlparse
-    from .runner_tls import client_context
+    from .runtime_tls import https_handler
     host = urlparse(base).hostname or base
     try:
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({}),
-            urllib.request.HTTPSHandler(context=client_context(base)))
+            https_handler())
         opener.open(urllib.request.Request(
             base.rstrip("/") + "/models", headers={"User-Agent": "SoduWork-Gate/1"}),
             timeout=5).close()

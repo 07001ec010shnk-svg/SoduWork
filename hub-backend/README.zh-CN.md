@@ -32,12 +32,6 @@ Runner 重启后，恢复终端仍绑定原执行的会话历史，不恢复模�
 
 ## 质量门禁
 
-Runner 控制连接和模型网关预检查通过 MIT 许可的 `truststore` 使用安装机的系统信任：
-macOS 使用 Security framework，Windows 使用 CryptoAPI，Linux 使用发行版的系统 CA 存储，
-不使用随包附带的公共根证书列表。保留显式 `SSL_CERT_FILE` / `SSL_CERT_DIR` 配置；
-无效配置会阻止连接。系统信任验证失败时直接报告，不换另一套信任策略重试；
-证书链与主机名校验始终开启。
-
 所有后端冒烟都登记在 `quality_manifest.py`，新增脚本未登记会直接阻断发布：
 
 ```bash
@@ -56,13 +50,11 @@ python3 quality_gate.py --list
 
 `live` 层可能连接真实 Hub、Runner、代码平台、模型或业务库，默认拒绝执行，不能用来替代离线发布门禁。详细口径见 [`../docs/release-scope.md`](../docs/release-scope.md)。
 
+受权限控制的回合在结算或开始下一轮前，必须确认执行宿主已退出。已有可靠的 Agent 退出记录时，正常收尾最多等待 30 秒，例如冻结程序清理自己的解压目录；取消和权限变更仍使用较短的停止期限。终止无法确认时继续跟踪原进程并阻止替换，不能仅凭已有回答或终止请求成功就判定完成。可运行 `python3 -m unittest test_local_process_cleanup`，使用隔离子进程验证延迟退出与终止未确认的行为。
+
 冒烟脚本集中在 [`smoke/`](smoke/) 目录。单独运行时，在 `hub-backend/` 目录使用模块命令，例如 `python3 -m smoke.smoke_capabilities`；质量门禁会选择已登记的模块。单元测试和 `tests/` 集成辅助脚本保留现有位置。
 
-## Harness² 推演恢复
-
-Harness² 在原生执行前完成七个无工具推演阶段。仅当模型完整响应明确报告达到输出 token 上限时，整轮允许重试同一阶段一次：最多使用 16,384 个输出 token，同时不得超过已配置的模型输出上限，不再只将较小的首次推演预算翻倍。两次尝试的实际用量均保留，共用原有整轮时限和 token 预算，客户端会显示重试进度。成功恢复后的预算会在本轮所有后续推演阶段沿用，仍受配置上限约束，不增加重试次数。调大模型最大输出会为恢复提供更多空间，但最多到 16,384 token，不会增加七阶段调用数、整轮时限或总 token 预算。未完成的计划会被丢弃；此恢复路径不重试异常断流、HTTP 错误或原生执行。持续截断或较低的配置上限仍会在执行前报错。
-
-Harness² 原生执行直接连接所配置的模型服务。每次请求的网络空闲超时为 120 秒，总时限为 300 秒。SSE 传输和组装后的模型输出分别限制大小。
+## DeepSeek Harness 回合完成状态
 
 DeepSeek Harness 收到 `max_tokens` 且工具操作已结束时，会在原会话中续跑一次，要求模型从已保存的工具结果接着做。再次达到输出上限时，会显示本轮未完成。
 
@@ -90,6 +82,10 @@ OpenCode 原生和 ACP 执行均保留当前回合的模型停止原因。达到
 
 ## OpenCode 安装与网络诊断
 
+macOS、Windows 和 Linux 上的 Runner 归档下载、模型网关连通性预检与安全控制连接共用一套 TLS 配置。默认通过 MIT 许可的 `truststore` 使用安装机的系统信任：macOS 使用 Security framework，Windows 使用 CryptoAPI，Linux 通过 OpenSSL 使用系统 CA 存储。不追加随包提供的公共 CA 文件。原生验证能力缺失或证书被拒绝时直接失败，不换另一套信任策略重试。证书链与主机名仍须通过校验。这不改变外部原生底座自身的 HTTPS 配置。
+
+非空的 `SSL_CERT_FILE` 或 `SSL_CERT_DIR` 会用指定的 CA 文件或 OpenSSL 哈希 CA 目录明确替换默认系统信任。路径缺失或无效时直接失败，不回退到系统或随包根证书。配置此覆盖时应提供完整的所需信任集合。空值使用默认系统信任。HTTP 客户端仅在 HTTPS 请求时加载证书，包括从 HTTP 跳转到 HTTPS；普通 HTTP 不依赖证书配置。现有下载代理选择和模型网关直连策略保持不变。
+
 受管安装器依次尝试明确配置的镜像、当前连接的 Hub 和官方发行源。macOS 上通过 Python 安装器下载归档时，每次尝试都会按协议合并系统 HTTP/HTTPS 代理与环境变量覆盖值。明确设为空的代理变量会禁用对应协议的系统代理。来自系统的代理同时保留系统绕过规则和 `NO_PROXY`；空 `NO_PROXY` 不会取消系统例外。显式代理覆盖仍采用标准环境绕过行为，当前 Hub 的精确来源（协议、主机、端口）保持直连。TLS 证书校验和固定 SHA-256 校验始终启用。这些下载规则不改变 npm 依赖安装或模型网关的连接策略。
 
 准备 Hub 镜像时，应使用与客户端预期一致的代码版本和固定 OpenCode 版本。不带参数运行 `fetch_opencode_assets.py` 只准备 Windows 资产。若需服务 Apple Silicon 和 Intel Mac，在该 Hub 代码目录的 `hub-backend/` 下运行：
@@ -101,6 +97,14 @@ python3 fetch_opencode_assets.py darwin-arm64 darwin-x64 darwin-x64-baseline
 脚本先验证固定 SHA-256，再将文件发布到 `downloads/opencode/`。部署这些文件后，通过 `GET /api/v1/download/opencode/info` 核对版本、平台和 `filename`，再用精确文件名下载 `/api/v1/download/opencode/{filename}`。`available: true` 仅代表文件存在；还需按固定摘要校验下载内容。Runner 在解压前也会独立校验该摘要。在代码目录准备好文件，不代表远程 Hub 已提供这些文件。
 
 安装失败时，查看本地 Runner 的 `runner.log` 中的结构化网络诊断及失败阶段。元数据请求、部分下载、摘要校验或 `--version` 探测单独成功，都不等于安装完成：下载、完整性校验、解压、可执行文件版本检查、执行依赖准备和激活必须全部成功，之后还要单独验证模型执行。共享诊断时不得包含凭据和原始代理配置；证书问题应修复可信证书配置，不得关闭 TLS 校验。
+
+在装有 `requirements-runner-build.txt` 依赖的专用环境中，用真实本机回环 HTTPS 和 PyInstaller 冻结探针验证生产网络模块：
+
+```sh
+python3 e2e_runner_tls.py --output /absolute/evidence/directory
+```
+
+检查覆盖随包原生验证模块、使用临时信任锚的真实 TLS 握手、显式信任覆盖，以及拒绝不可信证书和主机名不匹配的证书；不修改机器的证书信任存储。`--source-only` 可不打包执行同一调用路径。这些测试不能替代完整桌面、生产模型或其他操作系统验证。
 
 ## API 概览
 
@@ -121,6 +125,8 @@ python3 fetch_opencode_assets.py darwin-arm64 darwin-x64 darwin-x64-baseline
 设备长期密钥只由 Electron 主进程持有。客户端通过 `POST /api/v1/clients/enroll` 登记并轮换短期会话，
 业务请求使用 `Authorization: Device <session>`，WebSocket 使用同一短期会话；长期密钥不得进入渲染进程、日志或 URL。
 任务与流程状态以 Hub 为唯一事实源，本地缓存只用于断网展示和待同步命令，不能反向覆盖服务端新状态。
+
+禁用账号会使其已有设备会话及 AI/工具凭据失效，将设备退回待登录状态，并断开事件、终端和 Runner 连接；保留设备密钥、配置和历史归属。同一设备可以登录其他正常账号，原账号重新启用后需要重新登录，旧会话不会恢复。管理员单独停用的设备继续保持停用，阻止所有账号登录。旧版账号禁用逻辑已造成的设备停用，需要管理员核实后激活；重新启用账号不会自动解除设备停用。
 
 账号会话目录与来源投影包含 `contentLocation`：旧 Hub 正文为 `hub`，原始终端保留正文为 `source`，源版本匹配的有效迁移副本为 `replica`，无法确认引用时为 `unknown`。该字段不暴露私有副本标识，也不授予访问权限；客户端仍须执行既有账号、Hub 与执行权限检查。不能根据未知位置删除可能独立存在的本地副本。
 
@@ -155,6 +161,14 @@ python3 fetch_opencode_assets.py darwin-arm64 darwin-x64 darwin-x64-baseline
 Codex Harness、Qwen、Kimi 和 DeepSeek Harness 使用 Runner 数据根目录下的独立状态目录。如果权限、同名文件或存储故障导致目录无法创建，准备阶段会在启动执行组件前拒绝本轮执行，并返回不含个人路径或文件系统异常内容的可操作提示。继承的个人状态保持不变；修复目录后，可以通过正常准入检查重新派发。
 
 `python3 -m unittest test_acp_home_isolation` 验证真实文件冲突、模拟权限拒绝，以及真实子进程与 ACP 桥接下使用合成底座的 Runner 准入流程，确认准备失败时执行组件未启动、修复目录后能够执行。这不等同真实模型服务或原生平台验收。
+
+## ACP 文件与 Kimi 问答契约
+
+ACP `fs/read_text_file` 在省略 `limit` 时返回完整 UTF-8 文件并保留换行符；显式正整数 `line` / `limit` 用于范围读取。超过宿主 4 MB 限制的文件会明确报错，桥接不会静默截断内容后再交给原生编辑工具写回。
+
+Kimi 的 `AskUserQuestion` 权限回退会显示为具体答案选项。用户选择的 `optionId` 经桌面端和 Runner 原样回传；完全访问模式也必须等待用户回答，取消问题不会授权或拒绝后续工具操作。此回退保留 Kimi 只处理第一个问题、单选的行为，客户端不声明支持 elicitation 表单。显式标记 `localOnly: true` 的受管 Kimi 模型允许省略 API 密钥：启动环境会注入满足 Kimi 校验的固定非秘密占位值，不修改已保存凭据或远程模型校验。
+
+离线回归命令为 `python3 -m smoke.smoke_acp_runtime`、`python3 -m smoke.smoke_access_policy` 和 `python3 -m unittest tests.test_cli_runtime_compatibility`，覆盖完整文件编辑与追加、问答选择与取消、本地模型环境构造。另使用真实 Kimi Code 2.6.2 和回环模型接口验证了原生 ACP 行为；这不代表外部模型服务验收。
 
 ## DeepSeek Harness 私有探测
 

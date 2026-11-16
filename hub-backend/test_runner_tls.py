@@ -77,8 +77,6 @@ class RunnerTLSTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(truststore, "SSLContext", side_effect=AssertionError("must not load native trust")):
             self.assertEqual(runner_tls.websocket_options("ws://localhost"), {})
             self.assertEqual(runner_tls.websocket_options("https://fixture.invalid"), {})
-            for url in ("http://localhost", "ws://localhost"):
-                self.assertIsNone(runner_tls.client_context(url))
 
     def test_missing_or_corrupt_explicit_ca_fails_closed(self):
         bad = self.root / "bad.pem"
@@ -103,10 +101,56 @@ class RunnerTLSTests(unittest.IsolatedAsyncioTestCase):
                     async with connect(url, proxy=None, **options):
                         self.fail("untrusted peer accepted")
 
-    async def test_real_wss_uses_native_context_with_explicit_private_ca(self):
+    async def test_real_wss_uses_native_trust_without_explicit_ca(self):
         cert, context = certificate(self.root)
-        with patch.dict(os.environ, SSL_CERT_FILE=str(cert)):
+        native = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        native.load_verify_locations(cafile=str(cert))
+        with patch.object(truststore, "SSLContext", return_value=native) as factory:
             await self.exchange(context, success=True)
+        factory.assert_called_once_with(ssl.PROTOCOL_TLS_CLIENT)
+
+    async def test_explicit_private_ca_does_not_load_public_or_default_roots(self):
+        cert, context = certificate(self.root)
+        with patch.dict(os.environ, SSL_CERT_FILE=str(cert)), \
+                patch.object(certifi, "where", side_effect=AssertionError("explicit trust loaded public roots")), \
+                patch.object(ssl.SSLContext, "load_default_certs", side_effect=AssertionError("explicit trust loaded default roots")):
+            await self.exchange(context, success=True)
+
+    async def test_explicit_unrelated_ca_rejects_a_bundled_server_certificate(self):
+        cert, context = certificate(self.root)
+        other = self.root / "other"
+        other.mkdir()
+        unrelated, _ = certificate(other)
+        with patch.dict(os.environ, SSL_CERT_FILE=str(unrelated)), \
+                patch.object(certifi, "where", return_value=str(cert)):
+            await self.exchange(context, success=False)
+
+    async def test_explicit_ca_directory_does_not_add_bundled_roots(self):
+        cert, context = certificate(self.root)
+        capath = self.root / "private-roots"
+        capath.mkdir()
+        with patch.dict(os.environ, SSL_CERT_DIR=str(capath)), \
+                patch.object(certifi, "where", return_value=str(cert)):
+            await self.exchange(context, success=False)
+
+    def test_invalid_explicit_ca_configuration_never_falls_back(self):
+        cert, _ = certificate(self.root)
+        malformed = self.root / "invalid.pem"
+        malformed.write_text("not a certificate")
+        for override in (
+                {"SSL_CERT_FILE": str(self.root / "missing.pem")},
+                {"SSL_CERT_FILE": str(self.root)},
+                {"SSL_CERT_FILE": str(malformed)},
+                {"SSL_CERT_FILE": " "},
+                {"SSL_CERT_DIR": str(self.root / "missing-directory")},
+                {"SSL_CERT_DIR": str(cert)},
+                {"SSL_CERT_FILE": str(cert), "SSL_CERT_DIR": str(self.root / "missing-directory")},
+        ):
+            with self.subTest(override=override), patch.dict(os.environ, override), \
+                    patch.object(certifi, "where") as bundle:
+                with self.assertRaises((OSError, ValueError)):
+                    runner_tls.websocket_options("wss://fixture.invalid")
+                bundle.assert_not_called()
 
     async def test_untrusted_certificate_is_rejected(self):
         _, context = certificate(self.root)
@@ -140,7 +184,7 @@ class RunnerTLSTests(unittest.IsolatedAsyncioTestCase):
                 {"needs_llm": True}, {"llm": {"base": base, "key": "fixture-model-secret"}})
         return result, requests
 
-    async def test_gateway_https_uses_native_trust_with_explicit_ca_without_proxy(self):
+    async def test_gateway_https_uses_explicit_ca_without_proxy(self):
         cert, context = certificate(self.root)
         # A broken configured proxy must not intercept the direct model probe.
         with (patch.object(certifi, "where", side_effect=AssertionError("bundled roots")),
@@ -195,7 +239,9 @@ class RunnerTLSTests(unittest.IsolatedAsyncioTestCase):
     async def test_native_rejection_never_falls_back_to_bundled_roots(self):
         cert, context = certificate(self.root)
         rejection = ssl.SSLCertVerificationError(1, "fixture-native-trust-rejection")
-        with (patch.dict(os.environ, SSL_CERT_FILE=str(cert)),
+        native = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        native.load_verify_locations(cafile=str(cert))
+        with (patch.object(truststore, "SSLContext", return_value=native),
               patch("truststore._api._verify_peercerts_impl", side_effect=rejection) as verify,
               patch.object(certifi, "where", return_value=str(cert)) as bundled):
             result, requests = await self.gateway_check(context)

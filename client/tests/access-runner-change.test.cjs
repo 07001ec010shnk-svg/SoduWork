@@ -7,7 +7,7 @@ const { createRunnerRuntimeAdapter, getRunnerSessionDetails } = require('../main
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check) { for (let n = 0; n < 300; n++) { if (check()) return; await delay(10); } throw Error('Timed out'); }
 for (const [adapterId, connectors] of [
-  ['opencode', false], ['harness2', false], ['harness2', true], ['codex-harness', false], ['qwen', false],
+  ['opencode', false], ['kimi', false], ['kimi', true], ['codex-harness', false], ['qwen', false],
 ]) test(adapterId + (connectors ? ' with connectors' : '') + ' switches only at a real next turn; preserves actual Agent and revision across legacy upgrade', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-runner-change-'));
   const capability = { schema: rules.SCHEMA, supported: true, modes: [...rules.MODES], canChangeDuringSession: true };

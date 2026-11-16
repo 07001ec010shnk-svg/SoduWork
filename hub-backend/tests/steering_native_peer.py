@@ -62,8 +62,6 @@ def prompt(text, sid, emit_text):
 def acp(agent):
     native_outcome = NativeOutcome()
     sid = "native-" + agent
-    if agent == "harness2":
-        sid = "h2_" + "a" * 32
     resumed = False
     for raw in sys.stdin:
         message = json.loads(raw)
@@ -83,8 +81,6 @@ def acp(agent):
             assert params["sessionId"] == Path("native-session").read_text(encoding="utf-8")
             assert method == ("session/load" if agent == "dsh" else "session/resume")
             resumed = True
-            result = {}
-        elif method == "session/set_mode" and agent == "harness2":
             result = {}
         elif method == "session/prompt":
             native_outcome.begin(sid)

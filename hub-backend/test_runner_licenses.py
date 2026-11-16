@@ -51,7 +51,8 @@ class RunnerLicenseTest(unittest.TestCase):
         from types import SimpleNamespace
         from scripts.check_runner_tls_bundle import check
         for platform, backend in (("darwin", "_macos"), ("win32", "_windows"), ("linux", "_openssl")):
-            required = {"truststore", "truststore._api", "truststore." + backend, "app.services.runner_tls"}
+            required = {"truststore", "truststore._api", "truststore." + backend,
+                        "app.services.runner_tls", "app.services.runtime_tls"}
             for missing in (None, *sorted(required)):
                 modules = required - {missing}
                 archive = SimpleNamespace(open_embedded_archive=lambda name: SimpleNamespace(toc=modules))

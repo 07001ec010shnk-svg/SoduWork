@@ -10,6 +10,14 @@ async function shot(name){await wait(150);const file=path.join(root,name+'.png')
 async function run(){
  win=new BrowserWindow({show:false,width:1500,height:1000,webPreferences:{contextIsolation:true,nodeIntegration:false,offscreen:true,backgroundThrottling:false}});
  await win.loadFile(path.join(__dirname,'fixtures/model-settings.html'));await until('document.querySelectorAll(".md-nav-item").length===6');
+ await js('window.originalCompany=structuredClone(fixture.providers.find(p=>p.id==="company"));Object.assign(fixture.providers.find(p=>p.id==="company"),legacyCompanyOverrides.provider);fixture.myModels.push(structuredClone(legacyCompanyOverrides.model));_mdData=structuredClone(fixture);_mdMyModels=_mdData.myModels.slice();selectService("company")');
+ assert.equal(await js('document.querySelectorAll("[data-purl],[data-pkey],[data-pclear],[data-pdelete],[data-ptest],[data-mdedit],[data-mdeditor],[data-madd],[data-mdel],[data-mdcheck]").length'),0);
+ assert.ok(await js('document.querySelector(".cfg-detail").textContent.includes("\\u670d\\u52a1\\u7aef\\u540c\\u6b65\\uff0c\\u53ea\\u8bfb")'));
+ await js('_mdTouchProvider("company",{baseUrl:"https://unwanted.invalid/v1"});_mdCheckModel("company","legacy-company-model");_mdDoTest({getAttribute:()=>"company"})');
+ assert.equal(await js('saved.length+testCalls.length+capabilityCalls.length'),0);
+ assert.equal(await js('_mdProvider("company").baseUrl'),'https://legacy-override.example.test/v1');
+ report.cases.push('Company service with legacy personal overrides remains read-only with no mutation or probe calls');
+ await js('fixture.providers=fixture.providers.map(p=>p.id==="company"?originalCompany:p);fixture.myModels=fixture.myModels.filter(m=>m.providerId!=="company");_mdData=structuredClone(fixture);_mdMyModels=_mdData.myModels.slice();');
  await js('selectService("personal")');
  assert.equal(await js('document.querySelectorAll(".md-settings-section").length'),2);
  assert.equal(await js('document.querySelectorAll(".cfg-subsection").length'),1);

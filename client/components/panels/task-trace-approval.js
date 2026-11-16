@@ -126,7 +126,8 @@
         // Use the approval's frozen criteria, not a mutable task field. Fail
         // before navigation; runtime and Hub guards still recheck on send.
         if (!Array.isArray(context?.criteria) || !context.criteria.length || !context.artifactVersionId)
-          throw new Error(translated('自动验收需要明确的验收标准和固定交付版本，请先补齐或选择手动验收'));
+          throw Object.assign(new Error(translated('自动验收需要明确的验收标准和固定交付版本，请切换为“手动验收”，核对交付成果后确认。')),
+            {code: 'AUTO_ACCEPTANCE_PREREQUISITES'});
       }
       const capabilityResult = currentTeamCapability();
       const capability = capabilityResult && typeof capabilityResult.then === 'function'
@@ -423,6 +424,7 @@
         Boolean(approval.myDecision) || submitting.has(id) || block.dataset.approvalSubmitted === 'true' ||
         (manualOnly && (item.getAttribute('data-tfd-acceptance-session') === 'auto' ||
           (item.hasAttribute?.('data-tfd-acceptance-mode') && item.value === 'auto'))) ||
+        (Boolean(block.dataset.tfdAutoUnavailable) && item.getAttribute('data-tfd-acceptance-session') === 'auto') ||
         (item.getAttribute('data-tfd-approval-action') === 'approve' &&
           ((needsVerification(approval) && !(verify && verify.checked)) ||
             (gate.readiness?.canApprove === false)));
@@ -577,6 +579,7 @@
         decision: button.getAttribute('data-tfd-acceptance-session') === 'auto' ? 'auto' : 'manual',
       });
     } catch (error) {
+      if (error?.code === 'AUTO_ACCEPTANCE_PREREQUISITES') block.dataset.tfdAutoUnavailable = error.message;
       showError(block, String(error?.message || '验收会话未能打开，请重试'));
     } finally {
       submitting.delete(id); block.removeAttribute('aria-busy');
@@ -664,7 +667,7 @@
       renderSubject(block, item);
       renderProof(block, item);
       renderGate(block, item);
-      showError(block, '');
+      showError(block, block.dataset.tfdAutoUnavailable || '');
     } catch (error) {
       if (epoch !== acceptanceEpoch || !block.isConnected) return;
       const permissionDenied = error && (error.status === 403 || error.status === 404);
@@ -748,6 +751,7 @@
         consent: block.getAttribute('data-tfd-consent'),
         verified: Boolean(block.querySelector('[data-tfd-approval-verify]')?.checked),
         acceptanceMode: block.dataset.tfdAcceptanceChoice || 'manual',
+        autoUnavailable: block.dataset.tfdAutoUnavailable || '',
       }];
     }));
     currentRoot.replaceWith(wanted);
@@ -762,6 +766,10 @@
       if (proof) proof.open = draft.proofOpen;
       if (verify && draft.consent === block.getAttribute('data-tfd-consent')) verify.checked = draft.verified;
       if (draft.consent === block.getAttribute('data-tfd-consent')) {
+        if (draft.autoUnavailable) {
+          block.dataset.tfdAutoUnavailable = draft.autoUnavailable;
+          showError(block, draft.autoUnavailable);
+        }
         block.dataset.tfdAcceptanceChoice = draft.acceptanceMode;
         const mode = block.querySelector('[data-tfd-acceptance-mode][value="' + draft.acceptanceMode + '"]');
         if (mode) mode.checked = true;

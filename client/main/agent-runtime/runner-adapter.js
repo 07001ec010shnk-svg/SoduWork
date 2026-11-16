@@ -1696,11 +1696,16 @@ async function createRunnerHandle(request, defaults, initialSession) {
     send(text, attachments, options) { return handle.submit(text, attachments, options).completion; },
     async answerUi(value = {}) {
       const request = state.pendingPermissions.find(row => row.requestId === value.requestId);
-      if (state.disposed || state.cancelRequested || state.stopSent || !request || request.policyRevision !== value.policyRevision || !['once', 'session', 'deny'].includes(value.decision)) {
+      const question = request?.action === 'native.question';
+      const validDecision = question ? value.decision === 'deny' || value.decision === 'answer' &&
+        typeof value.optionId === 'string' && Array.isArray(request.options) && request.options.some(item => item?.optionId === value.optionId)
+        : ['once', 'session', 'deny'].includes(value.decision);
+      if (state.disposed || state.cancelRequested || state.stopSent || !request || request.policyRevision !== value.policyRevision || !validDecision) {
         return { ok: false, reason: '这条权限请求已失效，请使用当前请求' };
       }
       const reply = await runtime.rpc('job.permission', { ref: state.runnerRef,
-        requestId: value.requestId, policyRevision: value.policyRevision, decision: value.decision }, 15000);
+        requestId: value.requestId, policyRevision: value.policyRevision, decision: value.decision,
+        ...(question && value.decision === 'answer' ? { optionId: value.optionId } : {}) }, 15000);
       const result = reply?.data || reply;
       if (reply?.ok === false || result?.ok === false) return { ok: false, reason: result?.error || reply?.error || '权限确认失败，请重试' };
       state.pendingPermissions = state.pendingPermissions.filter(row => row.requestId !== value.requestId);
@@ -2068,7 +2073,7 @@ module.exports = {
   RUNNER_CAPABILITIES,
   createRunnerRuntimeAdapter,
   getRunnerSessionDetails,
-  _runnerInventory,
+  _runnerInventory, _dropRunnerInventory,
   _uuidV5,
   _skillRows,
 };

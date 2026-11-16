@@ -14,11 +14,13 @@ router = APIRouter(prefix="/api/v1", tags=["models"])
 
 
 async def _target(session, client, provider_id, model):
+    providers = await model_catalog.effective_provider_map(session, client)
+    if client is not None and provider_id in providers and not providers[provider_id].get("personal"):
+        raise HTTPException(403, "组织模型能力只能由管理员检测")
     rows = await model_catalog.usable(session, client)
     row = next((item for item in rows if item["providerId"] == provider_id and item["name"] == model), None)
     if row is None:
         raise HTTPException(404, "请先保存模型，并确认服务已启用且凭据可用")
-    providers = await model_catalog.effective_provider_map(session, client)
     conf = await model_catalog.resolve(session, client, model, provider_id=provider_id,
                                        available=rows, providers=providers)
     scope = capabilities.principal_scope(client, row, conf.get("keyFrom"))

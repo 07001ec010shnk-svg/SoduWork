@@ -179,7 +179,7 @@ test('automation editor keeps model selection independent from the chosen Agent'
 
 test('managed automation shares the model catalog, excludes image models and keeps device models off remote seats', async () => {
   const localRef = 'local:model-' + 'b'.repeat(32), imageRef = 'local:model-' + 'd'.repeat(32);
-  for (const runtime of ['pi', 'qwen', 'opencode', 'dsh', 'kimi', 'harness2', 'codex-harness']) {
+  for (const runtime of ['pi', 'qwen', 'opencode', 'dsh', 'kimi', 'codex-harness']) {
     const ctx = context({ taskExecutionOptions: async () => ({
       substrates: [{ key: 'local:' + runtime, cli: runtime, available: true, modelPick: true,
         locations: [{ assigneeId: 'local:' + runtime, mode: 'local', label: 'Local device' },

@@ -290,3 +290,15 @@ test('locale changes reformat every report timestamp without changing its stored
     assert.deepEqual(elements.map(element => element.textContent), elements.map(element => new Date(element.dataset.mdCheckedAt).toLocaleString(next)));
   }
 });
+
+for (const localOnly of [false, true]) test('capability checks refuse a company provider even with legacy models and localOnly=' + localOnly, async () => {
+  const f = probeFixture(localOnly), before = f.draft();
+  f.evaluate('fixtureCatalog.providers[0].personal = false; fixtureCatalog.providers[0].addressOverridden = true;');
+  const models = f.evaluate('JSON.stringify(_mdMyModels)');
+  await f.check();
+  assert.deepEqual(f.saves, []);
+  assert.deepEqual(f.calls, []);
+  assert.equal(f.evaluate('_mdChecks.size'), 0);
+  assert.equal(f.evaluate('JSON.stringify(_mdMyModels)'), models);
+  assert.equal(f.draft(), before);
+});

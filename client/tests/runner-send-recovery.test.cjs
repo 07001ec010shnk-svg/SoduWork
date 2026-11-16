@@ -11,7 +11,7 @@ async function until(check) { for (let n = 0; n < 200; n++) { if (check()) retur
 async function fixture(t, config = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-send-recovery-'));
   const app = config.persist ? { getPath: () => path.join(root, 'profile') } : undefined;
-  const alias = 'send-recovery', ref = _uuidV5('9af442c8-cd1d-4b91-a668-22da2b2635bf', 'chat:' + alias + ':harness2');
+  const alias = 'send-recovery', ref = _uuidV5('9af442c8-cd1d-4b91-a668-22da2b2635bf', 'chat:' + alias + ':kimi');
   const calls = []; let dispatches = 0, comments = 0, status = 'done', read = null;
   const runtime = { async rpc(op, input) {
     calls.push({ op, input });
@@ -27,7 +27,7 @@ async function fixture(t, config = {}) {
       items: status === 'done' ? [{ seq: comments + 1, kind: 'say', text: 'Recovered reply ' + comments }] : [] } };
     throw Error('Unexpected recovery operation: ' + op);
   } };
-  const adapter = createRunnerRuntimeAdapter({ app, runtimeSpec: catalog.runtime('harness2'),
+  const adapter = createRunnerRuntimeAdapter({ app, runtimeSpec: catalog.runtime('kimi'),
     ...(config.realRunner ? {} : { runnerRuntime: runtime }),
     modelConfig: { fetchModel: async () => ({ ok: true, model: { id: 'synthetic', key: 'synthetic', baseUrl: 'http://synthetic.invalid' } }) } });
   const session = await adapter.createSession({ identity: {}, native: { runner: { openOptions: { ref: alias, cwd: root } } } });
