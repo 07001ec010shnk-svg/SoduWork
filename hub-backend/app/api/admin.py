@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
@@ -310,16 +310,17 @@ async def update_user(
                 body.positions if body.positions is not None else target.positions)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-    updated = await rbac.update_user(session, uid, patch)
+    client_ids = []
     if was_active and patch.get("isActive") is False:
-        bound_clients = list((await session.execute(
-            select(Client).where(Client.user_ref == uid)
-        )).scalars().all())
-        for bound in bound_clients:
-            if bound.auth_state != "revoked":
-                device_auth.revoke(bound)
-        await session.commit()
-        client_ids = [bound.id for bound in bound_clients]
+        # End this account's sessions while preserving device identity/history
+        # and explicit administrator bans. rbac.update_user commits both changes.
+        client_ids = list((await session.scalars(update(Client).where(
+            Client.user_ref == uid, Client.auth_state != "revoked",
+        ).values(auth_state="pending", auth_version=Client.auth_version + 1,
+                 activated_at=None, revoked_at=None).returning(Client.id)
+            .execution_options(synchronize_session=False))).all())
+    updated = await rbac.update_user(session, uid, patch)
+    if client_ids:
         await device_connections.disconnect_many(client_ids)
     await audit.log(session, user, "user.update", "user", uid, target.display_name or target.username,
                     {"fields": [k for k in patch if k != "password"], "pwChanged": "password" in patch})
