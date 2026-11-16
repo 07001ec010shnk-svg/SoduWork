@@ -279,6 +279,13 @@
     }).catch(() => { /* plugin icons are optional; the Skill list is already usable */ });
   }
   function _loadCapabilities(force, options = {}) {
+    const auth = global.SoduWorkAPI?.clientAuthSnapshot?.();
+    if (auth?.state && auth.state !== 'active') {
+      _capabilityEpoch++; _capabilityRetryKey = '';
+      _capabilities = []; _skills = [];
+      _skillPicker?.setItems([]); _renderCapabilities();
+      return Promise.resolve();
+    }
     const preserveSelection = options === true || options?.preserveSelection === true;
     const api = global.soduWorkAPI && (global.soduWorkAPI.conversationSession || global.soduWorkAPI.piSession);
     if (force === true) { _capabilityEpoch++; _skillIconSeq++; }

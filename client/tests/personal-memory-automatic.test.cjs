@@ -143,7 +143,7 @@ test('only visible output after latest user contributes: thoughts, old answers a
   assert.equal(valid.completed, true);
   assert.doesNotMatch(JSON.stringify(valid), /HIDDEN|Previous result|private-key-value/);
 });
-for (const adapter of ['pi', 'codex-harness', 'opencode', 'claude', 'codex', 'qwen', 'dsh']) {
+for (const adapter of ['pi', 'codex-harness', 'opencode', 'codex', 'qwen', 'dsh']) {
   test(adapter + ': completed snapshot survives immediate close/new turn, is owner-scoped and reused without explicit selection', async t => {
     const f = fixture(t), handlers = new Map();
     const service = sessions.install({ app: f.app, ipcMain: { handle: (key, fn) => handlers.set(key, fn) }, identityOf: async () => identity('one') });

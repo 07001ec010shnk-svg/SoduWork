@@ -14,7 +14,7 @@
 
 **Multi-harness · Multi-agent · Self-hosted**
 
-Works with Pi · OpenCode · DeepSeek Harness · Qwen Code · Kimi Code · Codex Harness · Codex · Claude Code · Google Harness²
+Works with Pi · OpenCode · DeepSeek Harness · Qwen Code · Kimi Code · Codex Harness · Codex
 
 ```sh
 git clone https://github.com/mdiri-ai/SoduWork
@@ -100,7 +100,7 @@ The first run installs dependencies, then starts the Hub, the admin console and 
 
 1. **Add a chat model as well.** Under **Capabilities → Model catalog**, find the service you connected, choose **Add model**, enter the provider's exact model ID, select **Chat model**, and save. Saving a service credential alone does not create a selectable model.
 2. **Open the desktop client and sign in to the same Hub.** Use `--desktop` when starting from source. The browser admin console configures the service; check that **Connection** on the desktop sign-in screen points to that same Hub.
-3. **Choose New conversation, Pi, and the model you added.** Pi uses the SoduWork model catalog. Runtimes such as Codex and Claude Code use their own accounts and need their own sign-in; they do not automatically use this API key.
+3. **Choose New conversation, Pi, and the model you added.** Pi uses the SoduWork model catalog. Codex uses its own account and needs its own sign-in; it does not automatically use this API key.
 4. **Try a small task.** For example: “Turn these fictional meeting notes into an action table with owner and due date. Mark missing information as unconfirmed: Alex will organize the requirements by Friday; Sam will check the quotation.” Check the returned table against the notes.
 5. **Create a requirement when you need assignment and acceptance.** Describe the goal, inputs and acceptance criteria, open **Arrange execution**, choose an Agent and model, and inspect the delivery before accepting it. A normal conversation does not require a project, plugin or automation first.
 
@@ -197,8 +197,6 @@ A harness is the agent runtime that does the work. It is not the model. SoduWork
 | Kimi Code | Your SoduWork models | ACP, installed on demand |
 | Codex Harness | Your SoduWork models | ACP, installed on demand |
 | Codex | Its own OpenAI account | Native adapter, installed on demand |
-| Claude Code | Its own Anthropic account | ACP adapter, official installer |
-| Google Harness² | Your SoduWork models | Native adapter; core bundled, prepared on first use |
 
 </details>
 

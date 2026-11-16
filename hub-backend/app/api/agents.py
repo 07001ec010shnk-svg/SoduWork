@@ -184,7 +184,7 @@ async def put_agent_model(
     """
     key = str(body.get("key") or "").strip().lower()
     if key not in agent_setup._SPECS:
-        raise HTTPException(status_code=404, detail="没有这个 AI 助手")
+        raise HTTPException(status_code=404, detail="该执行底座已不可用，请选择其他底座")
     name = str(body.get("model") or "").strip()[:160]
     if name and (AGENTS.get(key) or {}).get("modelMode") != "managed":
         raise HTTPException(status_code=422, detail="该底座使用独立账号模型，不能选择 Hub 模型")
@@ -215,7 +215,7 @@ async def post_agent_install(
     key = str(body.get("key") or "").strip()
     action = str(body.get("action") or "install").strip()
     if key not in agent_setup._SPECS:
-        raise HTTPException(status_code=404, detail="没有这个 AI 助手")
+        raise HTTPException(status_code=404, detail="该执行底座已不可用，请选择其他底座")
     if action not in ("install", "update", "uninstall", "check", "login", "login-isolated", "login-cancel") or (action.startswith("login") and key != "codex"):
         raise HTTPException(status_code=400, detail="不认识的操作")
     if action == "uninstall" and key == "pi":
@@ -260,7 +260,7 @@ async def post_agent_probe(
     """
     key = str(body.get("key") or "").strip()
     if key not in agent_setup._SPECS:
-        raise HTTPException(status_code=404, detail="没有这个 AI 助手")
+        raise HTTPException(status_code=404, detail="该执行底座已不可用，请选择其他底座")
     # Native account runtimes choose their own model. Do not send managed keys
     # or claim that an unused company model was exercised by their probe.
     llm = (await model_catalog.resolve_for_agent(session, client, key, str(body.get("model") or ""))
@@ -285,7 +285,7 @@ async def post_agent_configure(
     """
     key = str(body.get("key") or "").strip()
     if key not in agent_setup._SPECS:
-        raise HTTPException(status_code=404, detail="没有这个 AI 助手")
+        raise HTTPException(status_code=404, detail="该执行底座已不可用，请选择其他底座")
     llm = (await model_catalog.resolve_for_agent(session, client, key, str(body.get("model") or ""))
            if (AGENTS.get(key) or {}).get("modelMode") == "managed" else {})
     runner = _pick_runner(client, body.get("runnerId"))

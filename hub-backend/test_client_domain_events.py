@@ -1,5 +1,6 @@
 """Domain invalidations preserve committed API responses and release DB before fanout."""
 import asyncio
+import copy
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -21,7 +22,10 @@ class ClientDomainEventsTests(IsolatedDatabase):
             session.add_all([
                 User(id="alice", username="fixture-alice", is_active=True),
                 User(id="bob", username="fixture-bob", is_active=True),
-                Client(id="one", user_ref="alice", auth_state="active", model_keys={"provider": "personal-fixture"}),
+                Client(id="one", user_ref="alice", auth_state="active", model_keys={"custom-personal": "personal-fixture"},
+                       config={"modelProviders": [{"id": "custom-personal", "name": "Personal",
+                                                    "baseUrl": "https://personal.invalid/v1", "personal": True}]},
+                       models=[{"providerId": "custom-personal", "name": "personal-model"}]),
                 Client(id="two", user_ref="alice", auth_state="active"),
                 Client(id="other", user_ref="bob", auth_state="active"),
                 Client(id="revoked", user_ref="alice", auth_state="revoked"),
@@ -37,7 +41,7 @@ class ClientDomainEventsTests(IsolatedDatabase):
         with patch.object(events.native_discovery, "wake", new_callable=AsyncMock) as wake:
             async with self.sessions() as session:
                 client = await session.get(Client, "one")
-                result = await personal_models.put_my_models({"keys": {"provider": "replacement-fixture"}}, client, session)
+                result = await personal_models.put_my_models({"keys": {"custom-personal": "replacement-fixture"}}, client, session)
                 self.assertEqual(set(result), {"ok", "usable", "mediaUsable"})
                 await agents.put_agent_model({"key": "pi", "model": "model"}, client, session)
                 self.assertEqual(await config.put_config({"theme": "dark", "modelProviders": []}, client, session), {"theme": "dark"})
@@ -66,12 +70,13 @@ class ClientDomainEventsTests(IsolatedDatabase):
                 patch.object(model_capabilities.probe, "run", new_callable=AsyncMock,
                              return_value={"checks": {"imageInput": {"status": "passed"}}}):
             async with self.sessions() as session:
-                await model_capabilities.check_saved(body, session, await session.get(Client, "one"))
+                await model_capabilities.check_saved({**body, "providerId": "custom-personal", "model": "personal-model"},
+                                                    session, await session.get(Client, "one"))
             await events.flush_for_test(self.sessions)
             self.assertEqual([call.args for call in wake.await_args_list], [("one", "alice", "models")])
             wake.reset_mock()
             async with self.sessions() as session:
-                await model_capabilities.check_saved(body, session, await session.get(Client, "two"))
+                await model_capabilities.check_saved(body, session)
             await events.flush_for_test(self.sessions)
             self.assertEqual(len(wake.await_args_list), 3)
 
@@ -154,6 +159,7 @@ class ClientDomainEventsTests(IsolatedDatabase):
     async def test_admin_cannot_push_local_model_configuration(self):
         with patch.object(admin, "_assert_client_in_scope", new_callable=AsyncMock):
             async with self.sessions() as session:
+                before = copy.deepcopy((await session.get(Client, "one")).config)
                 with self.assertRaises(HTTPException) as raised:
                     await admin.client_push(
                         "one",
@@ -165,7 +171,7 @@ class ClientDomainEventsTests(IsolatedDatabase):
                 self.assertEqual(raised.exception.status_code, 403)
                 self.assertIn("本地模型配置", str(raised.exception.detail))
                 client = await session.get(Client, "one")
-                self.assertNotIn("modelProviders", client.config or {})
+                self.assertEqual(client.config, before)
 
     async def test_personal_model_read_purges_legacy_local_state(self):
         async with self.sessions() as session:

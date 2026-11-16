@@ -56,27 +56,11 @@ python3 quality_gate.py --profile extended --scope all
 
 The manifest in `quality_manifest.py` registers checks and their profiles. Unregistered checks block the gate. `live` checks connect to real Hubs, Runners, providers, or business data; they are not part of default offline acceptance.
 
+Permission-controlled turns confirm that their execution host has exited before settlement or a replacement turn. A reliable Agent exit receipt allows up to 30 seconds for normal host cleanup, such as a frozen executable removing its extraction directory; cancellation and permission changes retain the shorter stop deadline. If termination cannot be confirmed, the original process remains tracked and blocks replacement. An answer or a successful kill request alone does not establish successful completion. Run `python3 -m unittest test_local_process_cleanup` to verify delayed shutdown and failed-termination behavior with isolated subprocesses.
+
 Smoke checks live in [`smoke/`](smoke/). To run one directly, use its module from the `hub-backend/` directory, for example `python3 -m smoke.smoke_capabilities`. The quality gate selects the appropriate registered modules. Unit tests and `tests/` integration helpers keep their existing locations.
 
-## Harness² planning recovery
-
-Harness² completes seven tool-free planning stages before native execution. If a
-complete provider response explicitly reaches its output-token limit, the whole
-turn permits one retry of that same stage with up to 16,384 output tokens, capped
-by the configured model output limit, instead of doubling the small initial
-planning allowance. Both attempts
-retain their reported usage and share the existing turn deadline and token budget.
-The client receives a retry progress message. Successful recovery headroom is reused
-for all later planning stages within the configured cap, without more retries.
-Increasing the model's maximum output gives recovery more room up to 16,384 tokens;
-it does not increase the seven-stage count, turn deadline, or total token budget.
-Partial plans are discarded; broken
-streams, HTTP failures and native execution are not retried by this recovery path.
-Persistent truncation or a lower configured cap still fails before execution.
-
-Native Harness² model requests connect directly to the configured endpoint. Each
-request has a 120-second network idle timeout and a 300-second total deadline.
-The SSE transport and the assembled output have separate size limits.
+## DeepSeek Harness turn completion
 
 DeepSeek Harness can continue once within the same native session when the model
 reports `max_tokens` and tool activity has settled. It asks the model to finish
@@ -108,6 +92,10 @@ Native and ACP OpenCode executions preserve the current turn's provider finish r
 
 ## OpenCode installation and network diagnostics
 
+Runner archive downloads, model-gateway reachability checks and the macOS Runner's secure control connection share a strict TLS trust configuration. By default, they retain Python/OpenSSL system roots and add the packaged `certifi` public CA bundle, including in frozen executables whose build-time OpenSSL certificate paths do not exist on the user's machine. Certificate chains and hostnames remain verified. This does not change external native harnesses' own HTTPS configuration.
+
+Nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR` values explicitly replace that default trust selection; a missing or invalid path fails without falling back to public roots. Supply the complete required trust set when configuring a private CA. Empty values do not select an exclusive override; default path discovery still follows Python/OpenSSL environment semantics. Trust is loaded only for HTTPS requests, including redirects from HTTP; plain HTTP does not depend on certificate configuration. Existing download proxy selection and direct model-gateway routing are unchanged.
+
 The managed installer tries an explicitly configured mirror, the connected Hub, then the official release. On macOS, archive downloads through the Python installer merge system HTTP/HTTPS proxy settings with environment overrides by scheme on every attempt. An explicitly empty proxy variable disables that scheme's system proxy. System-sourced proxies retain their system bypass rules alongside `NO_PROXY`; an empty `NO_PROXY` does not cancel the system exceptions. Explicit proxy overrides retain standard environment bypass behavior, and requests to the exact connected Hub origin stay direct. TLS certificate verification and pinned SHA-256 verification remain enabled. These download rules do not change npm dependency installation or model-gateway routing.
 
 Prepare the Hub mirror using the same code revision and pinned OpenCode version expected by the clients. Running `fetch_opencode_assets.py` without arguments prepares only Windows assets. To serve Apple Silicon and Intel Macs, run from that Hub checkout's `hub-backend/` directory:
@@ -120,6 +108,14 @@ The script verifies the pinned SHA-256 before publishing files under `downloads/
 
 For failed attempts, inspect the local Runner's `runner.log` for structured network diagnostics and the failed stage. A successful metadata request, partial download, checksum check or `--version` probe alone is not a completed installation: download, integrity check, extraction, executable version check, execution-dependency preparation and activation must all succeed. Model execution needs its own subsequent verification. Keep credentials and raw proxy configuration out of shared diagnostics; repair trusted certificate configuration rather than disabling TLS checks.
 
+Verify the production network modules with real loopback HTTPS and a frozen PyInstaller probe in a dedicated environment containing `requirements-runner-build.txt` dependencies:
+
+```sh
+python3 e2e_runner_tls.py --output /absolute/evidence/directory
+```
+
+The check verifies the packaged CA resource, missing default roots, strict explicit overrides, and rejection of untrusted or mismatched certificates. `--source-only` exercises the same paths without freezing. These fixtures do not replace full desktop, production model or other operating-system verification.
+
 ## API and trust boundaries
 
 - Devices enroll with `POST /api/v1/clients/enroll`, then use a short-lived device session. Device long-term keys remain in the Electron main process; Hub stores only their digest.
@@ -127,6 +123,8 @@ For failed attempts, inspect the local Runner's `runner.log` for structured netw
 - Tasks use `/api/v1/tasks`, task-specific operations, batch updates, completed-task clearing, and agent run/retry/takeover routes. Configuration uses `/api/v1/config`.
 - Administrators sign in at `/api/v1/admin/login` and use bearer tokens for administrator APIs, including clients, tasks, and dispatch.
 - Long-term device keys must not enter renderers, logs, or URLs. Server state is authoritative; offline client caches must not overwrite it.
+
+Disabling an account invalidates its existing device sessions and AI/tool tickets, returns devices to pending sign-in, and closes their event, terminal and Runner channels. Device keys, configuration and historical ownership are retained. Another active account can sign in on the same device; re-enabling the original account requires a new sign-in and never restores old sessions. Explicit administrator device bans remain revoked and block every account. Devices already revoked by older account-disable behavior require an administrator to review and activate them; account re-enablement does not automatically lift device bans.
 
 Account conversation directory and source projections include `contentLocation`: `hub` for legacy Hub content, `source` for content retained by the original endpoint, `replica` for a valid migrated copy at the current source revision, or `unknown` when the reference cannot be established. The field does not expose private replica identifiers or grant access; clients must retain existing account, Hub, and execution checks. An unknown location must not be used to discard a potentially independent local copy.
 
@@ -172,6 +170,14 @@ Repeating the same creation request for the same account and device returns its 
 Codex Harness, Qwen, Kimi and DeepSeek Harness use private state directories under the Runner data root. If a directory cannot be created because of permissions, a conflicting file or storage failure, preparation rejects the turn before launching an executor. The client receives an actionable diagnostic without personal paths or filesystem exception contents. Inherited personal state remains untouched; repairing the directory allows a new dispatch through the normal admission checks.
 
 `python3 -m unittest test_acp_home_isolation` checks real file collisions, injected permission failures, and Runner admission through a real subprocess/ACP bridge with a synthetic vendor. It verifies that failed preparation launches no executor and that a repaired directory permits execution. This does not establish real-provider or native-platform acceptance.
+
+## ACP file and Kimi question contracts
+
+ACP `fs/read_text_file` returns the complete UTF-8 file when `limit` is omitted, preserving line endings. Explicit positive `line`/`limit` values select a range. Files over the 4 MB host limit fail explicitly; the bridge never returns a silently truncated file that a native edit could write back.
+
+Kimi's `AskUserQuestion` permission fallback is presented as answer choices. The selected `optionId` travels through the desktop and Runner unchanged; full access still waits for a human answer, and cancelling does not grant or deny subsequent tool operations. This fallback retains Kimi's first-question, single-choice behavior; the client does not advertise elicitation forms. A managed Kimi model explicitly marked `localOnly: true` may omit its API key: the launch environment receives a fixed non-secret placeholder required by Kimi, without changing saved credentials or remote-model validation.
+
+Offline regressions run with `python3 -m smoke.smoke_acp_runtime`, `python3 -m smoke.smoke_access_policy`, and `python3 -m unittest tests.test_cli_runtime_compatibility`. They cover whole-file edit/append, question selection/cancellation and local model environment construction. Real Kimi Code 2.6.2 was also checked against a loopback model fixture; this verifies the native ACP behavior, not acceptance by an external model provider.
 
 ## Private DeepSeek Harness probe
 

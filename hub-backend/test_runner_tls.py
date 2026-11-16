@@ -49,11 +49,14 @@ class RunnerTLSTests(unittest.IsolatedAsyncioTestCase):
         self.temp = tempfile.TemporaryDirectory(prefix="soduwork-runner-tls-")
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
-        # A clean end-user Mac has neither the CI Python nor Homebrew CA paths.
-        env = patch.dict(os.environ, SSL_CERT_FILE=str(self.root / "missing.pem"),
-                         SSL_CERT_DIR=str(self.root / "missing-directory"))
+        # Model absent build-host default roots without configuring an explicit
+        # trust override, which must fail closed when its path is unavailable.
+        env = patch.dict(os.environ, SSL_CERT_FILE="", SSL_CERT_DIR="")
         env.start()
         self.addCleanup(env.stop)
+        defaults = patch.object(ssl.SSLContext, "load_default_certs", return_value=None)
+        defaults.start()
+        self.addCleanup(defaults.stop)
         platform = patch.object(runner_tls, "sys", SimpleNamespace(platform="darwin"))
         platform.start()
         self.addCleanup(platform.stop)
@@ -103,10 +106,48 @@ class RunnerTLSTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(certifi, "where", return_value=str(cert)):
             await self.exchange(context, success=True)
 
-    async def test_explicit_private_ca_is_retained_alongside_public_bundle(self):
+    async def test_explicit_private_ca_does_not_load_public_or_default_roots(self):
         cert, context = certificate(self.root)
-        with patch.dict(os.environ, SSL_CERT_FILE=str(cert)):
+        with patch.dict(os.environ, SSL_CERT_FILE=str(cert)), \
+                patch.object(certifi, "where", side_effect=AssertionError("explicit trust loaded public roots")), \
+                patch.object(ssl.SSLContext, "load_default_certs", side_effect=AssertionError("explicit trust loaded default roots")):
             await self.exchange(context, success=True)
+
+    async def test_explicit_unrelated_ca_rejects_a_bundled_server_certificate(self):
+        cert, context = certificate(self.root)
+        other = self.root / "other"
+        other.mkdir()
+        unrelated, _ = certificate(other)
+        with patch.dict(os.environ, SSL_CERT_FILE=str(unrelated)), \
+                patch.object(certifi, "where", return_value=str(cert)):
+            await self.exchange(context, success=False)
+
+    async def test_explicit_ca_directory_does_not_add_bundled_roots(self):
+        cert, context = certificate(self.root)
+        capath = self.root / "private-roots"
+        capath.mkdir()
+        with patch.dict(os.environ, SSL_CERT_DIR=str(capath)), \
+                patch.object(certifi, "where", return_value=str(cert)):
+            await self.exchange(context, success=False)
+
+    def test_invalid_explicit_ca_configuration_never_falls_back(self):
+        cert, _ = certificate(self.root)
+        malformed = self.root / "invalid.pem"
+        malformed.write_text("not a certificate")
+        for override in (
+                {"SSL_CERT_FILE": str(self.root / "missing.pem")},
+                {"SSL_CERT_FILE": str(self.root)},
+                {"SSL_CERT_FILE": str(malformed)},
+                {"SSL_CERT_FILE": " "},
+                {"SSL_CERT_DIR": str(self.root / "missing-directory")},
+                {"SSL_CERT_DIR": str(cert)},
+                {"SSL_CERT_FILE": str(cert), "SSL_CERT_DIR": str(self.root / "missing-directory")},
+        ):
+            with self.subTest(override=override), patch.dict(os.environ, override), \
+                    patch.object(certifi, "where") as bundle:
+                with self.assertRaises((OSError, ValueError)):
+                    runner_tls.websocket_options("wss://fixture.invalid")
+                bundle.assert_not_called()
 
     async def test_untrusted_certificate_is_rejected(self):
         _, context = certificate(self.root)

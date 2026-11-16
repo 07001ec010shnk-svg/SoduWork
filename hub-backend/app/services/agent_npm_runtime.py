@@ -26,7 +26,6 @@ NODE_MINIMUMS = {
     "dsh": (22, 15, 0),
     "codex": (20, 0, 0),
     "kimi": (22, 19, 0),
-    "claude": (22, 0, 0),
 }
 _INSTALL_LOCK = threading.Lock()
 _NODE_IDENTITY = """(() => {

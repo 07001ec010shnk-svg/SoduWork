@@ -91,19 +91,6 @@ class RunnerPackageSourcesTest(unittest.TestCase):
                 runner_sources._STAMP_CACHE.clear()
                 self.assertTrue(runner_enroll.packages_info()["windows"]["stale"])
 
-    def test_harness2_notices_are_exported_and_invalidate_runner_freshness(self):
-        for name in ("LICENSE", "UPSTREAM.md"):
-            with self.subTest(resource=name):
-                source = self.write("hub-backend/app/services/harness2_vendor/" + name, "upstream notice")
-                inputs = runner_sources.build_inputs(self.backend, self.project)
-                self.assertIn(source, inputs)
-                self.assertIn(source, runner_enroll._src_sources())
-                for item in inputs:
-                    os.utime(item, (1000, 1000))
-                os.utime(self.binary, (2000, 2000))
-                os.utime(source, (3000, 3000))
-                runner_sources._STAMP_CACHE.clear()
-                self.assertTrue(runner_enroll.packages_info()["windows"]["stale"])
 
     def test_source_archive_refreshes_each_changed_dsh_resource(self):
         for name in ("dsh_session_storage.mjs", "dsh_gateway_bundle/package.json",

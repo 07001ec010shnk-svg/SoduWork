@@ -441,7 +441,7 @@ async function open(opts) {
       if (!refreshed.ok) throw new Error(refreshed.reason || '模型会话凭据刷新失败');
     },
   });
-  let failedLastTurn = false;
+  let failedLastTurn = opts.retainedExecutionFailure === true;
   let skillSelectionFailure = null;
   const storedQuality = restoredQuality || (goal.intent === 'goal'
     ? goalQuality.fromEntries(piSession.sessionManager.getEntries()) : null);

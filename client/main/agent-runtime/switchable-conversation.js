@@ -155,6 +155,8 @@ function create({ raw: initial, options, restored, openNative, disposeNative, pr
         sessionTitle: segments.title(record) || raw.historyRow?.()?.title || '',
         modelName, reasoningEffort: '', resumePath: '', resumeCwd: '', runtimeConversationId: '',
         nativeDispatchId: '', nativeSessionStarted: undefined, verifyLegacySegment: false,
+        // A fresh native segment does not replay the original archive's failure receipt.
+        retainedHistoryId: '', retainedExecutionFailure: false,
         intent: '', mode: '', goal: '', acceptance: '', accessPolicy: policy,
         activePluginIds: before.activePlugins || [],
         contextPrompts: [...(options.contextPrompts || []), segments.brief(before)] };
