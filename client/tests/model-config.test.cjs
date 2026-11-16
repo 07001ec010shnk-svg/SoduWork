@@ -16,7 +16,7 @@ async function fetchDeclaredModel(metadata) {
     'managed-alias', 8000,
     async () => new Response(JSON.stringify({ ok: true, key: 'fixture', model: 'managed-alias', ...metadata }),
       { status: 200, headers: { 'Content-Type': 'application/json' } }),
-    false, 'harness2');
+    false, 'kimi');
 }
 
 test('unsupported streaming keeps Hub archives readable while rejecting a new Pi turn', async t => {
@@ -93,7 +93,7 @@ test('Hub reasoning declarations survive model normalization and the runner boun
       supportsReasoningEffort: true, thinkingLevelMap: { low: 'low', high: 'high' } });
     assert.equal(result.ok, true);
     assert.equal(result.model.reasoning, declaration.thinkingMode !== 'none');
-    const runner = create(result.model, 'harness2').llm;
+    const runner = create(result.model, 'kimi').llm;
     for (const model of [result.model, runner]) {
       assert.equal(model.thinkingMode, declaration.thinkingMode);
       assert.equal(model.thinkingAlwaysOn, declaration.thinkingAlwaysOn);
@@ -137,7 +137,7 @@ test('Hub explicit thinking level remains explicit through the runner boundary',
       thinkingFormat: 'zai', thinkingLevel });
     assert.equal(result.ok, true);
     assert.equal(result.model.thinkingLevel, thinkingLevel);
-    assert.equal(create(result.model, 'harness2').llm.thinkingLevel, thinkingLevel);
+    assert.equal(create(result.model, 'kimi').llm.thinkingLevel, thinkingLevel);
   }
 });
 

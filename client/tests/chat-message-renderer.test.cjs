@@ -814,11 +814,11 @@ test('one turn aggregates different runs and tool-only collaborators without lea
     { role: 'assistant', sourceAgent: { agentId: 'qwen', runId: 'second' }, blocks: [{ kind: 'text', text: 'Final answer' }], done: true },
     { role: 'user', text: 'Second request' },
     { role: 'assistant', sourceAgent: { agentId: 'pi' }, blocks: [{ kind: 'text', text: 'Next answer' }], done: true },
-  ], tools: [{ id: 'read', name: 'read', after: 1, state: 'done', sourceAgent: { agentId: 'claude' } }] };
+  ], tools: [{ id: 'read', name: 'read', after: 1, state: 'done', sourceAgent: { agentId: 'codex' } }] };
   renderer._render();
   assert.equal((list.innerHTML.match(/class="nchat-agent-source/g) || []).length, 2);
   assert.match(list.innerHTML, /agent-brand-qwen crew-sub/);
-  assert.match(list.innerHTML, /agent-brand-claude crew-sub/);
+  assert.match(list.innerHTML, /agent-brand-codex crew-sub/);
   assert.equal((list.innerHTML.match(/Initial explanation/g) || []).length, 1);
   assert.ok(list.innerHTML.indexOf('Initial explanation') < list.innerHTML.indexOf('Final answer'));
   assert.doesNotMatch(list.innerHTML.slice(list.innerHTML.indexOf('Second request')), /crew-sub/);

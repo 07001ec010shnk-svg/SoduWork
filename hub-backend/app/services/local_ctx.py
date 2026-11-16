@@ -230,6 +230,9 @@ def prepare_resume(ref: str, text: str, cfg: dict | None, *, recovery: bool = Fa
         if recovery and (run.get("_accessTransition") or {}).get("cancelled"):
             return {"ok": False, "error": "Permission change cancelled"}
         prof = _PROFILES.get(run["cli"])
+        if not prof:
+            return {"ok": False, "code": "AGENT_UNAVAILABLE",
+                    "error": "原执行底座已不可用，请选择其他底座；原会话历史已保留"}
         from . import access_policy
         fresh = dict(cfg or {})
         if not recovery:
@@ -327,12 +330,6 @@ def prepare_resume(ref: str, text: str, cfg: dict | None, *, recovery: bool = Fa
                    start["prompt"], run["ws"], ref, run.get("cfg") or {}, prof)
             return {"ok": True}
         sid = run.get("cliSid") or (ref if prof.get("own_session") else "")
-        if run.get("cli") == "harness2" and sid and not sid.startswith("h2_"):
-            # Carry the existing Runner history into the independent executor.
-            # Never launch the former agent or discard the archived segment.
-            if _relay(ref, text):
-                return {"ok": True}
-            raise RuntimeError("无法迁移 Harness² 会话上下文；原历史已保留，请重试")
         # An overflow before the first session-id event is also recoverable.
         if not sid:
             if _relay(ref, text):

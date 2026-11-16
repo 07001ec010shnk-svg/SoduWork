@@ -179,6 +179,25 @@ test('a downloaded account transcript cannot intercept authenticated original op
   assert.equal(accountReads, 1); assert.equal(f.calls.length, 0);
 });
 
+for (const adapterId of ['claude', 'harness2']) {
+  test(`${adapterId}: retired local history opens a passive transcript without resolving credentials or starting a runtime`, async () => {
+    const actor = automationIdentity();
+    const local = { id: 'retired-' + adapterId, adapterId,
+      workOwner: require('../main/platform-connections/runtime.cjs').scope(actor) };
+    const projection = { sessionId: local.id, localReplica: true, readOnly: true };
+    let reads = 0;
+    const f = fixture({ identityOf: async () => assert.fail('Reading retired history cannot resolve execution credentials'),
+      sharedHistory: { resolve: async () => local, open: async () => { reads++; return projection; } },
+      openReply: handle => ({ ok: true, readOnly: handle.readOnly, sessionId: handle.sessionId }) });
+    const reply = await f.open({ chatId: local.id, adapterId: 'pi' });
+    assert.equal(reply.ok, true, reply.reason);
+    assert.equal(reply.readOnly, true);
+    assert.equal(reply.sessionId, local.id);
+    assert.equal(reads, 1);
+    assert.equal(f.calls.length, 0, 'A stale renderer selection must not replace the saved runtime');
+  });
+}
+
 test('owned local history remains readable offline without starting a runtime or changing cloud access', async () => {
   for (const unavailable of [async () => null, async () => { throw Error('Hub offline'); }]) {
     const local = { id: 'offline-native', adapterId: 'codex-harness',

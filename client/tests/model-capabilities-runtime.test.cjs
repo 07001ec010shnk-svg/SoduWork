@@ -86,7 +86,7 @@ test('required unsupported combinations fail clearly while unknown capabilities 
 test('streaming Runner runtimes reject known unsupported streaming before launch',()=>{
  const runner=require('../main/agent-runtime/runner-config.cjs');
  const base={id:'alias',baseUrl:'http://127.0.0.1:1/v1',key:'fixture'};
- for(const runtime of ['pi','harness2']){
+ for(const runtime of ['pi']){
   assert.throws(()=>runner.create({...base,capabilityProfile:{streaming:{state:'unsupported'}}},runtime),/流式/);
   assert.doesNotThrow(()=>runner.create({...base,capabilityProfile:{streaming:{state:'unknown'}}},runtime));
  }
