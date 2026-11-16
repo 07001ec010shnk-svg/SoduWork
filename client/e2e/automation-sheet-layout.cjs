@@ -211,7 +211,7 @@ if (typeof electron === 'string') {
       await js(`(()=>{const field=document.querySelector('[name=customRule]');field.value='';
         field.dispatchEvent(new Event('input',{bubbles:true}));document.querySelector('[data-waz-save]').click();})()`);
       assert.equal(await js('saves.length'),before);
-      assert.equal(await js('document.activeElement.name'),'customRule');
+      assert.equal(await js('document.querySelector("[data-waz-save]").disabled'),true);
       const rule='DTSTART;TZID=Asia/Shanghai:20990101T105100\nRRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR;COUNT=10';
       await js(`(()=>{const field=document.querySelector('[name=customRule]');field.value=${JSON.stringify(rule)};
         field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
@@ -262,6 +262,94 @@ if (typeof electron === 'string') {
       assert.equal(await js('document.querySelector(".waz-sheet").getAttribute("aria-modal")'), null);
       assert.equal(await js('getComputedStyle(document.querySelector(".waz-body")).overflowY'), 'visible');
       assert.ok((await rect('.waz-sheet')).height > 800);
+    });
+    await run('相对时间草稿允许补充，创建后修改原任务并可取消修改和停用', async () => {
+      await js(fs.readFileSync(path.join(client,'components/panels/panels-chat-work-actions.js'),'utf8')+'\nvoid 0;');
+      await js(`(async()=>{WorkAutomationSheet.close(true);window.originalNow=Date.now;
+        window.messageTime=Date.parse('2099-11-16T08:00:00Z');Date.now=()=>messageTime;
+        window.updates=[];window.createdBefore=saves.length;
+        SoduWorkAPI.parseTaskText=async text=>text.includes('生成日报')
+          ? {title:'日报',note:'生成日报'} : {title:'待明确的任务',note:'帮我做个任务'};
+        SoduWorkAPI.updateSchedule=async(id,body)=>{updates.push({id,body});return{...saves.at(-1),...body,id}};
+        await WorkAutomationSheet.open({cardId:'conversation-fixture',host:document.querySelector('#inlineHost'),
+          text:'五分钟后帮我做个任务',requestedAt:messageTime,proposal:{timeZone:'Asia/Shanghai'}});
+        window.automationControl=selector=>document.querySelector('#wazBody').querySelector(selector);
+        window.sendAutomationChange=async text=>ChatWorkActions.route({text,mention:{action:()=>null}},{});})()`);
+      assert.equal(await js('document.querySelector("[name=every]").value'),'once');
+      assert.equal(await js('document.querySelector("[name=runAt]").value'),'2099-11-16T16:05');
+      assert.equal(await js('document.querySelector("[data-waz-save]").disabled'),true);
+      await js(`automationControl('[data-waz-chat-exit]').click();void 0;`);
+      assert.equal(await js('WorkAutomationSheet.acceptsFollowup("普通聊天")'),false);
+      assert.equal((await js('sendAutomationChange("普通聊天")')).handled,false);
+      await js(`automationControl('[data-waz-chat-resume]').click();void 0;`);
+      const supplemented = await js(`messageTime+=60000;sendAutomationChange('帮我生成日报');`);
+      assert.equal(supplemented.accepted, true, JSON.stringify(await js('WorkAutomationSheet.capture()')));
+      assert.equal(await js('document.querySelector("[name=runAt]").value'),'2099-11-16T16:05');
+      assert.equal(await js('automationControl("[data-waz-save]").disabled'),false,
+        JSON.stringify(await js('({snapshot:WorkAutomationSheet.capture(),probe:document.querySelector("#wazProbe").textContent})')));
+      await js(`automationControl('[data-waz-save]').click();void 0;`);await delay(100);
+      assert.equal(await js('saves.length-createdBefore'),1);
+      assert.equal(await js('!!automationControl("[data-waz-edit]")'),true);
+      await js(`sendAutomationChange('改为十分钟后生成日报');`);
+      assert.equal(await js('document.querySelector("[name=runAt]").value'),'2099-11-16T16:11');
+      assert.equal(await js('automationControl("[data-waz-save]").textContent'),'保存修改');
+      await js(`automationControl('[data-waz-cancel]').click();void 0;`);
+      assert.equal(await js('WorkAutomationSheet.capture().phase'),'succeeded');
+      assert.equal(await js('updates.length'),0);
+      await js(`(async()=>{await sendAutomationChange('改为十分钟后生成日报');automationControl('[data-waz-save]').click();})()`);await delay(100);
+      assert.equal(await js('saves.length-createdBefore'),1);
+      assert.equal(await js('updates.length'),1);
+      assert.equal(await js('updates[0].id'),'fixture');
+      assert.equal(await js('updates[0].body.runAt'),'2099-11-16T08:11:00.000Z');
+      await js(`automationControl('[data-waz-pause]').click();void 0;`);await delay(100);
+      assert.deepEqual(await js('updates[1].body'),{enabled:false});
+      assert.match(await js('automationControl(".waz-saved").textContent'),/已停用/);
+      await js('Date.now=originalNow;void 0;');
+    });
+    await run('未确认草稿从20:18连续修改到20:23和20:29，解析不可用时也同步全部时间字段', async () => {
+      await js(`(async()=>{WorkAutomationSheet.close(true);window.originalNow=Date.now;
+        window.messageTime=Date.parse('2099-11-16T12:13:00Z');Date.now=()=>messageTime;
+        window.createdBefore=saves.length;window.timeEditParses=0;
+        SoduWorkAPI.parseTaskText=async()=>({title:'5分钟后发送一句话提醒',
+          note:'关键约束：\\n1. 时间：5分钟后（相对时间，自需求提出时刻起算）；\\n2. 内容：分析5分钟采样日志；',
+          acceptanceCriteria:['确认5分钟倒计时的起始时间点','保留5分钟采样日志']});
+        await WorkAutomationSheet.open({cardId:'repeat-time',host:document.querySelector('#inlineHost'),
+          text:'五分钟后发送一句话提醒',requestedAt:messageTime,proposal:{timeZone:'Asia/Shanghai'}});
+        SoduWorkAPI.parseTaskText=async()=>{timeEditParses++;throw Error('parser unavailable')};})()`);
+      assert.equal(await js('automationControl("[name=runAt]").value'),'2099-11-16T20:18');
+      assert.equal((await js('sendAutomationChange("修改为10分钟之后")')).accepted,true);
+      assert.equal(await js('automationControl("[name=runAt]").value'),'2099-11-16T20:23');
+      assert.equal(await js('automationControl("[name=title]").value'),'10分钟后发送一句话提醒');
+      assert.match(await js('automationControl("[name=note]").value'),/时间：10分钟后/);
+      assert.match(await js('automationControl("[name=acceptance]").value'),/确认10分钟倒计时/);
+      assert.equal((await js('messageTime+=60000;sendAutomationChange("再改为十五分钟后")')).accepted,true);
+      assert.equal(await js('automationControl("[name=runAt]").value'),'2099-11-16T20:29');
+      assert.equal(await js('automationControl("[name=title]").value'),'15分钟后发送一句话提醒');
+      assert.match(await js('automationControl("[name=note]").value'),/时间：15分钟后/);
+      assert.match(await js('automationControl("[name=note]").value'),/分析5分钟采样日志/);
+      assert.match(await js('automationControl("[name=acceptance]").value'),/确认15分钟倒计时/);
+      assert.equal(await js('saves.length-createdBefore'),0);
+      assert.equal(await js('timeEditParses'),0);
+      await js(`(async()=>{const snapshot=WorkAutomationSheet.capture();WorkAutomationSheet.close(true);
+        messageTime+=60000;
+        await WorkAutomationSheet.open({cardId:'repeat-time',cardState:snapshot,host:document.querySelector('#inlineHost')});})()`);
+      assert.equal(await js('automationControl("[name=runAt]").value'),'2099-11-16T20:29');
+      await js(`automationControl('[data-waz-save]').click();void 0;`);await delay(100);
+      assert.equal(await js('saves.length-createdBefore'),1);
+      assert.equal(await js('saves.at(-1).runAt'),'2099-11-16T12:29:00.000Z');
+      assert.match(await js('saves.at(-1).note'),/时间：15分钟后/);
+      await js('Date.now=originalNow;void 0;');
+    });
+    await run('错字时间不能回退到18点，底部取消退出草稿且不创建任务', async () => {
+      await js(`Date.now=originalNow;window.beforeCancel=saves.length;
+        WorkAutomationSheet.open({host:document.querySelector('#inlineHost'),text:'五分钟红帮我做个任务'});`);
+      assert.equal(await js('document.querySelector("[name=every]").value'),'');
+      assert.equal(await js('document.querySelector("[name=clockHour]").value'),'');
+      assert.equal(await js('document.querySelector("[data-waz-save]").disabled'),true);
+      await js(`document.querySelector('[data-waz-cancel]').click();void 0;`);
+      assert.equal(await js('WorkAutomationSheet.hasSurface()'),false);
+      assert.equal(await js('saves.length-beforeCancel'),0);
+      assert.equal(await js('WorkAutomationSheet.acceptsFollowup("改为十分钟后")'),false);
     });
     report.errors = await js('errors');
     report.ok = report.cases.every(row => row.ok) && !report.errors.length && !report.networkRequests.length;

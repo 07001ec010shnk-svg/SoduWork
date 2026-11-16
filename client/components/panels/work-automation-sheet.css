@@ -30,6 +30,9 @@
   border:1px solid var(--line-2);background:var(--bg-0);color:var(--ink-2);cursor:pointer
 }
 .waz-close:hover{background:var(--bg-2);color:var(--ink-2)}
+.waz-foot-buttons,.waz-saved-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+.waz-saved-actions{justify-content:center}
+.waz-chat-hint{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:10px 0;color:var(--ink-3)}
 .waz-body{padding:12px 16px 16px;overflow:visible;background:var(--bg-0)}
 .waz-form{display:flex;min-width:0;flex-direction:column}
 .waz-fields,.waz-actions{min-width:0}
