@@ -1630,7 +1630,7 @@ class Runner:
             from app.services import access_broker
             result = access_broker.respond(
                 str(m.get("ref") or ""), str(m.get("requestId") or ""),
-                str(m.get("decision") or ""), m.get("policyRevision"))
+                str(m.get("decision") or ""), m.get("policyRevision"), m.get("optionId"))
             return {"ok": bool(result.get("ok")), "data": result,
                     "error": result.get("error", ""), "code": result.get("code", "")}
         if op == "job.status":

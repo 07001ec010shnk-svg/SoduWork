@@ -179,6 +179,11 @@ def inject_llm_env(key: str, env: dict, llm: dict, *, mode: str = "work") -> Non
         env["KIMI_MODEL_PROVIDER_TYPE"] = "anthropic" if llm.get("kind") == "anthropic" else "openai"
         env["KIMI_CODE_NO_AUTO_UPDATE"] = "1"
         env["KIMI_DISABLE_TELEMETRY"] = "1"
+        # Kimi requires a non-empty API key even when the selected local model
+        # is anonymous. Satisfy its client-side validation without borrowing
+        # personal credentials or modifying the saved model configuration.
+        if local_only and not secret.strip():
+            secret = "soduwork-anonymous-local"
     # Generic ACP Agents can describe standard environment-based model routing.
     # Custom authentication/bootstrap protocols remain explicit adapters below.
     fields = {"base": base, "key": secret, "model": model}
