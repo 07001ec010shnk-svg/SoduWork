@@ -151,8 +151,8 @@ jobs:
       - name: Verify strict HTTPS trust and execution-host cleanup
         run: python -m unittest -v test_runtime_tls test_runner_tls test_managed_agent_tls test_local_process_cleanup test_execution_stream_identity
         working-directory: hub-backend
-      - name: Verify Agent probe reply parsing
-        run: python -m unittest -v test_private_agent_probe.ProbeMarkerTests
+      - name: Verify Agent probe replies and persisted outcomes
+        run: python -m unittest -v test_private_agent_probe.ProbeMarkerTests test_private_agent_probe.ProbePersistenceTests
         working-directory: hub-backend
       - name: Verify frozen Runner network components over real HTTPS
         run: python e2e_runner_tls.py --output ../runner-tls-evidence
