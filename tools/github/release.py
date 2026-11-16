@@ -34,6 +34,12 @@ def require(condition, message):
         raise ValueError(message)
 
 
+def release_branch(version):
+    match = re.fullmatch(VERSION, version)
+    require(match is not None, "Invalid release version")
+    return f"release/{match[1]}.{match[2]}.x"
+
+
 def context(env=None):
     env = os.environ if env is None else env
     component, version = env.get("RELEASE_COMPONENT"), env.get("RELEASE_VERSION", "")
@@ -41,7 +47,8 @@ def context(env=None):
     repo = env.get("GITHUB_REPOSITORY", "")
     require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo), "Invalid repository")
     require(env.get("GITHUB_EVENT_NAME") == "workflow_dispatch", "Release requires workflow_dispatch")
-    require(env.get("GITHUB_REF") == f"refs/heads/release/{version}", "Use the matching unified release branch")
+    require(env.get("GITHUB_REF") == f"refs/heads/{release_branch(version)}",
+            "Use the matching release/X.Y.x maintenance branch")
     require(env.get("GITHUB_REF_PROTECTED") == "true", "Release branch must be protected")
     require(env.get("PUBLIC_RELEASE_REPOSITORY") == repo, "Configure PUBLIC_RELEASE_REPOSITORY explicitly")
     sha, run = env.get("GITHUB_SHA", ""), env.get("GITHUB_RUN_ID", "")
@@ -109,7 +116,7 @@ def preflight(ctx):
     environment = api("/environments/public-release")
     require(any(rule.get("type") == "required_reviewers" and rule.get("reviewers")
                 for rule in environment.get("protection_rules", [])), "Configure required reviewers on public-release")
-    require(api("/git/ref/heads/release/" + ctx["version"])["object"]["sha"] == ctx["commit"], "Release branch moved")
+    require(api("/git/ref/heads/" + release_branch(ctx["version"]))["object"]["sha"] == ctx["commit"], "Release branch moved")
 
 
 def fingerprint(file):
