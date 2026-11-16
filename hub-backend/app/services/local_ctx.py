@@ -227,6 +227,8 @@ def prepare_resume(ref: str, text: str, cfg: dict | None, *, recovery: bool = Fa
         run = _RUNS.get(ref)
         if not run:
             return {"ok": False, "error": "这个本地会话已经不在了"}
+        if run.get('_hostCleanup'):
+            return {"ok": False, "error": "The previous execution host is still stopping"}
         if recovery and (run.get("_accessTransition") or {}).get("cancelled"):
             return {"ok": False, "error": "Permission change cancelled"}
         prof = _PROFILES.get(run["cli"])
