@@ -148,6 +148,60 @@ class ContextRecoveryTests(unittest.TestCase):
         assert not term
         assert not policy.OVERFLOW.search("Context window is 128000 tokens")
 
+    def test_nonpi_context_recovery_cannot_erase_a_protocol_failure(self):
+        overflow = {'error': {'name': 'ContextOverflowError', 'message': 'context length exceeded'}}
+        transport = {'error': {'name': 'AcpBridgeError', 'message': 'synthetic transport failure'}}
+        success = {'type': 'step_finish', 'part': {'reason': 'stop'}}
+        for cli in ('dsh', 'kimi', 'qwen', 'opencode', 'codex', 'codex-harness'):
+            for events in ((overflow, transport, success), (transport, overflow, success)):
+                with self.subTest(cli=cli, events=events):
+                    terminal = {}
+                    self.row.update(cli=cli, state='running')
+                    for event in events:
+                        stream._on_line(self.ref, json.dumps(event), terminal)
+                    self.assertFalse(terminal.get('overflow'))
+                    self.assertTrue(terminal.get('isError'))
+                    self.assertIn('synthetic transport failure', terminal['result'])
+                    with patch.object(ctx, '_recover_overflow', return_value=True) as recover:
+                        stream._finish(self.ref, 2, terminal, '')
+                    recover.assert_not_called()
+                    self.assertEqual(self.row['state'], 'failed')
+                    self.assertIn('synthetic transport failure', self.row['error'])
+
+    def test_nonpi_success_only_clears_the_context_error_it_owns(self):
+        for cli in ('dsh', 'kimi', 'qwen', 'opencode', 'codex', 'codex-harness'):
+            with self.subTest(cli=cli):
+                row, terminal = {'cli': cli}, {}
+                policy.observe(row, {'error': {'name': 'ContextOverflowError'}}, terminal)
+                self.assertTrue(terminal.get('overflow'))
+                policy.observe(row, {'type': 'step_finish', 'part': {'reason': 'stop'}}, terminal)
+                self.assertEqual(terminal, {})
+                # A legacy/foreign diagnosis has no owned-recovery receipt.
+                terminal = {'overflow': True, 'isError': True, 'result': 'unowned failure'}
+                policy.observe(row, {'type': 'step_finish', 'part': {'reason': 'stop'}}, terminal)
+                self.assertEqual(terminal['result'], 'unowned failure')
+                self.assertTrue(terminal['isError'])
+
+    def test_nonpi_stderr_overflow_cannot_replace_a_protocol_failure(self):
+        self.row['cli'] = 'dsh'
+        terminal = {}
+        stream._on_line(self.ref, json.dumps({'error': {'name': 'AcpBridgeError',
+                         'message': 'synthetic transport failure'}}), terminal)
+        stream._on_line(self.ref, 'context window exceeded', terminal, stream='err')
+        self.assertFalse(terminal.get('overflow'))
+        self.assertIn('synthetic transport failure', terminal['result'])
+        with patch.object(ctx, '_recover_overflow', return_value=True) as recover:
+            stream._finish(self.ref, 2, terminal, '')
+        recover.assert_not_called()
+        self.assertEqual(self.row['state'], 'failed')
+
+    def test_pi_context_observer_keeps_existing_behavior_and_no_new_state(self):
+        terminal = {}
+        policy.observe({'cli': 'pi'}, {'error': {'name': 'ContextOverflowError'}}, terminal)
+        self.assertEqual(set(terminal), {'overflow', 'isError', 'result'})
+        policy.observe({'cli': 'pi'}, {'type': 'turn.completed'}, terminal)
+        self.assertEqual(terminal, {})
+
 
     def test_windows_and_cached_input(self):
         assert stream._window_for({"llm": {"model": "x", "contextWindow": 32000}}) == (32000, True)

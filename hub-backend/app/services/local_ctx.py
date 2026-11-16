@@ -192,7 +192,7 @@ def _relay(ref: str, prompt: str) -> bool:
     if _cancelled(ref):
         return False
     with _LOCK:
-        if run.get("stopping"):
+        if run.get("stopping") or _goal_recovery_blocked(run):
             return False
         old_sid = run.get("cliSid") or (ref if prof.get("own_session") else "")
         run.setdefault("contextSegments", []).append({"sid": old_sid, "segment": run.get("segment", 1)})
@@ -243,6 +243,20 @@ def prepare_resume(ref: str, text: str, cfg: dict | None, *, recovery: bool = Fa
             fresh.setdefault("_inputImages", [])
             fresh.setdefault("images", [])
             cfg = fresh
+        from . import local_task_goal
+        new_goal = fresh.pop("taskGoal", None)
+        goal_control = fresh.pop("taskGoalControl", None)
+        if not recovery and run.get("cli") != "pi":
+            if new_goal is not None and not local_task_goal.normalize(new_goal):
+                return {"ok": False, "error": "任务目标或预算无效，请检查后重试"}
+            if goal_control not in (None, "continue", "disable"):
+                return {"ok": False, "error": "无效的任务控制操作"}
+        if recovery and run.get("goalContract") and run.get("cli") != "pi":
+            if (not local_task_goal.active(run) or run.get("goalUserPending")
+                    or run.get("queue") or run.get("stopping")
+                    or run.get("permissionDenied") or run.get("permissionWaiting")
+                    or run.get("pendingPermissions") or local_task_goal.budget_reason(run)):
+                return {"ok": False, "error": "任务自动续跑已暂停"}
         from . import skill_read_scope
         scoped = dict(run)
         try:
@@ -291,6 +305,25 @@ def prepare_resume(ref: str, text: str, cfg: dict | None, *, recovery: bool = Fa
                 run.update(ctxWindow=win, ctxWindowKnown=known)
         for key in ("skillSelection", "_skillReadScope", "_resourceReadScope"):
             run[key] = scoped.get(key)
+        if not recovery and run.get("cli") != "pi":
+            if new_goal is not None:
+                if not local_task_goal.initialize(run, new_goal):
+                    return {"ok": False, "error": "请先完成或关闭当前目标，再设置新目标"}
+            elif goal_control:
+                controlled = local_task_goal.control(run, goal_control)
+                if not controlled.get("ok"):
+                    return controlled
+            elif local_task_goal.active(run):
+                # A human steering message supersedes an outstanding audit.
+                controlled = local_task_goal.control(run, "continue")
+                if not controlled.get("ok"):
+                    return controlled
+            if run.get("goalUserPending") == str((cfg or {}).get("_admissionKey") or ""):
+                run.pop("goalUserPending", None)
+            if local_task_goal.active(run):
+                text = local_task_goal.work_prompt(run, text)
+            for key in ("taskGoal", "taskGoalControl"):
+                (run.get("cfg") or {}).pop(key, None)
         if not recovery:
             # Preserve the previous boundary if a new turn wins the race with metadata saving.
             from .local_base import _record_terminal
@@ -304,6 +337,11 @@ def prepare_resume(ref: str, text: str, cfg: dict | None, *, recovery: bool = Fa
             from . import turn_correlation
             run["admissionKey"] = turn_correlation.key((cfg or {}).get("_admissionKey"))
         started = run.get("started") if recovery and run.get("_accessTransition") else time.time()
+        if local_task_goal.enabled(run):
+            # Capture turn ownership before releasing the preparation lock;
+            # a concurrent disable must not turn an automatic launch into an
+            # ordinary unguarded launch.
+            run["goalTurnOwned"] = local_task_goal.active(run)
         run.update(state="running", started=started or time.time(), ended=None, error="",
                    turnCompleted=False, terminal={}, permissionDenied=False)
         for key in ("failureKind", "failurePath", "gitDelivery"):
@@ -348,10 +386,20 @@ def prepare_resume(ref: str, text: str, cfg: dict | None, *, recovery: bool = Fa
         return {"ok": False, "error": run["error"]}
 
 
+def _goal_recovery_blocked(run: dict) -> bool:
+    from . import local_task_goal
+    if not local_task_goal.enabled(run) or not run.get("goalTurnOwned"):
+        return False
+    return bool(not local_task_goal.active(run) or run.get("goalUserPending")
+                or run.get("queue") or local_task_goal.budget_reason(run)
+                or run.get("permissionWaiting") or run.get("permissionDenied")
+                or run.get("pendingPermissions"))
+
+
 def _recover_overflow(ref: str) -> bool:
     with _LOCK:
         run = _RUNS.get(ref)
-        if not run or run.get("stopping"):
+        if not run or run.get("stopping") or _goal_recovery_blocked(run):
             return False
         tried = int(run.get("overflowTried") or 0)
         run["overflowTried"] = tried + 1

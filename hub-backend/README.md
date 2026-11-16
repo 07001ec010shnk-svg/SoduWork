@@ -220,6 +220,20 @@ The second command creates and tears down an isolated local PostgreSQL instance.
 
 See [release scope](../docs/release-scope.en.md) for distribution boundaries.
 
+## Non-Pi task continuation
+
+Codex, Codex Harness, OpenCode, DeepSeek Harness, Kimi and Qwen use a Runner-owned task controller when goal mode is selected or a desktop message explicitly requests continuous completion. Pi's existing controller is unchanged. Ordinary questions and instructions without this request keep their existing turn behavior.
+
+Output truncation, context recovery and task completion remain separate decisions. Only typed output-limit receipts can trigger output recovery; authentication, transport, permission and unknown tool outcomes cannot. Goal-owned DeepSeek turns disable the bridge's inner output retry loop so a new process cannot multiply retries. The task record retains at most two output recoveries, with new successful tool progress required for the second. Context recovery retains its own counters and may compact or relay the native session while retaining the SoduWork conversation and workspace.
+
+After a successful work turn, a separate review turn checks actual artifacts and verification results. A fresh structured receipt, successful tool evidence from that review and any declared output checks are required before completion. The receipt is a model-assisted review, not a proof of arbitrary business requirements. Missing, malformed or unsupported evidence pauses the task. Two turns without new successful tool progress also pause it. Original permissions and approval requirements still apply.
+
+The default goal budget is 240 minutes and 1,000 tool steps. Elapsed active time, tool steps, review state and recovery counters persist through internal continuations and Runner restart. Pausing does not consume active time; resuming does not replenish budgets. User messages take precedence at native turn boundaries. Stop and disable controls prevent automatic restart, including while the host is settling. Closing goal mode preserves the files and permits ordinary conversation.
+
+Run `python3 -m unittest test_local_task_goal test_local_task_goal_integration test_context_recovery test_acp_error_messages` for the controller and boundary regressions. These checks use synthetic receipts and isolated processes; they do not establish completion quality for every real model.
+
+With an existing compatible DeepSeek installation, run `python3 e2e_task_goal_dsh.py --adapter-entry /absolute/adapter/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`. This runs the installed adapter, runtime, real file tools and production stream/controller/resume code. A loopback model and a process-scheduling callback are test substitutes. It requires truncation recovery followed by file verification in the same native session, unchanged existing files and no repeated write. It neither installs dependencies nor uses production credentials.
+
 ## OpenCode model selection on resume
 
 Managed native OpenCode turns pass the current model explicitly. ACP turns select the exact advertised model before prompting, using the existing session ID and history. Updating the injected default alone does not change the model retained by a native session. Missing routes or an unconfirmed model change stop the turn; the adapter does not restore old credentials, rename models, or create a replacement session.

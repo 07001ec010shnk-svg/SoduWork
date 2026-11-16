@@ -17,6 +17,7 @@ class AcpErrorMessagesTests(unittest.TestCase):
     def setUp(self):
         environment = patch.dict(bridge.os.environ, {
             'SODUWORK_APPROVAL_CHANNEL': '', bridge.runtime_images.ENV_KEY: '',
+            bridge._TASK_OUTPUT_RECOVERY_ENV: '',
         })
         environment.start()
         self.addCleanup(environment.stop)
@@ -159,6 +160,78 @@ class AcpErrorMessagesTests(unittest.TestCase):
                                          for call in emit.call_args_list))
                 if compact_reply:
                     self.assertNotIn(compact_reply, str(emit.call_args_list))
+
+    def test_task_owned_recovery_does_not_multiply_retries_across_bridge_restarts(self):
+        with TemporaryDirectory() as folder, patch.dict(bridge.os.environ, {
+                bridge._TASK_OUTPUT_RECOVERY_ENV: '1'}):
+            # Each new bridge attaches to the same native session. Neither an
+            # output limit nor an available compact command grants extra tries.
+            for _attempt in range(3):
+                acp = bridge.AcpBridge([], folder, 'dsh', 'workspace', session_id='saved-task')
+                prompts = []
+
+                def request(method, params):
+                    if method == 'initialize':
+                        return {'protocolVersion': 1, 'agentCapabilities': {'loadSession': True}}
+                    self.assertEqual(params['sessionId'], 'saved-task')
+                    if method == 'session/load':
+                        acp.dsh_can_compact = True
+                        return {}
+                    self.assertEqual(method, 'session/prompt')
+                    prompts.append(params['prompt'][0]['text'])
+                    return {'stopReason': 'max_tokens'}
+
+                with patch.object(acp, 'start'), patch.object(acp, 'request', side_effect=request), \
+                        patch.object(acp.access, 'apply'), patch.object(bridge, '_emit') as emit, \
+                        patch.object(acp, '_compact_dsh_history') as compact:
+                    self.assertEqual(acp.run('Continue the retained task'), 2)
+                compact.assert_not_called()
+                self.assertEqual(prompts, ['Continue the retained task'])
+                self.assertEqual([call.args[0]['part']['reason'] for call in emit.call_args_list
+                                  if call.args[0].get('type') == 'step_finish'], ['max_tokens'])
+                self.assertFalse(any(call.args[0].get('error') for call in emit.call_args_list))
+
+    def test_task_owned_recovery_requires_the_exact_host_flag(self):
+        with TemporaryDirectory() as folder:
+            for value in ('', '0', 'true', 'yes', '1 ', '1'):
+                with self.subTest(value=value), patch.dict(bridge.os.environ, {
+                        bridge._TASK_OUTPUT_RECOVERY_ENV: value}):
+                    acp = bridge.AcpBridge([], folder, 'dsh', 'workspace')
+                    self.assertEqual(acp.task_output_recovery_owned, value == '1')
+
+    def test_task_recovery_control_is_not_exposed_to_native_agent_tools(self):
+        with TemporaryDirectory() as folder, patch.dict(bridge.os.environ, {
+                bridge._TASK_OUTPUT_RECOVERY_ENV: '1'}):
+            acp = bridge.AcpBridge(['synthetic-agent'], folder, 'dsh', 'workspace')
+            with patch.object(bridge.subprocess, 'Popen') as spawn, \
+                    patch.object(bridge, 'OwnedProcessGroup'), patch.object(bridge.threading, 'Thread'):
+                acp.start()
+            self.assertTrue(acp.task_output_recovery_owned)
+            self.assertNotIn(bridge._TASK_OUTPUT_RECOVERY_ENV, spawn.call_args.kwargs['env'])
+
+    def test_task_owned_recovery_never_masks_a_protocol_or_context_failure(self):
+        with TemporaryDirectory() as folder, patch.dict(bridge.os.environ, {
+                bridge._TASK_OUTPUT_RECOVERY_ENV: '1'}):
+            for error in ('Connection closed', 'context_length_exceeded'):
+                with self.subTest(error=error):
+                    acp = bridge.AcpBridge([], folder, 'dsh', 'workspace')
+                    prompts = []
+
+                    def request(method, params):
+                        if method == 'initialize':
+                            return {'protocolVersion': 1}
+                        if method == 'session/new':
+                            return {'sessionId': 'saved-task'}
+                        prompts.append(params['prompt'])
+                        raise bridge.BridgeError(error)
+
+                    with patch.object(acp, 'start'), patch.object(acp, 'request', side_effect=request), \
+                            patch.object(acp.access, 'apply'), patch.object(bridge, '_emit') as emit:
+                        with self.assertRaisesRegex(bridge.BridgeError, error):
+                            acp.run('Continue the retained task')
+                    self.assertEqual(len(prompts), 1)
+                    self.assertFalse(any(call.args[0].get('type') == 'step_finish'
+                                         for call in emit.call_args_list))
 
     def test_dsh_unexecuted_preview_allows_one_continuation_in_the_saved_session(self):
         with TemporaryDirectory() as folder:

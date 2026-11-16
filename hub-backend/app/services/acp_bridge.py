@@ -46,6 +46,7 @@ _MAX_FILE_BYTES = 4 * 1024 * 1024
 _MAX_TERMINALS = 8
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+_TASK_OUTPUT_RECOVERY_ENV = "SODUWORK_TASK_OUTPUT_RECOVERY_OWNED"
 _DSH_OUTPUT_CONTINUATION = (
     "上一段模型输出达到单次上限。请沿用当前会话，从最后一个已确认的工具结果继续完成原请求。"
     "已经完成的写入、命令、发送或其他操作不要重复。结果不确定时先只读核对。"
@@ -225,12 +226,17 @@ class AcpBridge:
         self.outcome = None
         self.dsh_can_compact = False
         self.dsh_compact_reply: list[str] | None = None
+        # The Runner owns this flag. A managed task must not receive a fresh
+        # pair of bridge retries every time its persisted controller resumes it.
+        self.task_output_recovery_owned = os.environ.get(_TASK_OUTPUT_RECOVERY_ENV) == "1"
 
     def start(self) -> None:
         flags = ({"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
                  if os.name == "nt" else {"start_new_session": True})
         agent_env = self.access.agent_environment(self.agent_name, os.environ.copy())
         agent_env.pop(runtime_images.ENV_KEY, None)
+        # This is host control, not provider configuration or a tool environment.
+        agent_env.pop(_TASK_OUTPUT_RECOVERY_ENV, None)
         if self.agent_name == "opencode":
             # Reapply in the child entry for already-running source Runners.
             # Guard/model config and native session/database paths stay intact.
@@ -785,6 +791,7 @@ class AcpBridge:
                     result = {**result, "stopReason": "max_tokens"}
             if not self.transition.complete(result):
                 if (self.agent_name == "dsh" and result.get("stopReason") == "max_tokens"
+                        and not self.task_output_recovery_owned
                         and not self.transition.requested
                         and not self.transition.cancel_sent and not self.transition.busy()):
                     if continued_output:

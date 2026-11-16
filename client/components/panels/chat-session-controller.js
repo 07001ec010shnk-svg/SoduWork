@@ -2,6 +2,18 @@
 (function (global) {
   'use strict';
   function create(ctx) {
+function _syncRunnerTaskGoal(snapshot = ctx._snap) {
+    const adapter = snapshot?.adapterId || ctx._sessionOptions?.adapterId;
+    const goal = snapshot?.taskGoal;
+    if (!adapter || adapter === 'pi' || !goal ||
+        !['working', 'reviewing', 'completed', 'paused', 'blocked', 'disabled'].includes(goal.status)) return;
+    ctx._sessionOptions = goal.status === 'disabled'
+      ? { ...ctx._sessionOptions, intent: '', mode: 'chat', goal: '', acceptance: '' }
+      : { ...ctx._sessionOptions, intent: 'goal', mode: 'goal',
+        goal: goal.objective || ctx._sessionOptions?.goal || '',
+        acceptance: goal.acceptance ?? ctx._sessionOptions?.acceptance ?? '',
+        budgetMinutes: goal.budgetMs / 60000, maxSteps: goal.maxSteps };
+  }
 function _awaitBounded(promise, timeoutMs, label) {
     let timer = null;
     const timeout = new Promise((_, reject) => {
@@ -223,6 +235,7 @@ async function _ensureOnce(chatId, epoch, ownerScope = ctx._draftOwnerScope?.() 
       ctx._rememberConversationSnapshot(ctx._sessionId || chatId, ctx._snap);
       if (chatId && String(chatId) !== String(ctx._sessionId || '')) ctx._rememberConversationSnapshot(chatId, ctx._snap);
       if (got.goal) ctx._sessionOptions = { ...ctx._sessionOptions, ...got.goal };
+      if (ctx._snap?.taskGoal) _syncRunnerTaskGoal();
       // Restore the session purpose persisted by the main process rather than reverting acceptance sessions to execution mode.
       ctx._sessionOptions = { ...ctx._sessionOptions, acceptanceSession: Boolean(got.acceptanceSession),
         /*
@@ -313,6 +326,7 @@ async function _ensureOnce(chatId, epoch, ownerScope = ctx._draftOwnerScope?.() 
         if (p.kind === 'error') {
           if (p.snapshot) {
             ctx._snap = p.snapshot;
+            if (ctx._snap?.taskGoal) _syncRunnerTaskGoal();
             ctx._rememberConversationSnapshot(ctx._sessionId, ctx._snap);
           }
           if (eventEntry) ctx._setCollabEntryStatus(eventEntry, 'failed', 'failed');
@@ -339,6 +353,7 @@ async function _ensureOnce(chatId, epoch, ownerScope = ctx._draftOwnerScope?.() 
         const before = ctx._snap;
         const was = ctx._lastStatus;
         ctx._snap = p.snapshot;
+        if (ctx._snap?.taskGoal) _syncRunnerTaskGoal();
         ctx._rememberConversationSnapshot(ctx._sessionId, ctx._snap);
         ctx._lastStatus = ctx._snap && ctx._snap.status;
         if (p.kind === 'settled' || was === 'streaming' && ctx._lastStatus === 'idle') {
@@ -367,6 +382,7 @@ async function _ensureOnce(chatId, epoch, ownerScope = ctx._draftOwnerScope?.() 
                 activeRef !== ctx._ref || ctx._snap !== initialSnapshot) return;
             if (latest && latest.ok && latest.snapshot) {
               ctx._snap = latest.snapshot;
+              if (ctx._snap?.taskGoal) _syncRunnerTaskGoal();
               ctx._rememberConversationSnapshot(ctx._sessionId, ctx._snap);
               ctx._render();
             }
@@ -740,7 +756,7 @@ function _paintOpening() {
             '<span class="nchat-opening-line"></span><span class="nchat-opening-line"></span>' +
             '<span class="nchat-opening-line"></span></div></div></div>';
   }
-  return { _ensureOnce, _ensure, _retryOpenChat, _awaitBounded, _send, _sendCore, _paintOpening };
+  return { _ensureOnce, _ensure, _retryOpenChat, _awaitBounded, _send, _sendCore, _paintOpening, _syncRunnerTaskGoal };
   }
   global.ChatSessionController = { create };
 })(window);

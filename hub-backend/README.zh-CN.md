@@ -162,6 +162,20 @@ python3 e2e_runner_tls.py --output /absolute/evidence/directory
 
 隔离验证入口：`python3 -B tests/unified_requirements_upgrade.py --sqlite` 和 `python3 -B tests/unified_requirements_upgrade.py`。后者仅创建随机本机 PostgreSQL 临时实例，完成后停止并清理，不使用业务数据库。权限回归为 `test_unified_requirements_acl.py`，包含真实迁移后的 HTTP 多身份和 WebSocket 投影检查。
 
+## 非 Pi 底座的任务续跑
+
+选择目标模式，或在桌面消息中明确要求持续完成时，Codex、Codex Harness、OpenCode、DeepSeek Harness、Kimi 和 Qwen 使用 Runner 统一的任务控制器。Pi 保持原有控制机制；普通提问及未提出持续完成要求的指令保持原来的单轮行为。
+
+输出截断、上下文恢复和任务完成分别判断。只有明确类型的输出上限结果才能触发输出恢复；认证、传输、权限及工具结果不明都不能据此重试。由任务控制器接管的 DeepSeek 轮次会关闭桥接层内部的输出重试，避免新进程放大次数。任务记录最多允许两次输出恢复，第二次必须有新的成功工具进展。上下文恢复保留独立计数，可压缩或接力原生会话，同时保留 SoduWork 会话和工作区。
+
+工作轮成功结束后，单独的复核轮检查实际产物和验证结果。只有本轮有效的结构化结论、本复核轮真实成功的工具证据，以及已声明产物的检查都满足，才认定完成。这是模型辅助复核，不能证明任意业务要求必然正确。缺少证据、结论格式错误或不支持的证据会暂停任务；连续两轮没有新的成功工具进展也会暂停。原权限和审批要求始终有效。
+
+默认预算为 240 分钟和 1,000 个工具步骤。累计活动时间、工具步骤、复核状态及恢复次数会跨内部续跑和 Runner 重启保存。暂停期间不计活动时间，继续不会补充预算。用户新消息在原生轮次结束时优先处理；停止和关闭目标会阻止自动重启，包括执行宿主正在收尾的情况。关闭目标保留文件，并允许继续普通对话。
+
+运行 `python3 -m unittest test_local_task_goal test_local_task_goal_integration test_context_recovery test_acp_error_messages` 验证控制器及关键边界。检查使用合成结果和隔离进程，不代表所有真实模型的交付质量验收。
+
+已有兼容的 DeepSeek 安装时，运行 `python3 e2e_task_goal_dsh.py --adapter-entry /absolute/adapter/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`。检查使用已安装的适配器、运行时、真实文件工具及生产流解析、任务控制器和恢复代码；模型响应与进程调度回调使用测试替身。它要求截断恢复后在同一原生会话完成文件复核，已有文件保持不变，写入不会重复。不安装依赖，也不使用生产凭据。
+
 ## OpenCode 恢复会话时的模型选择
 
 受管 OpenCode 原生命令会明确传入本轮模型；ACP 路径在发送提示词前选择组件实际公布的精确模型标识，并保留原会话 ID 和历史。仅更新注入配置中的默认模型，无法替换原生会话记住的模型。找不到指定模型或组件未确认切换时，本轮停止执行；适配器不会恢复旧凭据、改写模型名称或新建替代会话。
