@@ -27,7 +27,10 @@ class RuntimeTLSTest(unittest.TestCase):
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.ca, self.leaf, self.key = fixtures.make_certificates(self.root / "trusted")
         self.other_ca, self.other_leaf, self.other_key = fixtures.make_certificates(self.root / "other")
+        # Keep Windows' native crypto providers available even on first use.
+        # Clearing SystemRoot makes verification depend on prior initialization.
         self.stack.enter_context(patch.dict(os.environ, {
+            **{name: os.environ[name] for name in ("SYSTEMROOT",) if name in os.environ},
             "SSL_CERT_FILE": "", "SSL_CERT_DIR": "", "HTTP_PROXY": "", "HTTPS_PROXY": "",
             "NO_PROXY": "", "no_proxy": ""}, clear=True))
         # Model a frozen OpenSSL whose compiled default paths are unavailable.

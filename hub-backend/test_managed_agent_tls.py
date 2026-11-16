@@ -70,7 +70,9 @@ class ManagedAgentTLSTest(unittest.TestCase):
         self.addCleanup(self.stack.close)
         self.root = Path(self.stack.enter_context(tempfile.TemporaryDirectory()))
         self.ca, leaf, key = make_certificates(self.root / "certificates")
+        # Native crypto providers need SystemRoot on a cold Windows process.
         self.stack.enter_context(patch.dict(os.environ, {
+            **{name: os.environ[name] for name in ("SYSTEMROOT",) if name in os.environ},
             "SSL_CERT_FILE": str(self.ca), "HTTP_PROXY": "", "HTTPS_PROXY": "",
             "NO_PROXY": "", "no_proxy": ""}, clear=True))
         self.stack.enter_context(patch.object(managed_agents.time, "sleep"))
