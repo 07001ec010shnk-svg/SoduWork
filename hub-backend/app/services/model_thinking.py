@@ -61,5 +61,3 @@ def thinking_options(model, *, planning=False):
         elif fmt == "qwen-chat-template":
             result["chat_template_kwargs"] = {"enable_thinking": True, "preserve_thinking": True}
     return result
-
-

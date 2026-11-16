@@ -94,7 +94,7 @@ app.whenReady().then(async () => {
     const page = await request('/tasks/' + taskId + '/ai-session');
     assert.ok(page.items.some(row => row.kind === 'thinking'));
     // The vendor fixture emits model tokens for native/fallback runtimes, and
-    // Harness2 reports refinement tokens. These four ACP peers emit occupancy only.
+    // These four ACP peers emit occupancy only, without native usage receipts.
     const billed = !['codex-harness', 'qwen', 'opencode', 'dsh'].includes(agent.id);
     assert.equal(page.items.some(row => row.kind === 'usage'), billed,
       agent.id + ': bill reported model tokens, never ACP context occupancy');

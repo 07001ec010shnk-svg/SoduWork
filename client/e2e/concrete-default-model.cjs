@@ -54,7 +54,7 @@ if (typeof electron === 'string') {
     await click('[data-model-name=short]');
     assert.deepEqual(await js('selected'), [{ ref: 'isolated-chat', name: 'short' }]);
     assert.equal(await js('sent.length'), 0);
-    report.cases.push('Seven runtime menus: resolved historical model checked; no empty choice; explicit switching and drafts preserved');
+    report.cases.push('Six runtime menus: resolved historical model checked; no empty choice; explicit switching and drafts preserved');
 
     await js(`window.originalModels=models;window.originalMyModels=SoduWorkAPI.myModels;
       models=[{name:'hub-first',label:'Hub 模型'},{name:'local:first',label:'本机优先模型',localOnly:true},

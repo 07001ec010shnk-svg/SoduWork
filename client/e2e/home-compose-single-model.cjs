@@ -67,7 +67,7 @@ app.whenReady().then(async () => {
     SoduWorkAPI.myModels=async()=>structuredClone(homeCatalog);
     ComposeRuntime.value=()=>homeRuntime;ComposeRuntime.location=()=>homeLocation;
     ComposeRuntime.catalog=()=>[{id:'pi',modelMode:'managed'},{id:'qwen',modelMode:'managed'},
-      {id:'codex',modelMode:'account'},{id:modelMode:'account'}];
+      {id:'codex',modelMode:'account'}];
     soduWorkAPI.conversationSession.runtimeModels=async id=>({ok:true,models:[{id:'account-'+id,label:'Account '+id}]});
     NativeChat.enter=async(...args)=>{homeSends.push(args);return false;};void 0;`);
   for (const source of ['local', 'Hub']) {
@@ -132,7 +132,7 @@ app.whenReady().then(async () => {
     assert.equal(selected, id === 'codex' ? 'account-codex' : '');
     assert.equal(await js('document.querySelector("#cpModelPop").innerHTML.includes(' + JSON.stringify(local) + ')'), false);
   }
-  mark('Codex and Claude keep independent account model behavior and never select the device model');
+  mark('Codex keeps independent account model behavior and never selects the device model');
   assert.equal(await fresh({ usable: [{ name: local, localOnly: true }, { name: 'cloud-hub', label: 'Cloud Hub' }] }, 'pi', 'cloud'), true);
   assert.equal(await js('ComposeModelPicker.value().modelName'), 'cloud-hub');
   assert.equal(await js('document.querySelector("#cpModelPop").innerHTML.includes(' + JSON.stringify(local) + ')'), false);

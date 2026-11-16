@@ -158,7 +158,7 @@ if (typeof electron === 'string') {
     assert.equal(await js('document.querySelector(".ndelivery").closest(".nmsg").dataset.messageOwner'), '2');
     await js('window.savedDelivery=document.querySelector(".ndelivery")'); await click('[data-turn-toggle]'); await click('[data-turn-toggle]');
     assert.equal(await js('document.querySelector(".ndelivery")===window.savedDelivery&&visible(window.savedDelivery)'), true);
-    report.results.push('Pi/Claude/Codex share one visible stack; production delivery card stays with final owner and preserves identity through both fold directions');
+    report.results.push('Pi/Qwen/Codex share one visible stack; production delivery card stays with final owner and preserves identity through both fold directions');
     for (const width of [1100, 360]) {
       await viewport(width);
       const layout = await js(`(()=>{const elements=[document.documentElement,document.body,document.querySelector('#nchatScroll'),document.querySelector('#nchatList'),
@@ -248,7 +248,7 @@ if (typeof electron === 'string') {
     await publish(nativeMissing);
     assert.doesNotMatch((await nativeValues())[0], /7|≈|—|tokens/);
     await screenshot('native-usage-reconciled');
-    report.results.push('Google Harness2 missing native usage shows a marked thinking/text estimate per round, remains stable after switching/reopening and reconciles a late authoritative receipt without using context/session totals');
+    report.results.push('Kimi missing native usage shows a marked thinking/text estimate per round, remains stable after switching/reopening and reconciles a late authoritative receipt without using context/session totals');
     const merged = snapshot([user('继续并整理最终回复'), answer([thought('先核对上下文。'), text('这是工具前的过程说明。'), call('merged-tool', 2),
       thought('核对已完成。', 3), text('这是最终结论。', 4)])], [tool('merged-tool', 1)]);
     await publish(merged, true); await closed(['这是最终结论。']);

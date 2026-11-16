@@ -372,8 +372,8 @@ if (typeof electron === 'string') {
     const provenanceCases = [
       ...managed.flatMap(runtime => [privateRef,'managed-model'].map(model =>
         [runtime==='pi'?'qwen':'pi',runtime,privateRef,model,true])),
-      ['pi','codex','managed-model','',true], ['pi','managed-model','',true],
-      ['codex','pi','account-model',privateRef,true], ['kimi','account-model','managed-model',true],
+      ['pi','codex','managed-model','',true],
+      ['codex','pi','account-model',privateRef,true], ['codex','kimi','account-model','managed-model',true],
       ['pi','pi','old-model','managed-model',true], ['qwen','qwen',privateRef,privateRef,true],
       ['pi','qwen',privateRef,privateRef,false],
     ];

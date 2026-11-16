@@ -170,7 +170,7 @@ app.whenReady().then(async () => {
     assert.equal(await js('document.querySelectorAll(".ag-drawer [data-amodel]").length'), 0);
     assert.match(await js('document.querySelector(".ag-drawer .ag-model").textContent'), /自己的账号与模型/);
   }
-  mark('Codex and Claude retain their own accounts without managed model selectors');
+  mark('Codex retains its own account without managed model selectors');
 
   const multiple = models.save({ models: [model, other] });
   const otherRef = multiple.myModels.find(row => row.name === other.name).id;

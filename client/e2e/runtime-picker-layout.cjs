@@ -101,7 +101,7 @@ if (typeof electron === 'string') {
       win.setSize(900,700);await sleep(100);await settle();
       check(await geometry(trigger,popup),7);
       await click(popup+' [data-runtime=kimi]');
-      await until(`document.querySelector(${JSON.stringify(trigger)}).textContent.includes('Google')`);
+      await until(`document.querySelector(${JSON.stringify(trigger)}).textContent.includes('Kimi')`);
       report.checks.push({surface,case:'resize-open-picker-and-select-last-scrolled-runtime'});
       win.setSize(1600,950);await sleep(80);
       await js('window.layoutRuntimes=layoutRuntimes.slice(0,1);window.dispatchEvent(new Event("agent-runtimes-changed"));void 0');
