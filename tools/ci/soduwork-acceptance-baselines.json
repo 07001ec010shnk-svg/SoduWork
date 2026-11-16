@@ -16,6 +16,7 @@
   "linux-x64-rpm": {
     "productName": "SoduWork",
     "version": "1.13.15",
+    "rpmSignature": "legacy-unsigned",
     "sha256": "2edd1a5cc1cf74f284a822ab77bb91fb1a647a9ebb6f571170d14dc0ab1310d1",
     "size": 214479213,
     "url": "https://github.com/mdiri-ai/SoduWork/releases/download/v1.13.15/SoduWork-1.13.15-linux.rpm"

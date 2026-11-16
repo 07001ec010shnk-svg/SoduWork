@@ -42,6 +42,13 @@ requires a trusted signature with `localpkg_gpgcheck=True`. See
 for key requirements and first-install trust instructions. Standalone DEB signatures
 do not provide automatic APT repository authentication.
 
+The published 1.13.15 RPM predates package signing. Its committed upgrade baseline
+explicitly records `rpmSignature: "legacy-unsigned"`. In disposable acceptance
+containers only, the old installer is rechecked against its pinned SHA-256 before
+an old-package-only signature exception is applied. The receipt records the
+baseline exception and hash. Candidate installation, verification and upgrade
+still require the new signature; never mark a candidate as a legacy baseline.
+
 ## Repository setup
 
 To validate packaging before publication approval, set `PACKAGE_VALIDATION_REPOSITORY`

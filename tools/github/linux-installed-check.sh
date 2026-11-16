@@ -8,7 +8,13 @@ package=${3:?package}
 version=${4:?version}
 old_package=${5:?pinned old package}
 old_version=${6:?old version}
+legacy_rpm_digest=${7:--}
 case "$kind" in deb|rpm|tgz) ;; *) exit 64 ;; esac
+if [ "$legacy_rpm_digest" != - ]; then
+  test "$kind" = rpm
+  test "$old_package" != -
+  [[ "$legacy_rpm_digest" =~ ^[a-f0-9]{64}$ ]]
+fi
 credential_provider() {
   for provider in gnome-keyring-daemon kwalletd6 kwalletd5; do
     if command -v "$provider" >/dev/null 2>&1; then printf '%s\n' "$provider"; return 0; fi
@@ -132,7 +138,7 @@ if [ "$old_package" != - ]; then
   profile=/home/acceptance/soduwork-acceptance-profile-upgrade
   runuser -u acceptance -- mkdir "$profile"
   if [ "$kind" = deb ]; then dpkg -i "$old_package"; app=/opt/SoduWork
-  elif [ "$kind" = rpm ]; then rpm -i "$old_package"; app=/opt/SoduWork
+  elif [ "$kind" = rpm ]; then bash /checks/github/install-rpm-baseline.sh "$old_package" "$legacy_rpm_digest"; app=/opt/SoduWork
   else tar -xzf "$old_package" -C /opt/acceptance; app=/opt/acceptance/SoduWork-$old_version-linux; fi
   smoke old "$old_version" write
   if [ "$kind" = deb ]; then dpkg -i --force-confnew "$package"; app=/opt/SoduWork
@@ -155,6 +161,8 @@ fi
 test "$(cat "$profile/acceptance-sentinel.txt")" = preserve-install-acceptance-data
 dependency_verified=false
 rpm_signature_verified=false
+legacy_unsigned_rpm_baseline=false
+if [ "$legacy_rpm_digest" != - ]; then legacy_unsigned_rpm_baseline=true; fi
 if [ "$kind" = rpm ]; then
   grep -Ei 'signature.*: OK' /evidence/rpm-signature.txt
   rpm_signature_verified=true
@@ -163,5 +171,5 @@ if [ "$kind" != tgz ]; then
   test -s /evidence/installed-credential-provider.txt
   dependency_verified=true
 fi
-printf '{"ok":true,"version":"%s","oldVersion":"%s","upgraded":%s,"reinstalled":%s,"nodeShimExecutable":true,"credentialProviderDependencyVerified":%s,"upgradeDependencyResolutionVerified":false,"rpmSignatureVerified":%s}\n' \
-  "$version" "$accepted_old_version" "$upgraded" "$reinstalled" "$dependency_verified" "$rpm_signature_verified" > /evidence/result.json
+printf '{"ok":true,"version":"%s","oldVersion":"%s","upgraded":%s,"reinstalled":%s,"nodeShimExecutable":true,"credentialProviderDependencyVerified":%s,"upgradeDependencyResolutionVerified":false,"rpmSignatureVerified":%s,"legacyUnsignedRpmBaseline":%s}\n' \
+  "$version" "$accepted_old_version" "$upgraded" "$reinstalled" "$dependency_verified" "$rpm_signature_verified" "$legacy_unsigned_rpm_baseline" > /evidence/result.json

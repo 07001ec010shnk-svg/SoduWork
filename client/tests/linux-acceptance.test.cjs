@@ -23,6 +23,7 @@ async function exercise(firstRelease, overrides = {}) {
         oldVersion: firstRelease ? '' : '1.13.14', nodeShimExecutable: true,
         credentialProviderDependencyVerified: path.basename(path.dirname(file)) !== 'ubuntu22-tgz',
         rpmSignatureVerified: path.basename(path.dirname(file)).endsWith('-rpm'),
+        legacyUnsignedRpmBaseline: !firstRelease && !!overrides.legacy && path.basename(path.dirname(file)).endsWith('-rpm'),
         upgradeDependencyResolutionVerified: false, ...overrides.result };
     },
     acceptance: async (_platform, rows) => { checks = rows; },
@@ -33,7 +34,8 @@ async function exercise(firstRelease, overrides = {}) {
     'node:assert/strict': assert, 'node:crypto': require('node:crypto'),
     '../ci/release-artifacts.cjs': contract,
     '../ci/acceptance-common.cjs': { run: async (...args) => { calls.push(args); },
-      soduworkBaseline: async key => firstRelease ? null : { path: `/fixture/${key}`, version: '1.13.14' } },
+      soduworkBaseline: async key => firstRelease ? null : { path: `/fixture/${key}`, version: '1.13.14',
+        ...(overrides.legacy && key.endsWith('-rpm') ? { rpmSignature: 'legacy-unsigned', sha256: 'a'.repeat(64) } : {}) } },
   };
   await vm.runInNewContext(source, { process: state, require: name => modules[name],
     console: { error: error => errors.push(error) } });
@@ -63,10 +65,26 @@ for (const firstRelease of [true, false]) test(`Linux acceptance preserves ${fir
   const verifies = calls.filter(([, args]) => args[0] === 'exec' && args[4] === 'verify');
   assert.equal(verifies.length, 5);
   for (const [, args] of verifies) {
-    assert.equal(args.at(-1), firstRelease ? '-' : '1.13.14');
-    if (firstRelease) assert.equal(args.at(-2), '-');
+    assert.equal(args.at(-1), '-');
+    assert.equal(args.at(-2), firstRelease ? '-' : '1.13.14');
+    if (firstRelease) assert.equal(args.at(-3), '-');
   }
   assert.equal(calls.filter(([, args]) => args[0] === 'rm').length, 5);
+});
+
+test('legacy RPM upgrade exception is hash pinned, RPM only and recorded without waiving candidate signing', async () => {
+  const { calls, checks, errors } = await exercise(false, { legacy: true });
+  assert.deepEqual(errors, []);
+  for (const row of checks) {
+    assert.equal(row.legacyUnsignedRpmBaseline, row.name.endsWith('-rpm'));
+    assert.equal(row.oldSha256, row.name.endsWith('-rpm') ? 'a'.repeat(64) : undefined);
+    if (row.name.endsWith('-rpm')) assert.equal(row.rpmSignatureVerified, true);
+  }
+  for (const [, args] of calls.filter(([, args]) => args[0] === 'exec' && args[4] === 'verify'))
+    assert.equal(args.at(-1), args[5] === 'rpm' ? 'a'.repeat(64) : '-');
+  const failed = await exercise(false, { legacy: true, result: { rpmSignatureVerified: false } });
+  assert.equal(failed.state.exitCode, 1);
+  assert.equal(failed.checks, undefined);
 });
 
 test('Linux acceptance cannot report success without RPM signature evidence', async () => {
