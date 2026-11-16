@@ -870,9 +870,8 @@ def _run_probe_once(jid: str, key: str, llm: dict, *, workspace=None,
     hit = _probe_succeeded(out, code, _TOKEN)
     why = "" if hit else _why_failed(out, code)
     steps.append({"name": "能干活吗", "ok": hit,
-                  "detail": ("把口令原样说回来了" if hit else why)})
+                  "detail": ("通过" if hit else why)})
     if hit:
-        _say(jid, "   它把口令原样拼回来了：" + _TOKEN)
         _fin(True, f"通了 —— {prof.get('name')} {ver} 真跑了一轮，口令对上了。")
     else:
         # Include recognized failure reasons in the log.

@@ -302,6 +302,9 @@ async def update_user(
         raise HTTPException(status_code=400, detail="不能停用超级管理员")
     was_active = bool(target.is_active)
     patch = body.model_dump(exclude_none=True)
+    # Explicit null clears the role; omitting the field preserves it.
+    if "roleId" in body.model_fields_set:
+        patch["roleId"] = body.roleId
     target_org_id = body.orgId if body.orgId is not None else target.org_id
     if body.positions is not None or body.orgId is not None:
         try:
