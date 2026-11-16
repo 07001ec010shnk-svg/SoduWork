@@ -40,6 +40,97 @@ _DEAD_GRACE_S = 20
 # drain time and reset it whenever either stream cursor advances.
 _DURABLE_DRAIN_GRACE_S = 5 * 60
 _PI_SETTLE_GRACE_S = 5
+_HOST_EXIT_GRACE_S = 3.0
+_HOST_CLEANUP_GRACE_S = 30.0
+_HOST_EXIT_ERROR = 'Permission-controlled execution host did not exit'
+
+
+def _join_execution_host(ref, spool, code, kill_tree, *, proc=None, pid=None, owner=None,
+                         allow_grace=True):
+    """Confirm host exit separately from the durable Agent exit receipt.
+
+    A frozen one-file host may still be removing its private extraction after
+    the Agent has exited. Only a reliable receipt permits that bounded grace;
+    cancellation and permission transitions keep the short stop deadline.
+    """
+    token = object()
+    pid = int(pid or (proc.pid if proc is not None else 0))
+
+    def current():
+        run = _RUNS.get(ref)
+        return (run if run and run.get('state') == 'running'
+                and int(run.get('pid') or 0) == pid
+                and (run.get('stream') or {}).get('id') == spool.get('id')
+                and (owner is None or run.get('_workerIdentity') is owner) else None)
+
+    with _LOCK:
+        run = current()
+        if run is None:
+            return False, ''
+        run['_hostCleanup'] = token
+    started = time.monotonic()
+    hard_error = ''
+    termination_requested = False
+    try:
+        try:
+            reliable = allow_grace and local_spool.status_code(_store_dir(ref), spool) is not None
+        except OSError:
+            reliable = False
+        while True:
+            with _LOCK:
+                run = current()
+                if run is None:
+                    return False, ''
+                settling = reliable and not (run.get('stopping') or run.get('_accessTransition'))
+            if proc is not None:
+                try:
+                    host_code = proc.poll()
+                except (OSError, subprocess.SubprocessError):
+                    host_code = None
+                exited = host_code is not None
+            else:
+                from .local_stream import _pid_alive as process_alive
+                exited = bool(pid) and not process_alive(pid)
+                host_code = None
+            if exited:
+                with _LOCK:
+                    if current() is None:
+                        return False, ''
+                if not hard_error and host_code not in (None, 0, code):
+                    hard_error = 'Permission-controlled execution host exited abnormally'
+                return True, hard_error
+            budget = _HOST_CLEANUP_GRACE_S if settling else _HOST_EXIT_GRACE_S
+            if not termination_requested and time.monotonic() - started >= budget:
+                # A kill request is not an exit acknowledgement. Keep the same
+                # active PID, admission fence and output until exit is observed.
+                with _LOCK:
+                    run = current()
+                    if run is None:
+                        return False, ''
+                    run['error'] = hard_error = _HOST_EXIT_ERROR
+                    run['failureKind'] = 'execution_host_cleanup'
+                    change = run.get('_accessTransition')
+                    if change:
+                        change['error'] = hard_error
+                try:
+                    _save_meta(ref)
+                except OSError as exc:
+                    log.warning('Execution host cleanup state could not be saved: %s', type(exc).__name__)
+                try:
+                    with _LOCK:
+                        if current() is None:
+                            return False, ''
+                    kill_tree(ref, expected_pid=pid, expected_proc=proc)
+                except Exception as exc:  # noqa: BLE001 - Uncertain termination must retain the active host.
+                    log.warning('Execution host termination was not confirmed: %s', type(exc).__name__)
+                termination_requested = True
+                continue
+            time.sleep(0.1 if proc is not None else 1.0)
+    finally:
+        with _LOCK:
+            run = _RUNS.get(ref)
+            if run is not None and run.get('_hostCleanup') is token:
+                run.pop('_hostCleanup', None)
 
 
 def _pi_settlement_due(run: dict, now: float) -> bool:
@@ -250,11 +341,11 @@ def spawn(
         if (cfg or {}).get('accessPolicy'):
             # A policy change may follow immediately. Join the trusted sidecar
             # before announcing a completed turn or launching its replacement.
-            try:
-                proc.wait(timeout=3)
-            except subprocess.TimeoutExpired:
-                kill_tree(ref)
-                hard_error = 'Permission-controlled execution host did not exit'
+            joined, join_error = _join_execution_host(
+                ref, spool, code, kill_tree, proc=proc, owner=owner)
+            if not joined:
+                return
+            hard_error = join_error or hard_error
 
         try:
             finish(ref, int(code if code is not None else 1), term, hard_error)
@@ -291,6 +382,7 @@ def recover(
             return bool(
                 current
                 and current.get('state') == 'running'
+                and int(current.get('pid') or 0) == pid
                 and str((current.get('stream') or {}).get('id') or '') == str(spool.get('id') or '')
             )
 
@@ -299,8 +391,13 @@ def recover(
         should_kill = False
         with _LOCK:
             current = _RUNS.get(ref)
-            if not current or current.get('state') != 'running':
+            if (not current or current.get('state') != 'running'
+                    or int(current.get('pid') or 0) != pid
+                    or (current.get('stream') or {}).get('id') != spool.get('id')):
                 return
+            observed = current
+            if local_spool.status_code(_store_dir(ref), spool) is not None:
+                return  # Completed Agent output belongs to the reader/joiner.
             now = time.time()
             last = float(current.get('lastOut') or current.get('started') or now)
             started = float(current.get('started') or now)
@@ -323,10 +420,15 @@ def recover(
                 )
                 should_kill = True
         if should_kill:
-            if not kill_tree(ref):
+            with _LOCK:
+                current = _RUNS.get(ref)
+                if (current is not observed or int(current.get('pid') or 0) != pid
+                        or (current.get('stream') or {}).get('id') != spool.get('id')):
+                    return
+            if not kill_tree(ref, expected_pid=pid, skip_host_cleanup=True):
                 with _LOCK:
                     current = _RUNS.get(ref)
-                    if current is not None:
+                    if current is observed and int(current.get('pid') or 0) == pid:
                         current.pop('piSettledByWatchdog', None)
 
     def worker() -> None:
@@ -350,15 +452,36 @@ def recover(
             hard_error = '' if code is not None else (
                 '执行机恢复了过程输出，但执行进程没有留下可靠的退出状态'
             )
+            with _LOCK:
+                protected = bool((_RUNS.get(ref) or {}).get('accessPolicy'))
+            if protected:
+                joined, join_error = _join_execution_host(ref, spool, code, kill_tree, pid=pid)
+                if not joined:
+                    outcome = 'cancelled'
+                    return
+                hard_error = join_error or hard_error
+            if not still_current():
+                outcome = 'cancelled'
+                return
             finish(ref, int(code if code is not None else 1), term, hard_error)
         except Exception as exc:  # noqa: BLE001
-            kill_tree(ref)
+            with _LOCK:
+                protected = bool((_RUNS.get(ref) or {}).get('accessPolicy'))
+            if protected:
+                joined, _ = _join_execution_host(
+                    ref, spool, None, kill_tree, pid=pid, allow_grace=False)
+                if not joined:
+                    outcome = 'cancelled'
+                    return
+            else:
+                kill_tree(ref)
             finish(ref, 1, term, '恢复实时输出失败（%s）' % type(exc).__name__)
             outcome = 'failed'
         finally:
             with _LOCK:
                 current = _RUNS.get(ref)
-                if current is not None:
+                if (current is not None
+                        and (current.get('stream') or {}).get('id') == spool.get('id')):
                     current['streamAttached'] = False
             if outcome != 'cancelled':
                 local_spool.cleanup(_store_dir(ref), spool)
@@ -382,6 +505,8 @@ def _watchdog(ref: str, proc, *, finish: Callable, kill_tree: Callable) -> None:
                     return
                 if run.get('accessPolicy') and run.get('proc') is not proc:
                     return  # a previous turn must never time out its replacement
+                if run.get('_hostCleanup'):
+                    continue  # The joiner owns completion and its cleanup deadline.
                 last = run.get('lastOut') or run.get('started') or time.time()
                 started = run.get('started') or time.time()
                 completed = bool(run.get('turnCompleted'))
@@ -424,6 +549,8 @@ def _watchdog(ref: str, proc, *, finish: Callable, kill_tree: Callable) -> None:
                     )
                     return
                 continue
+            if durable and local_spool.status_code(_store_dir(ref), stream) is not None:
+                continue  # Do not time out a host already publishing its exit receipt.
             gone_since = 0.0
             durable_progress = None
             if run.get("permissionWaiting"):
@@ -432,12 +559,15 @@ def _watchdog(ref: str, proc, *, finish: Callable, kill_tree: Callable) -> None:
             if _pi_settlement_due(run, now):
                 with _LOCK:
                     current = _RUNS.get(ref)
-                    if current is not None:
-                        current['piSettledByWatchdog'] = True
-                if not kill_tree(ref):
+                    if (current is not run or current.get('_hostCleanup')
+                            or (current.get('accessPolicy') and current.get('proc') is not proc)):
+                        continue
+                    current['piSettledByWatchdog'] = True
+                    target_pid = current.get('pid')
+                if not kill_tree(ref, expected_pid=target_pid, expected_proc=proc,
+                                 skip_host_cleanup=True):
                     with _LOCK:
-                        current = _RUNS.get(ref)
-                        if current is not None:
+                        if _RUNS.get(ref) is current and current.get('proc') is proc:
                             current.pop('piSettledByWatchdog', None)
                 return
             idle, total = now - last, now - started
@@ -450,9 +580,12 @@ def _watchdog(ref: str, proc, *, finish: Callable, kill_tree: Callable) -> None:
                 log.warning('本地会话 %s 判死：%s', ref[:8], reason)
                 with _LOCK:
                     current = _RUNS.get(ref)
-                    if current is not None:
-                        current['timedOut'] = reason
-                kill_tree(ref)
+                    if (current is not run or current.get('_hostCleanup')
+                            or (current.get('accessPolicy') and current.get('proc') is not proc)):
+                        continue
+                    current['timedOut'] = reason
+                    target_pid = current.get('pid')
+                kill_tree(ref, expected_pid=target_pid, expected_proc=proc, skip_host_cleanup=True)
                 return
 
     thread = threading.Thread(target=watch, name='ai_local:wd:' + ref[:8], daemon=True)
