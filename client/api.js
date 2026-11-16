@@ -851,7 +851,7 @@
   function localAutomationAgent(value, mode, clientId) {
     var id = String(value || '').trim();
     var runtime = id.replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
-    var managed = runtime && !['codex', 'claude'].includes(runtime);
+    var managed = runtime && !['codex'].includes(runtime);
     var current = String(_deviceId || '').trim(), selected = String(clientId || '').trim();
     return (id.startsWith('local:') && managed) || (String(mode || '').trim() === 'local' &&
       /^runner:[^:]+:[a-z][a-z0-9-]{0,39}$/.test(id) && managed &&
@@ -1760,13 +1760,14 @@
       });
       if (!machine) return unavailable();
       machine = Object.assign({}, machine, { runnerId: selectedId, scope: 'current-instance', isCurrentDevice: true });
-      var agents = Array.isArray(machine.agents) ? machine.agents : [];
+      var agents = (Array.isArray(machine.agents) ? machine.agents : [])
+        .filter(function (agent) { return !['claude', 'harness2'].includes(agent.key); });
       var hubModels = Array.isArray(data.models) ? data.models : [];
       var models = localRows.concat(hubModels);
       var firstModel = models[0];
       agents = agents.map(function (agent) {
         var selected = localDefaults?.selections?.[agent.key];
-        if (agent.modelPick === false || ['codex', 'claude'].includes(agent.key)) return agent;
+        if (agent.modelPick === false || ['codex'].includes(agent.key)) return agent;
         var savedModel = selected?.configured ? selected.modelName : agent.model || '';
         var missing = selected?.configured ? selected.unavailable : agent.modelGone ||
           (savedModel && !models.some(row => row.name === savedModel));
@@ -1826,7 +1827,7 @@
       var scope = domainScope(), defaults = !model || isLocalModelChoice(model) ? await localAgentDefaults(scope) : null;
       var probeAgent = null;
       var preferred = !model && defaults?.selections?.[key];
-      var inherited = !model && defaults && !['codex', 'claude'].includes(key);
+      var inherited = !model && defaults && !['codex'].includes(key);
       if (isLocalModelChoice(model) || preferred?.configured || inherited) {
         if (!defaults) throw new Error('本地模型测试不可用，请更新客户端');
         var setup = await this.localAgentSetup();

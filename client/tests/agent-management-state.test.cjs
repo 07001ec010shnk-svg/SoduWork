@@ -27,7 +27,7 @@ test('managed Agent defaults disclose Anthropic incompatibility while account-ba
   assert.match(f.context._agModelHtml({ modelPick: true, key: 'pi', model: 'openai-model' }), /role="note"/);
   f.run("_agData={models:[{name:'openai-model',providerKind:'openai-compat'}]}");
   assert.doesNotMatch(f.context._agModelHtml({ modelPick: true, key: 'pi', model: 'openai-model' }), /ag-model-warn/);
-  assert.doesNotMatch(f.context._agModelHtml({ modelPick: false, key: 'claude', model: 'anthropic-model' }), /OpenAI 兼容/);
+  assert.doesNotMatch(f.context._agModelHtml({ modelPick: false, key: 'codex', model: 'anthropic-model' }), /OpenAI 兼容/);
 });
 
 test('Agent management renders only this client even when cloud and other instances share its label', () => {
@@ -215,9 +215,6 @@ test('legacy partial installs and bundled setup do not produce contradictory bad
   const f = fixture();
   const broken = { ...base, present: undefined, state: 'missing', installed: false, warnNow: '启动自检失败' };
   assert.equal(f.context._agPresentation(broken).state, 'broken');
-  const setup = { ...broken, key: 'harness2', name: 'Google Harness²', bundled: true,
-    warnNow: 'Google Harness² 需要 OpenCode 执行组件，请点「装上」自动准备。' };
-  assert.equal(f.context._agPresentation(setup).state, 'setup');
   assert.equal(f.context._agPresentation({ key: 'opencode', state: 'missing', installed: false,
     warnNow: '需要准备依赖' }).state, 'missing');
 });
@@ -255,7 +252,7 @@ test('legacy saved probes do not follow an observed model or version change', ()
 });
 
 test('unknown states are renderable and overview counts only complete installations', () => {
-  const f = fixture(), agents = [base, { ...base, key: 'harness2', state: 'setup', installed: false },
+  const f = fixture(), agents = [base, { ...base, key: 'qwen', state: 'setup', installed: false },
     { ...base, key: 'broken', state: 'broken', installed: false },
     { ...base, key: 'unknown', state: 'future-state', installed: false }];
   assert.equal(f.context._agPresentation(agents[3]).state, 'unknown');

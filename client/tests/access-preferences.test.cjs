@@ -28,7 +28,7 @@ test('default modes persist locally and are applied only to new supported intera
   assert.equal(fs.existsSync(path.join(f.root, 'access-preferences.json')), false);
   assert.equal((await f.set('readonly', 0)).ok, true);
   assert.equal(preferences.snapshot(f.app).mode, 'readonly');
-  for (const adapterId of ['pi', 'codex-harness', 'opencode', 'qwen', 'codex', 'dsh', 'kimi', 'claude']) assert.equal(f.apply({ adapterId }).accessMode, 'readonly');
+  for (const adapterId of ['pi', 'codex-harness', 'opencode', 'qwen', 'codex', 'dsh', 'kimi']) assert.equal(f.apply({ adapterId }).accessMode, 'readonly');
   for (const options of [{ taskSession: true }, { taskRef: 'task' }]) assert.equal(f.apply(options).accessMode, 'readonly');
   for (const options of [{ chatId: 'existing' }, { automationId: 'schedule' },
     ...['unknown-runtime'].map(adapterId => ({ adapterId })), { accessMode: 'standard' }]) assert.equal(f.apply(options), options);

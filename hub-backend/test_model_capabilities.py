@@ -595,22 +595,6 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(actual.get("maxTokensField"), "max_completion_tokens")
         self.assertIs(actual.get("supportsUsageInStreaming"), False)
 
-    def test_working_compatibility_shapes_harness2_requests(self):
-        from app.services import harness2_provider
-        response = io.BytesIO(json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": "OK"}}]}).encode())
-        response.headers = {"Content-Type": "application/json"}
-        seen = []
-        def opened(request, **kwargs):
-            seen.append(json.loads(request.data))
-            return response
-        model = {"base": "https://fixture.invalid/v1", "key": "synthetic", "model": "fixture",
-                 "maxOutputTokens": 4096,
-                 "compatibility": {"maxTokensField": "max_completion_tokens", "streamOptions": False}}
-        with patch.object(harness2_provider.urllib.request, "build_opener", return_value=SimpleNamespace(open=opened)):
-            harness2_provider.request(model, [{"role": "user", "content": "hello"}], [])
-        self.assertNotIn("max_tokens", seen[0])
-        self.assertEqual(seen[0].get("max_completion_tokens"), 4096)
-        self.assertNotIn("stream_options", seen[0])
 
     def test_legacy_unknown_and_explicit_native_are_not_claimed_verified(self):
         self.assertEqual(caps.runtime_fields({})["imageRouting"], "vision-fallback")

@@ -262,7 +262,7 @@
   function localModelAgent(agent) {
     if (!agent) return false;
     const runtime = String(agent.cli || agent.id || '').replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
-    if (!runtime || ['codex', 'claude'].includes(runtime)) return false;
+    if (!runtime || ['codex'].includes(runtime)) return false;
     if (!String(agent.id || '').startsWith('local:') && !String(agent.id || '').startsWith('runner:')) return false;
     return agent.mode !== 'remote' && agent.locationMode !== 'remote';
   }

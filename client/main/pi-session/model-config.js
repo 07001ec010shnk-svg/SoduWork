@@ -135,7 +135,7 @@ async function fetchModel(identity, modelName = '', timeoutMs = 8000, fetchImpl 
   }
   if (String(modelName || '').startsWith('local:')) {
     // Local references may only be resolved by a managed runtime in this
-    // desktop process. Account runtimes (Codex/Claude) and cloud execution
+    // desktop process. Account runtimes (Codex) and cloud execution
     // must continue to use their own model or Hub-issued configuration.
     const localAllowed = runtimeSpec?.modelMode === 'managed' &&
       (options.allowLocal === true || requestedAgent === 'pi' && options.app);

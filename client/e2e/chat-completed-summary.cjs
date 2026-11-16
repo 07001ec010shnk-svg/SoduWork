@@ -148,12 +148,12 @@ if (typeof electron === 'string') {
     await js("ctx._ref='another-completed-session'"); await publish(complete); await closed([finalText]);
     await js("ctx._ref='completed-summary'"); await publish(complete); await closed([finalText]);
     report.results.push('Mouse and Enter/Space expand/collapse; expanded state and message DOM survive rerender and reset on session change');
-    complete.tools[0].sourceAgent = source('claude', 'run-tool'); complete.messages[2].sourceAgent = source('codex', 'run-final');
+    complete.tools[0].sourceAgent = source('qwen', 'run-tool'); complete.messages[2].sourceAgent = source('codex', 'run-final');
     complete.messages[2].blocks[1].text = finalText + '成果见 [核对报告](report.pdf)。';
     await js("ctx._outs=[{artifactId:'summary-report',path:'report.pdf',relative:'report.pdf',name:'核对报告.pdf',kind:'document',primary:true,changedInTurn:true,at:1,size:2048}]");
     await publish(complete);
     assert.equal(await js('document.querySelectorAll(".nchat-agent-source").length'), 1);
-    assert.deepEqual(await js('Array.from(document.querySelectorAll(".nchat-agent-source .agent-brand"),e=>Array.from(e.classList).find(c=>c.startsWith("agent-brand-")).slice(12)).sort()'), ['claude', 'codex', 'pi']);
+    assert.deepEqual(await js('Array.from(document.querySelectorAll(".nchat-agent-source .agent-brand"),e=>Array.from(e.classList).find(c=>c.startsWith("agent-brand-")).slice(12)).sort()'), ['codex', 'pi', 'qwen']);
     assert.equal(await js('Array.from(document.querySelectorAll(".ndelivery")).filter(visible).length'), 1);
     assert.equal(await js('document.querySelector(".ndelivery").closest(".nmsg").dataset.messageOwner'), '2');
     await js('window.savedDelivery=document.querySelector(".ndelivery")'); await click('[data-turn-toggle]'); await click('[data-turn-toggle]');
@@ -232,8 +232,8 @@ if (typeof electron === 'string') {
     assert.doesNotMatch(await js(`document.querySelector('[data-turn-toggle="reply:49"]').innerText`), /40|222|tokens/);
     report.results.push('Raw owner IDs preserve independent expansion and metrics across history remapping; legacy snapshots recover their own per-message output usage without borrowing the latest count');
     const nativeMissing = snapshot([user('First native turn'), answer([thought('先确认'), text('完成')],
-      { usage: null, sourceAgent: source('harness2') }), user('Second native turn', at + 60000),
-      answer([text('第二轮完成。')], { usage: { output: 19 }, sourceAgent: source('harness2'), completedAt: at + 64000 })], [],
+      { usage: null, sourceAgent: source('kimi') }), user('Second native turn', at + 60000),
+      answer([text('第二轮完成。')], { usage: { output: 19 }, sourceAgent: source('kimi'), completedAt: at + 64000 })], [],
       { usage: { output: 999999 }, contextUsage: { input: 80000 } });
     await publish(nativeMissing, true);
     const nativeValues = () => js('Array.from(document.querySelectorAll(".nturn-summary"),node=>node.innerText)');

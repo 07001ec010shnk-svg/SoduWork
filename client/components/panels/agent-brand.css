@@ -12,11 +12,9 @@
 .agent-brand>img {display:block;width:64%;height:64%;object-fit:contain;pointer-events:none;user-select:none;}
 .agent-brand-pi {--agent-brand-accent:#6b7280;}
 .agent-brand-opencode {--agent-brand-accent:#111827;}
-.agent-brand-claude {--agent-brand-accent:#d97757;}
 .agent-brand-qwen {--agent-brand-accent:#6950ef;}
 .agent-brand-kimi {--agent-brand-accent:#111827;}
 .agent-brand-dsh {--agent-brand-accent:#5786fe;}
-.agent-brand-harness2 {--agent-brand-accent:#4285f4;}
 .agent-brand-codex,.agent-brand-codex-harness {--agent-brand-accent:#6f52b5;}
 .agent-brand-codex>img,.agent-brand-codex-harness>img {width:76%;height:76%;}
 html[data-desk-panel="chatbar"][data-composer-theme="dark"] .agent-brand {
