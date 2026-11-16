@@ -38,6 +38,12 @@ def error_text(event: dict) -> str:
 
 def observe(run: dict, event: dict, terminal: dict) -> str:
     text = error_text(event)
+    if (run.get("cli") == "codex" and event.get("type") == "error"
+            and isinstance(event.get("message"), str) and not event.get("error")):
+        # Native Codex emits recoverable progress diagnostics on this channel,
+        # including reconnect attempts. Only turn.failed owns its terminal
+        # error; do not let a diagnostic block a later native recovery.
+        text = ""
     non_pi = bool(run.get("cli")) and run.get("cli") != "pi"
     context_error = bool(text and (OVERFLOW.search(text) or text.strip().lower() == "context length"))
     safe_text = text

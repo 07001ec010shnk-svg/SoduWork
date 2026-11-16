@@ -168,6 +168,64 @@ class ContextRecoveryTests(unittest.TestCase):
                     self.assertEqual(self.row['state'], 'failed')
                     self.assertIn('synthetic transport failure', self.row['error'])
 
+    def test_native_codex_progress_diagnostics_do_not_poison_completion(self):
+        notices = (
+            'Reconnecting... 1/5 (stream disconnected before completion)',
+            'Falling back from WebSockets to HTTPS transport',
+            'Unexpected status 503; retrying request',
+            'Reconnecting... 1/5 (context length exceeded)',
+        )
+        for notice in notices:
+            with self.subTest(notice=notice):
+                self.row.update(cli='codex', state='running')
+                terminal = {}
+                stream._on_line(self.ref, json.dumps({'type': 'error', 'message': notice}), terminal)
+                self.assertEqual(terminal, {})
+                stream._on_line(self.ref, json.dumps({'type': 'turn.completed'}), terminal)
+                with patch.object(ctx, '_recover_overflow', return_value=True) as recover:
+                    stream._finish(self.ref, 0, terminal, '')
+                recover.assert_not_called()
+                self.assertEqual(self.row['state'], 'done')
+
+    def test_native_codex_diagnostic_does_not_block_owned_context_recovery(self):
+        self.row['cli'] = 'codex'
+        terminal = {}
+        for event in (
+            {'error': {'name': 'ContextOverflowError', 'message': 'context length exceeded'}},
+            {'type': 'error', 'message': 'Reconnecting... 1/5 (stream disconnected)'},
+            {'type': 'turn.completed'},
+        ):
+            stream._on_line(self.ref, json.dumps(event), terminal)
+        self.assertFalse(terminal.get('isError'))
+        self.assertFalse(terminal.get('overflow'))
+        self.assertFalse(terminal.get('nonPiContextBlocked'))
+
+    def test_native_codex_authoritative_failure_is_not_a_reconnect_notice(self):
+        self.row['cli'] = 'codex'
+        terminal = {}
+        failure = 'Reconnecting... 5/5 (native turn failed after retries)'
+        for event in (
+            {'type': 'error', 'message': 'Reconnecting... 4/5'},
+            {'type': 'turn.failed', 'error': {'message': failure}},
+            {'type': 'turn.completed'},
+        ):
+            stream._on_line(self.ref, json.dumps(event), terminal)
+        self.assertTrue(terminal.get('isError'))
+        self.assertTrue(terminal.get('nonPiContextBlocked'))
+        self.assertIn(failure, terminal['result'])
+        with patch.object(ctx, '_recover_overflow', return_value=True) as recover:
+            stream._finish(self.ref, 1, terminal, '')
+        recover.assert_not_called()
+        self.assertEqual(self.row['state'], 'failed')
+
+    def test_native_codex_progress_exception_does_not_suppress_other_agent_errors(self):
+        for cli in ('dsh', 'kimi', 'qwen', 'opencode', 'codex-harness'):
+            with self.subTest(cli=cli):
+                terminal = {}
+                policy.observe({'cli': cli}, {'type': 'error', 'message': 'Reconnecting... 1/5'}, terminal)
+                self.assertTrue(terminal.get('isError'))
+                self.assertTrue(terminal.get('nonPiContextBlocked'))
+
     def test_nonpi_success_only_clears_the_context_error_it_owns(self):
         for cli in ('dsh', 'kimi', 'qwen', 'opencode', 'codex', 'codex-harness'):
             with self.subTest(cli=cli):
