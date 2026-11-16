@@ -22,13 +22,16 @@ window.petSay=message=>window.notice=message;window._humanErr=e=>e.message;
 window.saved=[];window.testCalls=[];window.capabilityCalls=[];window.testFailure=false;window.saveFailure=false;window.capabilityFailure=false;
 window.fixture={providers:[
  {id:'company',name:'共享模型服务',baseUrl:'https://gateway.example.test/v1',kind:'openai-compat',keySet:true,modelNames:['default-multimodal'],modelDefs:[{name:'default-multimodal',modality:'chat',config:{imageRouting:'native'}}]},
- {id:'personal',name:'OpenAI 兼容（个人）',baseUrl:'https://personal.example.test/v1',kind:'openai-compat',myKeySet:true,myKeyLen:32,modelNames:[]},
+ {id:'personal',personal:true,name:'OpenAI 兼容（个人）',baseUrl:'https://personal.example.test/v1',kind:'openai-compat',myKeySet:true,myKeyLen:32,modelNames:[]},
  {id:'deepseek',name:'DeepSeek',baseUrl:'https://api.example.test/v1',modelNames:['deepseek-chat','deepseek-reasoner']},
  {id:'glm',name:'智谱 GLM',baseUrl:'https://glm.example.test/v1',modelNames:['glm-flash']},
  {id:'claude',name:'Anthropic Claude',baseUrl:'https://claude.example.test',kind:'anthropic',modelNames:['claude-model']},
  {id:'local',name:'本机开发服务',baseUrl:'http://127.0.0.1:11434/v1',personal:true,authMode:'none',modelNames:['local-model']}
 ],myModels:[{providerId:'personal',name:'business-review-model',label:'business-review-model',config:{thinkingMode:'always',thinkingFormat:'zai',imageRouting:'auto',capabilities:{imageInput:'unknown'},maxOutputTokens:8192},ctxWindow:128000}],
 usable:[{providerId:'company',name:'default-multimodal',keyFrom:'org'},{providerId:'personal',name:'business-review-model',keyFrom:'mine'}]};
+// Existing personal overrides on a company service do not make it user-owned.
+window.legacyCompanyOverrides={provider:{baseUrl:'https://legacy-override.example.test/v1',myKeySet:true,myKeyLen:32,addressOverridden:true,defaultBaseUrl:'https://company.example.test/v1'},
+ model:{providerId:'company',name:'legacy-company-model',label:'Legacy company override',config:{maxOutputTokens:8192}}};
 window.SoduWorkAPI={myModels:async()=>structuredClone(fixture),hubBase:()=> 'isolated-model-ui',
 checkMyModelCapabilities:async body=>{capabilityCalls.push(structuredClone(body));await new Promise(r=>setTimeout(r,240));if(capabilityFailure)throw Error('能力检测未完成，请重试');const checks=Object.fromEntries(body.checks.map(key=>[key,{status:'passed',code:'verified'}]));const capabilityProfile=Object.fromEntries(['imageInput','toolCalling','streaming'].map(key=>[key,{state:'supported',source:'verified'}]));return {ok:true,checks,capabilityProfile,checkedAt:'2026-09-30T08:00:00Z',configRevision:'fixture-v1',runtimeRevision:'fixture-run-v1'};},
 saveMyModels:async body=>{

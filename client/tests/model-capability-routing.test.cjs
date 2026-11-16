@@ -16,7 +16,7 @@ function fixture() {
     test: () => { throw Error('Discovery must not be used as a capability test'); },
     checkCapabilities: async input => { localChecks.push(input); return { checks: {}, capabilityProfile: {} }; } } },
     fetch: async (url, options = {}) => { if (options.method === 'POST') requests.push({ url, body: JSON.parse(options.body) });
-      return new Response(JSON.stringify({ ok: true, providers: [], usable: [], myModels: [] })); } };
+      return new Response(JSON.stringify({ ok: true, providers: [{ id: 'managed', personal: true }], usable: [], myModels: [] })); } };
   box.window = box; vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../api.js'), 'utf8'), box);
   return { api: box.SoduWorkAPI, bridge: box.soduWorkAPI.localModels, requests, localChecks };
 }

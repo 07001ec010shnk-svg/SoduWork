@@ -19,7 +19,9 @@ function fixture(get = async () => ({ providers: [], myModels: [], revision: 1 }
       ...(options.automationModels ? { automationModels: options.automationModels } : {}) },
     fetch: async (url, options) => { const body = options?.body && JSON.parse(options.body);
       requests.push({ url, body });
-      return new Response(JSON.stringify({ ok: true, id: 'schedule', modelSource: body?.modelSource || 'managed' })); },
+      return new Response(JSON.stringify(url.endsWith('/my-models') && options?.method !== 'PUT'
+        ? { providers: [{ id: 'custom-managed', personal: true }], usable: [], myModels: [] }
+        : { ok: true, id: 'schedule', modelSource: body?.modelSource || 'managed' })); },
   };
   box.window = box;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../api.js'), 'utf8'), box);
@@ -184,7 +186,7 @@ test('managed key patches never replace omitted provider or model lists', async 
   const f = fixture();
   await f.api.saveMyModels({ keys: { 'custom-managed': 'fixture-key' } });
   assert.equal(f.saves.length, 0);
-  assert.deepEqual(f.requests[0].body, { keys: { 'custom-managed': 'fixture-key' } });
+  assert.deepEqual(f.requests.find(row => row.body).body, { keys: { 'custom-managed': 'fixture-key' } });
 });
 
 test('explicit managed clears survive an accompanying local save', async () => {

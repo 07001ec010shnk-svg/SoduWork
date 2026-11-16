@@ -1,5 +1,12 @@
 (function (global) {
   const messages = {
+    "模型服务来源暂时无法确认，请刷新目录后重试": "The model service ownership could not be verified. Refresh the catalog and try again.",
+    "服务端同步的模型服务为只读，请添加自己的服务": "Server-managed model services are read-only. Add your own service instead.",
+    "模型服务不存在或来源无法确认，请刷新目录后重试": "The model service is missing or its ownership could not be verified. Refresh the catalog and try again.",
+    "服务端同步，只读": "Synced from the server · Read-only",
+    "此服务由管理员维护。如需使用自己的配置，请添加个人服务。": "This service is managed by your administrator. Add a personal service to use your own configuration.",
+    "凭据由管理员维护": "Credentials are managed by your administrator",
+    "服务端尚未配置模型。": "No models have been configured on the server.",
     "安装技能": "Install skill",
     "保存到当前账号的个人技能库并启用，可在「技能」页管理。": "Save to your account’s personal skill library and enable it. Manage it on the Skills tab.",
     "安装并启用": "Install and enable",

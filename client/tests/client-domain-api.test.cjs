@@ -14,7 +14,9 @@ async function fixture(bridge = {}, values = new Map([['soduwork_work_hub_url', 
     fetch: async (url, options) => { requests.push({url, options}); return {ok: true, status: 200,
       text: async () => JSON.stringify(url.endsWith('/client-auth/me')
         ? {user: {id: 'alice'}, quota: {enabled: true, exceeded: false, limit: 1000, used: 10}}
-        : {id: 'project-one', name: 'Saved', revision: 1})}; },
+        : url.endsWith('/my-models') && options.method !== 'PUT'
+          ? {providers: [{id: 'provider', personal: true}], usable: [], myModels: []}
+          : {id: 'project-one', name: 'Saved', revision: 1})}; },
   };
   context.window = context; vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '../api.js'), 'utf8'), context);

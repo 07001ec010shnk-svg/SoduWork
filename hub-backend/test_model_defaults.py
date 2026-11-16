@@ -200,8 +200,10 @@ class ModelDefaultsTests(IsolatedDatabase):
                 (await session.get(ModelDef, "fixture:" + name)).enabled = False
             client = await session.get(Client, "fixture")
             client.agent_models = {}
-            client.models = [{"providerId": "fixture", "name": "personal-chat"}]
-            client.model_keys = {"fixture": "fixture-personal-private"}
+            client.config = {**(client.config or {}), "modelProviders": [{"id": "custom-fixture", "name": "Personal",
+                "baseUrl": "https://personal.invalid/v1", "personal": True}]}
+            client.models = [{"providerId": "custom-fixture", "name": "personal-chat"}]
+            client.model_keys = {"custom-fixture": "fixture-personal-private"}
         metadata = await self.get("my-models")
         self.assertEqual(metadata["defaultModel"], "personal-chat")
         self.assertEqual(set(metadata["defaultModels"].values()), {"personal-chat"})

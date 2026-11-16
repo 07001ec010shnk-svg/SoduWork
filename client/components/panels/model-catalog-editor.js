@@ -18,8 +18,10 @@ function _mdReconcileChecks(data) {
   }
 }
 function _mdModelListHtml(p, models, own) {
+  const editable = _mdCanEdit(p);
+  if (!editable) own = [];
   const rows = models.map(model => ({ model, index: -1 })).concat(own.map((model, index) => ({ model, index })));
-  if (!rows.length) return '<p class="md-model-help">添加模型后可配置能力并进行检测。</p>';
+  if (!rows.length) return '<p class="md-model-help">' + (editable ? '添加模型后可配置能力并进行检测。' : '服务端尚未配置模型。') + '</p>';
   return '<div class="md-model-list">' + rows.map(({ model, index }) => {
     const id = _mdCheckKey(p.id, model.name), check = _mdChecks.get(id);
     const item = p._capStale ? { ...model, capabilityProfile: undefined, capabilityCheck: null } : model;
@@ -28,14 +30,15 @@ function _mdModelListHtml(p, models, own) {
       '<span data-user-content>' + esc(model.label || model.name) + '</span></div>' +
       (model.label && model.label !== model.name ? '<span class="md-model-id" data-user-content>' + esc(model.name) + '</span>' : '') +
       ModelCapabilitiesUI.badges(item) + '</div><div class="md-model-actions">' +
-      (_mdType(model.modality) === 'chat' ? '<button type="button" data-mdcheck' + (check?.pending ? ' disabled' : '') + '>' + (check?.pending ? '检测中…' : '检测能力') + '</button>' : '') +
-      (check?.pending && check.modelRef ? '<button type="button" data-mdcancelcheck>取消检测</button>' : '') +
-      (index >= 0 ? '<button type="button" data-mdedit="' + esc(p.id) + '|' + index + '">编辑</button>' +
+      (editable && _mdType(model.modality) === 'chat' ? '<button type="button" data-mdcheck' + (check?.pending ? ' disabled' : '') + '>' + (check?.pending ? '检测中…' : '检测能力') + '</button>' : '') +
+      (editable && check?.pending && check.modelRef ? '<button type="button" data-mdcancelcheck>取消检测</button>' : '') +
+      (editable && index >= 0 ? '<button type="button" data-mdedit="' + esc(p.id) + '|' + index + '">编辑</button>' +
         '<button type="button" data-mdel="' + esc(p.id) + '|' + index + '" title="移除模型" aria-label="移除模型">移除模型</button>' : '<span class="md-cap-unchecked">组织管理</span>') +
       '</div>' + (_mdType(model.modality) === 'chat' ? '<div class="md-model-report">' + ModelCapabilitiesUI.evidenceWarning(item) + ModelCapabilitiesUI.report(check || item.capabilityCheck) + '</div>' : '') + '</article>';
   }).join('') + '</div>';
 }
 function _mdModelEditorHtml(p) {
+  if (!_mdCanEdit(p)) return '';
   const draft = _mdDrafts.get(p.id), model = draft?.model || {}, config = model.config || {}, type = _mdType(model.modality);
   return '<details class="md-model-editor" data-mdeditor="' + esc(p.id) + '"' + (draft?.open ? ' open' : '') + '><summary>' +
     (draft?.original ? '编辑模型' : '添加模型') + '</summary><div class="md-addgrid">' +
@@ -55,7 +58,7 @@ function _mdBindModels(box) {
   box.querySelectorAll('[data-mdedit]').forEach(button => button.addEventListener('click', () => {
     if (button.isConnected === false) return;
     const [pid, index] = button.dataset.mdedit.split('|'), model = _mdMyModels.filter(row => row.providerId === pid)[+index];
-    if (!model) return;
+    if (!_mdCanEdit(_mdProvider(pid)) || !model) return;
     _mdDrafts.set(pid, { original: model.name, model: structuredClone(model), open: true });
     _mdRender();
     const field = box.querySelector('[data-padd]');
@@ -69,13 +72,14 @@ function _mdBindModels(box) {
   }));
   box.querySelectorAll('[data-mdeditor]').forEach(editor => {
     const pid = editor.dataset.mdeditor;
+    if (!_mdCanEdit(_mdProvider(pid))) return;
     const restored = _mdDrafts.get(pid);
     for (const [selector, value] of Object.entries(restored?.fields || {})) {
       const field = editor.querySelector(selector); if (field) field.value = value;
     }
     if (restored?.advanced) editor.querySelector('.md-cap-advanced')?.setAttribute('open', '');
     function capture(event) {
-      if (!editor.isConnected) return;
+      if (!editor.isConnected || !_mdCanEdit(_mdProvider(pid))) return;
       const fields = {};
       editor.querySelectorAll('input,select,textarea').forEach(field => {
         const attr = [...field.attributes].find(attribute => attribute.name.startsWith('data-'));
@@ -124,7 +128,7 @@ function _mdApplyModel(editor) {
   const pid = editor.dataset.mdeditor, draft = _mdDrafts.get(pid), original = draft?.original;
   const old = _mdMyModels.find(row => row.providerId === pid && row.name === original);
   // A removed edit target must not become an implicit new model.
-  if (!_mdProvider(pid) || (original && !old)) return;
+  if (!_mdCanEdit(_mdProvider(pid)) || (original && !old)) return;
   const value = selector => editor.querySelector(selector)?.value.trim() || '';
   const name = value('[data-padd]'), modality = _mdType(value('[data-paddtype]'));
   if (!name) return;
@@ -158,6 +162,7 @@ function _mdApplyModel(editor) {
   } catch (error) { petSay(error.message); }
 }
 async function _mdCheckModel(pid, name) {
+  if (!_mdCanEdit(_mdProvider(pid))) return;
   const key = _mdCheckKey(pid, name);
   if (_mdChecks.get(key)?.pending) return;
   const local = _mdProvider(pid)?.localOnly === true;

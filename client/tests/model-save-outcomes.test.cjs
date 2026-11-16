@@ -79,7 +79,7 @@ async function fixture(t, { collision = false, managedPersonal = false, localKey
 }
 
 test('a partial mixed save retains Hub edits and retries without rewriting committed local models', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, { managedPersonal: true });
   f.touch('managed', { baseUrl: 'https://edited.fixture.invalid/v1' });
   f.touch('device:custom-private', { name: 'Saved local edit' });
   f.state.failHubWrite = true;
@@ -100,7 +100,7 @@ test('a partial mixed save retains Hub edits and retries without rewriting commi
 });
 
 test('same-ID local and Hub providers keep distinct catalog, edits, and deletions', async t => {
-  const f = await fixture(t, { collision: true });
+  const f = await fixture(t, { collision: true, managedPersonal: true });
   const api = f.box.SoduWorkAPI, catalog = await api.myModels();
   assert.deepEqual(Array.from(catalog.providers, row => row.id), ['device:custom-private', 'custom-private']);
   assert.equal(catalog.providers[0].localProviderId, 'custom-private');
@@ -125,7 +125,7 @@ test('same-ID local and Hub providers keep distinct catalog, edits, and deletion
 });
 
 test('same-ID provider probes and explicit key patches use their declared ownership', async t => {
-  const f = await fixture(t, { collision: true }), api = f.box.SoduWorkAPI, localProbes = [];
+  const f = await fixture(t, { collision: true, managedPersonal: true }), api = f.box.SoduWorkAPI, localProbes = [];
   f.box.soduWorkAPI.localModels.test = async (providerId, model) => { localProbes.push({ providerId, model }); return { ok: true }; };
   f.box.soduWorkAPI.localModels.checkCapabilities = async input => { localProbes.push({ modelRef: input.modelRef }); return { ok: true }; };
   await assert.rejects(api.testMyModel('custom-private'), /来源不明确/);
@@ -169,7 +169,7 @@ test('deleting a Hub service with the same raw device ID preserves the device se
 });
 
 test('deleting the last local service never sends its removal key to a later managed save', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, { managedPersonal: true });
   f.touch('managed', { baseUrl: 'https://edited.fixture.invalid/v1' });
   assert.equal(await f.removeProvider('device:custom-private'), true);
   assert.equal(f.snapshot().providers.length, 0);
@@ -232,7 +232,7 @@ test('a committed local save stays successful when catalog rendering fails', asy
 });
 
 for (const change of ['hub', 'panel']) test(`a ${change} switch during local persistence cannot send the old managed draft`, async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, { managedPersonal: true });
   let release;
   f.state.gate = new Promise(resolve => { release = resolve; });
   f.touch('managed', { baseUrl: 'https://previous.fixture.invalid/v1' });
@@ -323,7 +323,7 @@ test('saving another local service leaves an incomplete new service pending', as
 });
 
 test('an incomplete new draft cannot force a local write during a managed save', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, { managedPersonal: true });
   f.evaluate('_mdAddService(); _mdOpen = "managed"; _mdEditor = "";');
   f.touch('managed', { baseUrl: 'https://edited.fixture.invalid/v1' });
   assert.equal(await f.evaluate('_mdSave(false)'), true);
@@ -408,7 +408,7 @@ test('reloading a saved service clears validation for an invalid edit that was d
 
 for (const patch of [{ name: 'n'.repeat(65) }, { baseUrl: 'https://fixture.invalid/v1/'.padEnd(401, 'x') }])
 test(`an oversized draft ${Object.keys(patch)[0]} cannot block another service save`, async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, { managedPersonal: true });
   f.evaluate('_mdAddService()');
   f.touch(f.evaluate('_mdNew.id'), { name: 'Draft service', baseUrl: 'https://fixture.invalid/v1', ...patch });
   f.evaluate('_mdOpen = "managed"; _mdEditor = "";');

@@ -63,8 +63,12 @@ class CapabilityTests(IsolatedDatabase):
             session.add_all([
                 User(id="admin", username="admin", is_super=True),
                 User(id="alice", username="alice"), User(id="bob", username="bob"),
-                Client(id="a", user_ref="alice", auth_state="active", model_keys={"p": "alice-private"}),
-                Client(id="b", user_ref="bob", auth_state="active", model_keys={"p": "bob-private"}),
+                *[Client(id=cid, user_ref=owner, auth_state="active", model_keys={"custom-p": owner + "-private"},
+                         config={"modelProviders": [{"id": "custom-p", "name": "Personal", "baseUrl": self.base,
+                                                      "personal": True, "kind": "openai-compat"}]},
+                         models=[{"providerId": "custom-p", "name": "personal-model", "ctxWindow": 128000,
+                                  "config": {"imageRouting": "auto", "maxOutputTokens": 32768}}])
+                  for cid, owner in (("a", "alice"), ("b", "bob"))],
                 ModelProvider(id="p", name="Fixture", api_key="company-private", base_url=self.base),
                 ModelDef(id="p:model", provider_id="p", name="model", ctx_window=128000,
                          config={"imageRouting": "auto", "maxOutputTokens": 32768}),
@@ -161,13 +165,15 @@ class CapabilityTests(IsolatedDatabase):
             writer.close()
             await writer.wait_closed()
 
-    async def check(self, who="a", checks=None, **extra):
+    async def check(self, who="admin", checks=None, **extra):
         path = "/api/v1/admin/model-capabilities/check" if who == "admin" else "/api/v1/my-models/capabilities/check"
         return await self.http.post(path, headers=self.headers.get(who, {}), json={
-            "providerId": "p", "model": "model", "checks": checks or list(probe.CHECKS), **extra})
+            "providerId": "p" if who == "admin" else "custom-p",
+            "model": "model" if who == "admin" else "personal-model",
+            "checks": checks or list(probe.CHECKS), **extra})
 
     async def test_real_checks_persist_and_propagate_to_runtime_with_scoped_evidence(self):
-        response = await self.check()
+        response = await self.check("a")
         self.assertEqual(response.status_code, 200, response.text)
         result = response.json()
         self.assertTrue(result["ok"], result)
@@ -184,18 +190,19 @@ class CapabilityTests(IsolatedDatabase):
         self.assertEqual(result["imageRouting"], "native")
         self.assertNotIn("alice-private", response.text)
         mine = await self.http.get("/api/v1/my-models", headers=self.headers["a"])
-        self.assertTrue(mine.json()["usable"][0]["capabilityCheck"]["checkedAt"])
-        config = await self.http.get("/api/v1/ai-proxy/config", headers=self.headers["a"])
+        personal = next(row for row in mine.json()["usable"] if row["own"])
+        self.assertTrue(personal["capabilityCheck"]["checkedAt"])
+        config = await self.http.get("/api/v1/ai-proxy/config?model=personal-model", headers=self.headers["a"])
         self.assertEqual(config.json()["input"], ["text", "image"])
         self.assertEqual(config.json()["maxOutputTokens"], 32768)
         self.assertEqual(config.json().get("compatibility"), result["compatibility"])
         async with self.sessions() as session:
             admin = (await catalog.catalog(session))["models"][0]
-            bob = (await catalog.usable(session, await session.get(Client, "b")))[0]
+            bob = next(row for row in await catalog.usable(session, await session.get(Client, "b")) if row["own"])
             self.assertIsNone(admin["capabilityCheck"])
             self.assertIsNone(bob["capabilityCheck"])
             self.assertEqual(bob["imageRouting"], "vision-fallback")
-            alice = await catalog.resolve(session, await session.get(Client, "a"))
+            alice = await catalog.resolve(session, await session.get(Client, "a"), "personal-model")
             llm = ai_exec.with_llm({"cfg": {"llm": {}}}, alice)["cfg"]["llm"]
             self.assertEqual(llm["maxOutputTokens"], 32768)
             self.assertEqual(llm["capabilityProfile"]["streaming"]["state"], "supported")
@@ -235,8 +242,7 @@ class CapabilityTests(IsolatedDatabase):
     async def test_organization_evidence_follows_org_credentials_and_runtime_revision_changes(self):
         async with self.sessions() as session:
             client = await session.get(Client, "b")
-            client.model_keys = {}
-            client.models = [{"providerId": "p", "name": "personal-alias", "config": {"imageRouting": "auto"}}]
+            client.models = [{"providerId": "custom-p", "name": "personal-alias", "config": {"imageRouting": "auto"}}]
             await session.commit()
         before = (await self.http.get("/api/v1/ai-proxy/config", headers=self.headers["b"])).json()
         result = await self.check("admin", ["imageInput"])
@@ -246,7 +252,7 @@ class CapabilityTests(IsolatedDatabase):
         self.assertEqual(after["capabilityProfile"]["imageInput"]["source"], "verified")
         self.assertEqual(before["configRevision"], after["configRevision"])
         self.assertNotEqual(before["runtimeRevision"], after["runtimeRevision"])
-        alice = (await self.http.get("/api/v1/ai-proxy/config", headers=self.headers["a"])).json()
+        alice = (await self.http.get("/api/v1/ai-proxy/config?model=personal-model", headers=self.headers["a"])).json()
         self.assertEqual(alice["imageRouting"], "vision-fallback")
         mine = (await self.http.get("/api/v1/my-models", headers=self.headers["b"])).json()
         own = next(row for row in mine["usable"] if row["own"])
@@ -254,7 +260,7 @@ class CapabilityTests(IsolatedDatabase):
         self.assertEqual(own["imageRouting"], "vision-fallback")
 
     async def test_key_address_model_config_changes_invalidate_evidence(self):
-        self.assertTrue((await self.check(checks=["connection", "imageInput"])).json()["ok"])
+        self.assertTrue((await self.check("a", checks=["connection", "imageInput"])).json()["ok"])
         async with self.sessions() as session:
             client = await session.get(Client, "a")
             model = await session.get(ModelDef, "p:model")
@@ -268,10 +274,10 @@ class CapabilityTests(IsolatedDatabase):
                         (row, p, "changed-key")]
             for changed, provider, key in variants:
                 self.assertNotEqual(caps.identity(changed, provider, key, scope)[1], before)
-            client.model_keys = {"p": "new-private"}
+            client.model_keys = {"custom-p": "new-private"}
             await session.commit()
         async with self.sessions() as session:
-            row = (await catalog.usable(session, await session.get(Client, "a")))[0]
+            row = next(row for row in await catalog.usable(session, await session.get(Client, "a")) if row["own"])
             self.assertIsNone(row["capabilityCheck"])
             self.assertEqual(row["capabilityProfile"]["imageInput"]["state"], "unknown")
 
@@ -363,15 +369,23 @@ class CapabilityTests(IsolatedDatabase):
         async with self.sessions() as session:
             client = await session.get(Client, "a")
             task = asyncio.create_task(api.model_transport.until_disconnect(request, api.check_saved(
-                {"providerId": "p", "model": "model", "checks": ["connection"]}, session, client)))
-            async with asyncio.timeout(3):
-                while not self.requests:
-                    await asyncio.sleep(.01)
-            disconnected.set()
-            from fastapi import HTTPException
-            with self.assertRaises(HTTPException) as caught:
-                await task
-            self.assertEqual(caught.exception.status_code, 499)
+                {"providerId": "custom-p", "model": "personal-model", "checks": ["connection"]}, session, client)))
+            try:
+                # Wait for the real loopback request, including cold DB/runtime
+                # admission on slower hosts; cancellation itself is unchanged.
+                async with asyncio.timeout(10):
+                    while not self.requests:
+                        await asyncio.sleep(.01)
+                disconnected.set()
+                from fastapi import HTTPException
+                with self.assertRaises(HTTPException) as caught:
+                    await task
+                self.assertEqual(caught.exception.status_code, 499)
+            finally:
+                disconnected.set()
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
         async with self.sessions() as session:
             records = list((await session.scalars(select(AppSetting))).all())
             for row in records:
@@ -392,7 +406,7 @@ class CapabilityTests(IsolatedDatabase):
                 await session.commit()
             return result
         with patch.object(probe, "run", side_effect=rotate):
-            response = await self.check(checks=["connection"])
+            response = await self.check("a", checks=["connection"])
         self.assertEqual(response.status_code, 401)
         async with self.sessions() as session:
             rows = list((await session.scalars(select(AppSetting))).all())
@@ -463,8 +477,8 @@ class CapabilityTests(IsolatedDatabase):
             client = await session.get(Client, "a")
             row = catalog._m_api(await session.get(ModelDef, "p:model"))
             provider = (await catalog.effective_provider_map(session, client))["p"]
-            scope = caps.principal_scope(client, row, "mine")
-            slot, legacy = caps.identity(row, provider, "alice-private", scope, legacy=True)
+            scope = caps.principal_scope(client, row, "org")
+            slot, legacy = caps.identity(row, provider, "company-private", scope, legacy=True)
             session.add(AppSetting(key=slot, value=json.dumps({"configRevision": legacy,
                 "checkedAt": "2026-01-01T00:00:00+00:00", "checks": {"imageInput": {
                     "status": "passed", "checkedAt": "2026-01-01T00:00:00+00:00"}, "toolCalling": {
@@ -482,12 +496,12 @@ class CapabilityTests(IsolatedDatabase):
         self.assertEqual(result["checks"]["toolCalling"]["status"], "inconclusive")
 
     async def test_personal_model_delete_recreate_does_not_restore_old_evidence(self):
-        definition = {"providerId": "p", "name": "own", "config": {"imageRouting": "auto"}}
+        definition = {"providerId": "custom-p", "name": "own", "config": {"imageRouting": "auto"}}
         async with self.sessions() as session:
             client = await session.get(Client, "a")
             client.models = [definition]
             await session.commit()
-        first = (await self.check(model="own", checks=["imageInput"])).json()
+        first = (await self.check("a", model="own", checks=["imageInput"])).json()
         for definitions in ([], [definition]):
             async with self.sessions() as session:
                 client = await session.get(Client, "a")
@@ -501,12 +515,12 @@ class CapabilityTests(IsolatedDatabase):
         self.assertNotEqual(first["configRevision"], own["configRevision"])
 
     async def test_personal_legacy_declaration_save_preserves_matching_wire_evidence(self):
-        definition = {"providerId": "p", "name": "own", "config": {"imageRouting": "auto"}}
+        definition = {"providerId": "custom-p", "name": "own", "config": {"imageRouting": "auto"}}
         async with self.sessions() as session:
             client = await session.get(Client, "a")
             client.models = [definition]
             await session.commit()
-        first = (await self.check(model="own", checks=["imageInput"])).json()
+        first = (await self.check("a", model="own", checks=["imageInput"])).json()
         async with self.sessions() as session:
             revision = model_config_guard.revision(await session.get(Client, "a"))
         response = await self.http.put("/api/v1/my-models", headers=self.headers["a"], json={
@@ -524,7 +538,7 @@ class CapabilityTests(IsolatedDatabase):
         config = {"imageRouting": "auto", "maxOutputTokens": 8192,
                   "capabilities": {"imageInput": "supported", "toolCalling": "unknown", "streaming": "supported"}}
         response = await self.http.put("/api/v1/my-models", headers=self.headers["a"], json={
-            "expectedRevision": revision, "models": [{"providerId": "p", "name": "own",
+            "expectedRevision": revision, "models": [{"providerId": "custom-p", "name": "own",
                 "ctxWindow": 64000, "config": config}]})
         self.assertEqual(response.status_code, 200, response.text)
         own = next(row for row in response.json()["usable"] if row["name"] == "own")
@@ -532,7 +546,7 @@ class CapabilityTests(IsolatedDatabase):
         self.assertEqual(own["ctxWindow"], 64000)
         self.assertEqual(own["imageRouting"], "native")
         self.assertEqual(own["capabilityProfile"]["imageInput"]["source"], "configured")
-        response = await self.check(model="own", checks=["connection", "streaming"])
+        response = await self.check("a", model="own", checks=["connection", "streaming"])
         self.assertEqual(response.status_code, 200)
         mine = (await self.http.get("/api/v1/my-models", headers=self.headers["a"])).json()
         self.assertIsNotNone(mine["myModels"][0]["capabilityCheck"])
