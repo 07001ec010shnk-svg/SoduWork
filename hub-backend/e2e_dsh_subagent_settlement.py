@@ -33,6 +33,8 @@ SCENARIOS = (
     "resume-limit",
     "no-child",
     "bridge-child",
+    "bridge-truncated-tool",
+    "bridge-repeated-truncation",
 )
 KEY = "soduwork-subagent-loopback-fixture"
 MODEL = "soduwork-subagent-fixture"
@@ -72,6 +74,152 @@ def run_bridge_case(proc, fixture, incoming, updates, report, reader):
     )
     assert "PARENT_DONE" in text, "Python bridge did not emit the final parent answer"
     report["productionPythonBridge"] = True
+
+
+def native_session_summary(node, root):
+    """Inspect only this fixture's native archive, without runtime/config imports."""
+    script = """
+import fs from 'node:fs';
+import path from 'node:path';
+import zlib from 'node:zlib';
+const root = process.argv[1];
+const sessions = [];
+for (const relative of fs.readdirSync(root, {recursive: true})) {
+  if (!relative.endsWith('session.v4.jsonl.zstd')) continue;
+  const data = fs.readFileSync(path.join(root, relative));
+  const events = [];
+  for (let offset = 0; offset < data.length;) {
+    const frame = zlib.zstdDecompressSync(data.subarray(offset), {info: true});
+    if (!(frame.engine.bytesWritten > 0)) throw Error('Archive decoder made no progress');
+    offset += frame.engine.bytesWritten;
+    for (const line of frame.buffer.toString('utf8').split('\\n')) {
+      if (line) events.push(JSON.parse(line));
+    }
+  }
+  sessions.push({
+    id: events.find(event => event.type === 'session')?.id,
+    toolCalls: events.filter(event => event.type === 'tool/call').map(event => ({
+      id: event.data.callId, name: event.data.name
+    })),
+    toolResults: events.filter(event => event.type === 'tool/result').map(event => ({
+      id: event.data.message.source.callId, isError: event.data.message.isError === true
+    })),
+    turnEnds: events.filter(event => event.type === 'turn/end').map(event => event.data.reason.kind)
+  });
+}
+console.log(JSON.stringify(sessions));
+"""
+    env = {"PATH": str(node.parent) + os.pathsep + os.defpath}
+    for name in ("SYSTEMROOT", "WINDIR", "COMSPEC"):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    return json.loads(
+        subprocess.check_output(
+            [str(node), "--input-type=module", "-e", script, str(root / "dsh")],
+            env=env,
+            text=True,
+            encoding="utf-8",
+            timeout=10,
+        )
+    )
+
+
+def run_truncated_tool_case(args, root, proc, fixture, incoming, updates, report, reader):
+    """A dropped model preview must not block the production bridge's recovery."""
+    work = root / "work"
+    seeds = {
+        "RUN_ID.txt": hashlib.sha256(str(root).encode()).hexdigest() + "\n",
+        "existing.txt": "Keep this already completed work unchanged.\n",
+    }
+    for name, value in seeds.items():
+        (work / name).write_text(value, encoding="utf-8")
+    snapshots = {
+        name: ((work / name).read_bytes(), (work / name).stat().st_mtime_ns) for name in seeds
+    }
+    proc.stdin.write("FIXTURE:parent: Keep RUN_ID.txt and existing.txt; finish the remaining file.")
+    proc.stdin.close()
+    proc.wait(timeout=25)
+    reader.join(timeout=2)
+    assert not reader.is_alive(), "Python bridge output did not close"
+    while not incoming.empty():
+        updates.append(incoming.get_nowait())
+    report["productionPythonBridge"] = True
+    report["existingFilesPreserved"] = all(
+        ((work / name).read_bytes(), (work / name).stat().st_mtime_ns) == before
+        for name, before in snapshots.items()
+    )
+    assert report["existingFilesPreserved"], "Recovery changed an existing file or RUN_ID"
+    assert not (work / "truncated.txt").exists(), "Truncated tool arguments were executed"
+    sessions = native_session_summary(args.node, root)
+    report["nativeSessions"] = sessions
+    assert len(sessions) == 1, "Recovery replaced the original native session"
+    native = sessions[0]
+    assert not any(call["id"].startswith("fixture_truncated_") for call in native["toolCalls"]), (
+        "Native runtime dispatched a truncated call"
+    )
+    preview_ids = [
+        event["part"]["callId"]
+        for event in updates
+        if event.get("type") == "tool_use"
+        and str(event.get("part", {}).get("callId", "")).startswith("fixture_truncated_")
+    ]
+    assert preview_ids, "Fixture did not emit a real streamed tool preview"
+    errors = [event["error"] for event in updates if event.get("error")]
+    if args.expect_bug:
+        assert proc.returncode == 2 and fixture.calls["parent"] == 1, (
+            "Expected orphan-preview busy failure was not reproduced"
+        )
+        assert native["turnEnds"] == ["max-tokens"], "Wrong baseline native outcome"
+        report["reproducedTruncatedPreviewBusy"] = True
+        return
+    cancelled = {
+        event.get("toolCallId")
+        for event in updates
+        if event.get("type") == "tool_execution_end"
+        and event.get("state") == "cancelled"
+        and event.get("isError") is False
+    }
+    assert set(preview_ids) <= cancelled, (
+        "A discarded preview remained unfinished or became a tool error"
+    )
+    if fixture.scenario == "bridge-repeated-truncation":
+        assert proc.returncode == 2, "Persistent truncation must fail with exit 2"
+        assert 2 <= fixture.calls["parent"] <= 3, "Recovery did not obey the bounded retry budget"
+        assert not errors, "Output truncation was misreported as an ACP protocol failure"
+        endings = [
+            event.get("part", {}).get("reason")
+            for event in updates
+            if event.get("type") == "step_finish" and not event.get("contextOnly")
+        ]
+        assert endings and endings[-1] == "max_tokens", "Missing semantic truncation outcome"
+        assert native["turnEnds"] and all(
+            reason == "max-tokens" for reason in native["turnEnds"]
+        ), "Persistent truncation was reported as native completion"
+        assert not native["toolCalls"] and not (work / "finished.txt").exists(), (
+            "Persistent partial calls produced side effects"
+        )
+        report["semanticStopReason"] = "max_tokens"
+        return
+    assert proc.returncode == 0 and not errors, "Recovery failed: " + str(errors)
+    assert fixture.calls["parent"] == 3, "Expected one continuation, one write and final response"
+    assert native["turnEnds"] == ["max-tokens", "completed"], "Unexpected native turn history"
+    assert native["toolCalls"] == [{"id": "fixture_finished_write", "name": "write"}], (
+        "Final write did not execute exactly once"
+    )
+    assert native["toolResults"] == [{"id": "fixture_finished_write", "isError": False}], (
+        "Final write did not finish successfully exactly once"
+    )
+    assert (work / "finished.txt").read_text(encoding="utf-8") == "Completed exactly once.\n", (
+        "Final file content is wrong"
+    )
+    text = "".join(
+        str(event.get("part", {}).get("text") or "")
+        for event in updates
+        if event.get("type") == "text"
+    )
+    assert "PARENT_DONE" in text, "Recovery did not emit the final answer"
+    report["truncatedCallNeverExecuted"] = True
+    report["finalWriteExecutedOnce"] = True
 
 
 def stop_recorded_nodes(path):
@@ -128,10 +276,39 @@ class Fixture:
 
     def response(self, body):
         assert body.get("model") == MODEL, "Wrong model route"
+        users = [m.get("content") for m in body["messages"] if m.get("role") == "user"]
+        if (
+            users
+            and isinstance(users[-1], str)
+            and users[-1].startswith("You are now acting as a compaction engine")
+        ):
+            with self.lock:
+                self.calls["compaction"] += 1
+            self.observe("compaction_request")
+            summary = "\n".join(
+                [
+                    "## Primary Request and Intent",
+                    "- FIXTURE:parent: Finish the remaining file; preserve RUN_ID.txt and existing.txt.",
+                    "## Key Technical Concepts",
+                    "- Local text files.",
+                    "## Files and Code",
+                    "- Existing files must remain unchanged.",
+                    "## Errors and Fixes",
+                    "- The previous write arguments were truncated and not executed.",
+                    "## Pending Jobs",
+                    "- Finish the remaining file.",
+                    "## Current Work",
+                    "- Retry a smaller complete write.",
+                    "## Next Step",
+                    "- Issue one small complete write call.",
+                    "## Critical Context",
+                    "- Preserve the existing run identity and completed work.",
+                ]
+            )
+            return {"role": "assistant", "content": summary}, "stop", None
         if not body.get("tools"):
             self.observe("title_request")
             return {"role": "assistant", "content": "Synthetic lifecycle test"}, "stop", None
-        users = [m.get("content") for m in body["messages"] if m.get("role") == "user"]
         actor = None
         for candidate in ("parent", "child", "grandchild"):
             if any(
@@ -139,6 +316,17 @@ class Fixture:
             ):
                 actor = candidate
                 break
+        if (
+            actor is None
+            and self.scenario in {"bridge-truncated-tool", "bridge-repeated-truncation"}
+            and any(
+                isinstance(value, str)
+                and "<compacted-summary>" in value
+                and "FIXTURE:parent:" in value
+                for value in users
+            )
+        ):
+            actor = "parent"
         assert actor, "Unknown synthetic actor"
         with self.lock:
             stage = self.calls[actor]
@@ -177,6 +365,37 @@ class Fixture:
             )
 
         if actor == "parent":
+            if self.scenario in {"bridge-truncated-tool", "bridge-repeated-truncation"}:
+                assert "write" in names, "Native write tool is unavailable"
+                truncated = stage == 0 or self.scenario == "bridge-repeated-truncation"
+                if truncated:
+                    arguments = '{"file_path":"truncated.txt","content":"UNFINISHED'
+                    call_id = "fixture_truncated_" + str(stage)
+                elif stage == 1:
+                    arguments = json.dumps(
+                        {"file_path": "finished.txt", "content": "Completed exactly once.\n"}
+                    )
+                    call_id = "fixture_finished_write"
+                else:
+                    return {"role": "assistant", "content": "PARENT_DONE"}, "stop", None
+                return (
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": "write",
+                                    "arguments": arguments,
+                                },
+                            }
+                        ],
+                    },
+                    "length" if truncated else "tool_calls",
+                    None,
+                )
             if self.scenario == "no-child":
                 return {"role": "assistant", "content": "PARENT_DONE"}, "stop", None
             if stage == 0:
@@ -248,7 +467,28 @@ def run_case(args, scenario, root, output, installation):
                         for i, call in enumerate(message["tool_calls"]):
                             call["index"] = i
                     pieces = []
-                    for delta, reason in ((message, None), ({}, finish)):
+                    deltas = [(message, None), ({}, finish)]
+                    if finish == "length" and message.get("tool_calls"):
+                        # Two genuine tool-argument deltas end inside the JSON
+                        # string. The native SDK finalizes this preview as {},
+                        # but DSH must discard it before tool dispatch.
+                        first = json.loads(json.dumps(message))
+                        call = first["tool_calls"][0]
+                        arguments = call["function"]["arguments"]
+                        split = len(arguments) // 2
+                        call["function"]["arguments"] = arguments[:split]
+                        second = {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {
+                                        "arguments": arguments[split:],
+                                    },
+                                }
+                            ]
+                        }
+                        deltas = [(first, None), (second, None), ({}, finish)]
+                    for delta, reason in deltas:
                         pieces.append(
                             "data: "
                             + json.dumps(
@@ -390,7 +630,7 @@ net.Socket.prototype.connect = function (...args) {
             "--bundle",
             str(root / "bundle"),
         ]
-        if scenario == "bridge-child":
+        if scenario.startswith("bridge-"):
             command = [
                 sys.executable,
                 str(Path(__file__).parent / "app/services/acp_bridge.py"),
@@ -430,8 +670,13 @@ net.Socket.prototype.connect = function (...args) {
         err_reader = threading.Thread(target=lambda: stderr.extend(proc.stderr), daemon=True)
         err_reader.start()
         readers = [reader, err_reader]
-        if scenario == "bridge-child":
-            run_bridge_case(proc, fixture, incoming, updates, report, reader)
+        if scenario.startswith("bridge-"):
+            if scenario == "bridge-child":
+                run_bridge_case(proc, fixture, incoming, updates, report, reader)
+            else:
+                run_truncated_tool_case(
+                    args, root, proc, fixture, incoming, updates, report, reader
+                )
             report["ok"] = True
             return report
         serial = 0
@@ -604,7 +849,7 @@ def main():
     parser.add_argument(
         "--expect-bug",
         action="store_true",
-        help="Only for baseline child scenario: expect premature end_turn",
+        help="Disable the compatibility hook to reproduce child/preview baseline failures",
     )
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
@@ -612,8 +857,8 @@ def main():
         if getattr(args, key):
             setattr(args, key, getattr(args, key).resolve(strict=True))
     scenarios = args.scenario or list(SCENARIOS)
-    if args.expect_bug and scenarios != ["child"]:
-        parser.error("--expect-bug requires --scenario child")
+    if args.expect_bug and scenarios not in (["child"], ["bridge-truncated-tool"]):
+        parser.error("--expect-bug requires --scenario child or --scenario bridge-truncated-tool")
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=True)
     files = [args.adapter_entry.parent.parent / "package.json", args.adapter_entry]

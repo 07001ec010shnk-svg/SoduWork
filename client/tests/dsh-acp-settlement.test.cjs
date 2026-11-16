@@ -157,8 +157,30 @@ function settlementBlock(version) {
   ].join('\n');
   return version === '0.4.40' ? block.replace('resolve: resolve2', 'resolve').replaceAll('resolve2', 'resolve') : block;
 }
+function turnEndBlock() {
+  return `  onTurnEnd(data) {
+    const reason = data["reason"];
+    const turn = data["turn"];
+    if (reason !== null && typeof reason === "object") {
+      const r = reason;
+      if (typeof turn === "number") this.window.turnEnds.set(turn, r);
+      this.window.lastTurnEnd = r;
+      if (r.kind === "error" && this.window.error === void 0) {
+        this.window.error = { message: r.error?.message ?? "model turn failed" };
+      }
+    }
+    this.toolCallBlocks.clear();
+    this.toolCalls.clear();
+    this.streamedToolOutput.clear();
+    this.toolResultValues.clear();
+    return [];
+  }`;
+}
 function fixtureSource(version) {
   return [
+    'export class Projection {',
+    turnEndBlock(),
+    '}',
     'const internalError = detail => new Error(detail);',
     'const errorChain2 = error => error?.message || String(error);',
     'const looksLikeAuthFailure = () => false;',
@@ -253,6 +275,8 @@ test('DSH source transform fails closed for unknown versions and changed or dupl
     assert.throws(() => transformBridgeSource(source.replace('record.agent.whenIdle()', 'record.agent.changedWhenIdle()'), version));
     assert.throws(() => transformBridgeSource(source + '\n' + settlementBlock(version), version));
     assert.throws(() => transformBridgeSource('export const unrelated = true;', version));
+    assert.throws(() => transformBridgeSource(source.replace('this.toolCalls.clear()', 'this.toolCalls.changedClear()'), version));
+    assert.throws(() => transformBridgeSource(source + '\n' + turnEndBlock(), version));
   }
 });
 
@@ -315,3 +339,34 @@ test('DSH Node preload patches all three packaged bridges and preserves unrelate
   assert.match(unsupported.stderr, /prompt interface is unsupported \(0\.4\.42\)/);
   assert.equal(unsupported.stdout, '', 'an unreviewed adapter must fail before prompt execution');
 });
+
+for (const version of ['0.4.40', '0.4.41']) {
+  test('DSH ' + version + ' truncation settles only discarded native pending previews', async () => {
+    const { Projection } = await promptFixture(version);
+    for (const reason of [{ kind: 'max-tokens' }, { kind: 'completed' }, { kind: 'interrupted' },
+      { kind: 'error', error: { message: 'synthetic failure' } }, null]) {
+      const projection = new Projection();
+      const states = ['pending', 'in_progress', 'completed', 'failed'];
+      Object.assign(projection, {
+        window: { turnEnds: new Map() },
+        toolCalls: new Map(states.map(status => [status, { callId: status, status }])),
+        toolCallBlocks: new Map([['block', 'pending']]),
+        streamedToolOutput: new Map([['completed', 'result']]),
+        toolResultValues: new Map([['completed', {}]])
+      });
+      assert.deepEqual(projection.onTurnEnd({ turn: 3, reason }), reason?.kind === 'max-tokens' ? [{
+        sessionUpdate: 'tool_call_update', toolCallId: 'pending', status: 'failed',
+        _meta: { soduwork: { toolOutcome: 'not-executed', reason: 'output-limit' } }
+      }] : []);
+      for (const name of ['toolCalls', 'toolCallBlocks', 'streamedToolOutput', 'toolResultValues']) {
+        assert.equal(projection[name].size, 0, name + ' retains its native cleanup');
+      }
+      if (reason) {
+        assert.equal(projection.window.lastTurnEnd, reason);
+        assert.equal(projection.window.turnEnds.get(3), reason);
+      }
+      if (reason?.kind === 'error') assert.equal(projection.window.error.message, 'synthetic failure');
+      assert.deepEqual(projection.onTurnEnd({ turn: 3, reason }), [], 'no duplicate preview ending');
+    }
+  });
+}

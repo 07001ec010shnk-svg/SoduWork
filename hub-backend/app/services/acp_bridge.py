@@ -47,6 +47,7 @@ _SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 _DSH_OUTPUT_CONTINUATION = (
     "上一段模型输出达到单次上限。请沿用当前会话，从最后一个已确认的工具结果继续完成原请求。"
     "已经完成的写入、命令、发送或其他操作不要重复。结果不确定时先只读核对。"
+    "被截断且未执行的工具调用请拆成更小的完整调用，分步写入和验证，避免再次生成过长参数。"
     "如果交付物已经完成，请直接给出结果和已完成的验证。"
 )
 
@@ -567,7 +568,8 @@ class AcpBridge:
             return
         if self.loading:
             return
-        self.transition.update(update)
+        if self.transition.update(update) is False:
+            return
         self.access.observe_tool(update)
         if kind == "agent_thought_chunk":
             text = _text(update.get("content"))
@@ -750,6 +752,12 @@ class AcpBridge:
                 "prompt": content,
             })
             self._flush_message()
+            if self.agent_name == "dsh" or (self.agent_name == "opencode"
+                                            and result.get("stopReason") == "max_tokens"):
+                reason = str(result.get("stopReason") or "")
+                if reason in {"", "end_turn", "max_tokens"}:
+                    _emit({"type": "step_finish", "part": {
+                        "reason": "max_tokens" if reason == "max_tokens" else "stop"}})
             if self.outcome and result.get("stopReason") in (None, "", "end_turn"):
                 native_reason = self.outcome.finish()
                 _emit({"type": "step_finish", "part": {"reason": native_reason}})
@@ -784,8 +792,8 @@ class AcpBridge:
         reason = str(result.get("stopReason") or "")
         if reason in ("", "end_turn"):
             return 0
-        if self.agent_name == "dsh" and reason == "max_tokens":
-            raise BridgeError("模型输出达到上限。已有文件和工具结果已保留，请继续当前会话完成剩余工作。")
+        if self.agent_name in {"dsh", "opencode"} and reason == "max_tokens":
+            return 2
         raise BridgeError("Agent stopped this turn: " + reason)
 
     def close(self) -> None:

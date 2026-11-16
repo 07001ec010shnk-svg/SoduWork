@@ -70,8 +70,8 @@ latest output limit or error is preserved. Cancellation stops waiting, while
 idle resident children do not keep a completed prompt open.
 
 The preload applies an in-memory compatibility fix to the adapter's reviewed
-prompt block on macOS, Linux and Windows. Installed packages and native session
-files are not rewritten. Unknown adapter versions or changed prompt blocks fail
+prompt and tool-preview blocks on macOS, Linux and Windows. Installed packages and native session
+files are not rewritten. Unknown adapter versions or changed reviewed blocks fail
 with an update instruction instead of silently using the affected behavior.
 The loader is included in source and frozen Runner packages.
 
@@ -81,9 +81,17 @@ offline lifecycle and loader regressions. From `hub-backend`, run
 for isolated acceptance against an explicitly selected installed adapter and a
 synthetic loopback model. This does not exercise a production model or desktop UI.
 
-DeepSeek Harness can continue once within the same native session when the model
-reports `max_tokens` and tool activity has settled. It asks the model to finish
-from the saved tool results. A second output limit is reported as incomplete.
+On `max_tokens`, the reviewed adapter marks only native pending tool previews as
+not executed before clearing them. DSH discards these calls before execution;
+started tools remain unsettled until their real result arrives. The host preserves
+this distinction through live and archived tool cards, including a later failure.
+
+Once tool activity has settled, DeepSeek Harness can continue within the same
+native session from saved results using smaller calls. Recovery is bounded to
+one continuation, plus one more only after successful native compaction. If the
+limit persists, the turn is reported as incomplete with retained progress instead
+of a protocol error. Successful continuation clears the earlier truncation;
+protocol and host-cleanup failures retain priority.
 
 ## Database configuration
 

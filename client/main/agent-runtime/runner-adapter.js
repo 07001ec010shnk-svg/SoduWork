@@ -770,16 +770,16 @@ async function createRunnerHandle(request, defaults, initialSession) {
       messageStream.takePreparation(item);
       const current = [...state.tools].reverse().find((tool) => tool.state === 'running' &&
         (!item.callId || tool.callId === String(item.callId)));
-      const accessCancelled = item.state === 'cancelled' && item.cancelReason === 'access-change' && item.isError === false;
-      const isError = !accessCancelled && (typeof item.isError === 'boolean' ? item.isError
+      const cancelled = item.state === 'cancelled' && ['access-change', 'output-limit'].includes(item.cancelReason) && item.isError === false;
+      const isError = !cancelled && (typeof item.isError === 'boolean' ? item.isError
         : /error|stderr|\u9519\u8bef/i.test(String(item.tool || '')));
-      const resultState = accessCancelled ? 'cancelled' : isError ? 'error' : 'done';
+      const resultState = cancelled ? 'cancelled' : isError ? 'error' : 'done';
       const result = isError ? require('../access-control/errors').message(text) : text;
       if (current) {
         current.result = result;
         current.isError = isError;
         current.state = resultState;
-        if (accessCancelled) current.cancelReason = 'access-change';
+        if (cancelled) current.cancelReason = item.cancelReason;
         current.lastProgressAt = eventAt;
         current.endedAt = eventAt;
       } else if (text) {
@@ -787,7 +787,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
           id: 'runner-' + String(item.seq || state.seq + 1),
           name: String(item.tool || (isError ? 'error' : 'output')),
           args: {}, partial: '', result, isError,
-          state: resultState, ...(accessCancelled ? { cancelReason: 'access-change' } : {}),
+          state: resultState, ...(cancelled ? { cancelReason: item.cancelReason } : {}),
           after: Math.max(0, state.messages.length - 1),
           startedAt: eventAt, lastProgressAt: eventAt, endedAt: eventAt,
         });

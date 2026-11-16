@@ -47,6 +47,24 @@ const SETTLEMENT_HASHES = new Map([
   ['0.4.40', '2b28c53b694972ade01775573aac8e51399db7f5407115bbbc71373ddc89e2ee'],
   ['0.4.41', 'ac3db9a394876ec5b33b4c859a4863786b1d11838672fc4cea0b1bac48367d16'],
 ]);
+const TURN_END_START = '  onTurnEnd(data) {';
+const TURN_END_END = '\n  }';
+const TURN_END_HASH = '1950482fe50555b215721716d9b69e261c82431e9a1bce9a7de04eaecd15ef25';
+const DISCARD_PREVIEWS = `    const updates = [];
+    // DSH drops tool calls in a max-tokens response before admitting them for
+    // execution. Settle only native pending previews, never an executing tool.
+    if (reason?.kind === 'max-tokens') {
+      for (const state of this.toolCalls.values()) {
+        if (state.status !== 'pending') continue;
+        updates.push({
+          sessionUpdate: 'tool_call_update',
+          toolCallId: state.callId,
+          status: 'failed',
+          _meta: { soduwork: { toolOutcome: 'not-executed', reason: 'output-limit' } }
+        });
+      }
+    }
+`;
 
 const REPLACEMENT = `        const stopReason = await new Promise((resolve, reject) => {
           const controller = new AbortController();
@@ -101,9 +119,22 @@ export function transformBridgeSource(source, version) {
     throw new Error('DeepSeek Harness ACP prompt interface is unsupported (' + version
       + '); update SoduWork before running this adapter.');
   }
+  const turnStart = source.indexOf(TURN_END_START);
+  const turnEnd = source.indexOf(TURN_END_END, turnStart) + TURN_END_END.length;
+  const turnBlock = source.slice(turnStart, turnEnd);
+  if (turnStart < 0 || turnEnd <= turnStart
+      || source.indexOf(TURN_END_START, turnStart + TURN_END_START.length) !== -1
+      || createHash('sha256').update(turnBlock).digest('hex') !== TURN_END_HASH) {
+    throw new Error('DeepSeek Harness ACP tool preview interface is unsupported (' + version
+      + '); update SoduWork before running this adapter.');
+  }
+  // Both complete native blocks have been reviewed. Replace by their verified
+  // content so bundle layout changes cannot invalidate stored offsets.
+  const fixedTurn = turnBlock.replace('    this.toolCallBlocks.clear();',
+    DISCARD_PREVIEWS + '    this.toolCallBlocks.clear();').replace('    return [];', '    return updates;');
   return 'import { waitForSettlement as __soduworkWaitForSettlement } from '
     + JSON.stringify(import.meta.url) + ';\n'
-    + source.slice(0, start) + REPLACEMENT + source.slice(end);
+    + source.replace(source.slice(start, end), REPLACEMENT).replace(turnBlock, fixedTurn);
 }
 
 if (process.env.SODUWORK_DSH_ACP_SETTLEMENT === '1') {

@@ -150,7 +150,7 @@
     },
     {
       "id": "deepseek-harness-acp-test-fixture",
-      "name": "@openma/deepseek-harness-acp prompt settlement test fixture",
+      "name": "@openma/deepseek-harness-acp prompt settlement and tool preview test fixtures",
       "version": "0.4.40 / 0.4.41",
       "license": "Apache-2.0",
       "source": "https://www.npmjs.com/package/@openma/deepseek-harness-acp/v/0.4.41",

@@ -6,7 +6,7 @@ Project-owned source uses the root MIT license. Third-party code, fonts, assets,
 
 Connector icon provenance is recorded in `client/assets/connector-brands/sources.json`. An asset license does not grant a third-party trademark endorsement.
 
-The prompt-settlement fixture in `client/tests/dsh-acp-settlement.test.cjs` retains an excerpt from `@openma/deepseek-harness-acp` 0.4.40/0.4.41. Copyright 2026 The @openma/deepseek-harness-acp authors. The excerpt remains under Apache-2.0; see `third-party/licenses/deepseek-harness-acp-LICENSE.txt`. SoduWork's compatibility loader and surrounding tests are project-owned code.
+The prompt-settlement and tool-preview fixtures in `client/tests/dsh-acp-settlement.test.cjs` retain excerpts from `@openma/deepseek-harness-acp` 0.4.40/0.4.41. Copyright 2026 The @openma/deepseek-harness-acp authors. The excerpts remain under Apache-2.0; see `third-party/licenses/deepseek-harness-acp-LICENSE.txt`. SoduWork's compatibility loader and surrounding tests are project-owned code.
 
 Binary releases need the notices and applicable corresponding source for the actual bundled components. Outstanding materials are tracked in `third-party/public-release.json`; a passing source check does not certify binary distribution.
 
