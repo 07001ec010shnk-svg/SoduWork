@@ -17,6 +17,21 @@ LOCAL = {"localOnly": True, "base": "http://private-probe.invalid/v1", "key": "p
 
 
 class ProbeMarkerTests(unittest.TestCase):
+    def test_marker_with_platform_line_endings_and_console_formatting(self):
+        marker = agent_setup._TOKEN
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=repr(newline)):
+                events = [
+                    {"type": "text", "part": {"streamId": "answer", "delta": "SODUWORK\u00a0_",
+                                               "done": False}},
+                    {"type": "text", "part": {"streamId": "answer", "delta": "AG\r\nENT _OK"}},
+                ]
+                output = "\ufeff" + newline.join(
+                    "\x1b[32m" + json.dumps(event, ensure_ascii=False) + "\x1b[0m"
+                    for event in events) + newline
+                self.assertTrue(agent_setup._probe_succeeded(output, 0, marker))
+                self.assertFalse(agent_setup._probe_succeeded(output, 1, marker))
+
     def test_spaced_marker_in_a_single_completed_answer(self):
         marker = agent_setup._TOKEN
         chunks = [
