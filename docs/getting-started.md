@@ -278,6 +278,8 @@ macOS 桌面进程保留当前用户的系统主目录，以便访问默认钥�
 | macOS | `~/Library/Application Support/SoduWork/source-service` |
 | Linux | `$XDG_DATA_HOME/soduwork/source-service`，未设置时为 `~/.local/share/soduwork/source-service` |
 
+在 Windows 上，`LOCALAPPDATA` 为空或为相对路径时按未设置处理，回退到 `%USERPROFILE%\AppData\Local`，因此默认数据目录始终是绝对路径，不会落在当前工作目录或源码目录内。
+
 也可以明确指定独立目录和端口：
 
 ```sh
