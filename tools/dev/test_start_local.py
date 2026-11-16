@@ -120,6 +120,17 @@ class LocalStartupTests(unittest.TestCase):
                 with self.subTest(version=version), patch.object(build.subprocess, 'check_output', return_value=version):
                     self.assertEqual(len(build.check_dependencies()), 2)
 
+    def test_unusable_npm_is_rejected_by_dependency_check(self):
+        def fake_output(command, **kwargs):
+            if command[-1] == '--version' and str(command[0]).lower().endswith('node'):
+                return 'v22.22.2'
+            raise build.subprocess.CalledProcessError(1, command)
+
+        with patch.object(build.shutil, 'which', side_effect=lambda name: name), \
+                patch.object(build.subprocess, 'check_output', side_effect=fake_output):
+            with self.assertRaisesRegex(build.StartupError, 'npm'):
+                build.check_dependencies()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="soduwork-start-unit-")
         self.addCleanup(self.temp.cleanup)

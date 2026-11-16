@@ -117,6 +117,14 @@ def check_dependencies() -> tuple[str, str]:
             raise ValueError(version)
     except (ValueError, subprocess.SubprocessError) as exc:
         raise StartupError("Node.js 22.19 or newer is required. Check node --version.") from exc
+    # which() only proves the npm entry exists on PATH; a corrupt or
+    # non-runnable npm would pass this check and fail later during npm install.
+    # Probe it the same way node is probed, so --check is truthful.
+    try:
+        subprocess.check_output([npm, "--version"], text=True, timeout=15, **spawn_options())
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        raise StartupError("npm is not runnable. Reinstall Node.js 22.19+ (which includes npm) "
+                           "and reopen this terminal.") from exc
     return node, npm
 
 
