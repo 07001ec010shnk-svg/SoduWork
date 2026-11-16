@@ -6,6 +6,8 @@
 
 连接器图标来源记录在 client/assets/connector-brands/sources.json。开源许可不等同于第三方商标授权。
 
+`client/tests/dsh-acp-settlement.test.cjs` 中的提示结算测试样例保留了 `@openma/deepseek-harness-acp` 0.4.40/0.4.41 的代码片段。Copyright 2026 The @openma/deepseek-harness-acp authors。该片段仍适用 Apache-2.0，原文见 `third-party/licenses/deepseek-harness-acp-LICENSE.txt`。SoduWork 的兼容加载器及周边测试为项目自有代码。
+
 安装包分发还需提供各个实际组件的许可及适用的对应源码。尚未完成的材料列于 third-party/public-release.json，不能将源码检查通过视为安装包合规审核通过。
 
 ```sh

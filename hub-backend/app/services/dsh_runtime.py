@@ -242,9 +242,22 @@ def _storage_env(env: dict, runtime_root: str) -> None:
     env["NODE_OPTIONS"] = "--import=" + loader.resolve().as_uri()
 
 
+def _host_env(env: dict, runtime_root: str) -> None:
+    # Only host-owned preloads may alter the native adapter. Repeated setup must
+    # not duplicate hooks or inherit arbitrary shell/desktop Node options.
+    env.pop("NODE_OPTIONS", None)
+    _storage_env(env, runtime_root)
+    loader = Path(__file__).with_name("dsh_acp_settlement.mjs")
+    if not loader.is_file():
+        raise RuntimeError("DeepSeek Harness 子代理等待组件缺失，请更新 SoduWork")
+    env["SODUWORK_DSH_ACP_SETTLEMENT"] = "1"
+    env["NODE_OPTIONS"] = (env.get("NODE_OPTIONS", "") +
+                           " --import=" + loader.resolve().as_uri()).strip()
+
+
 def apply_env(env: dict, data_root: str | None = None) -> None:
     env["DSH_PATH"] = host_root(data_root)
-    _storage_env(env, env["DSH_PATH"])
+    _host_env(env, env["DSH_PATH"])
     env.setdefault("DSH_TELEMETRY_DISABLED", "1")
 
 
@@ -594,7 +607,7 @@ def _probe_runtime(executable: str, runtime_root: str,
             for name in ("NODE_OPTIONS", "ELECTRON_RUN_AS_NODE"):
                 env.pop(name, None)
             env["DSH_PATH"] = runtime_root
-            _storage_env(env, runtime_root)
+            _host_env(env, runtime_root)
             env.setdefault("DSH_TELEMETRY_DISABLED", "1")
             env.update(
                 DSH_HOME=home,

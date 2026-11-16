@@ -62,6 +62,25 @@ Smoke checks live in [`smoke/`](smoke/). To run one directly, use its module fro
 
 ## DeepSeek Harness turn completion
 
+DeepSeek ACP adapters 0.4.40 and 0.4.41 can return while their child agents are
+still running. SoduWork's host-only preload waits for progressing descendants
+through the native `waitForChildren` service, then rechecks the parent's idle
+state and session sequence. Child results can wake another parent turn; its
+latest output limit or error is preserved. Cancellation stops waiting, while
+idle resident children do not keep a completed prompt open.
+
+The preload applies an in-memory compatibility fix to the adapter's reviewed
+prompt block on macOS, Linux and Windows. Installed packages and native session
+files are not rewritten. Unknown adapter versions or changed prompt blocks fail
+with an update instruction instead of silently using the affected behavior.
+The loader is included in source and frozen Runner packages.
+
+Run `node --test client/tests/dsh-acp-settlement.test.cjs` from the root for
+offline lifecycle and loader regressions. From `hub-backend`, run
+`python3 e2e_dsh_subagent_settlement.py --adapter-entry /absolute/npm/root/@openma/deepseek-harness-acp/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`
+for isolated acceptance against an explicitly selected installed adapter and a
+synthetic loopback model. This does not exercise a production model or desktop UI.
+
 DeepSeek Harness can continue once within the same native session when the model
 reports `max_tokens` and tool activity has settled. It asks the model to finish
 from the saved tool results. A second output limit is reported as incomplete.

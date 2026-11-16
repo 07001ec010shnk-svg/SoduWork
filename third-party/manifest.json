@@ -147,6 +147,15 @@
       "source": "https://raw.githubusercontent.com/openai/codex/be6e8eac029b183056b7e4402879f15d2c85f61b/NOTICE",
       "path": "third-party/licenses/codex-hub-NOTICE.txt",
       "sha256": "9d71575ecfd9a843fc1677b0efb08053c6ba9fd686a0de1a6f5382fd3c220915"
+    },
+    {
+      "id": "deepseek-harness-acp-test-fixture",
+      "name": "@openma/deepseek-harness-acp prompt settlement test fixture",
+      "version": "0.4.40 / 0.4.41",
+      "license": "Apache-2.0",
+      "source": "https://www.npmjs.com/package/@openma/deepseek-harness-acp/v/0.4.41",
+      "path": "third-party/licenses/deepseek-harness-acp-LICENSE.txt",
+      "sha256": "877d3493a49af1fe61191dfd8f6b62036f1084a6b74009a288630d8abe597a85"
     }
   ],
   "piVersion": "1.4.0",

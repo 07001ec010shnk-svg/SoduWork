@@ -56,6 +56,12 @@ python3 quality_gate.py --list
 
 ## DeepSeek Harness 回合完成状态
 
+DeepSeek ACP 适配器 0.4.40 和 0.4.41 可能在子代理仍运行时返回完成。SoduWork 的宿主专用预加载器通过原生 `waitForChildren` 服务等待正在推进的后代，再复查父代理空闲状态及会话序号。子代理结果唤醒父代理的新回合后，会保留最后回合的输出上限或错误。取消会结束等待，驻留但空闲的子代理不会使已完成提示永久等待。
+
+预加载器在 macOS、Linux 和 Windows 上对经过核对的适配器提示结算代码应用内存兼容修复，不改写安装包及原生会话文件。未知适配器版本或变更后的代码块会明确要求更新 SoduWork，避免静默使用有缺陷的行为。源码及冻结 Runner 均包含该加载器。
+
+在根目录执行 `node --test client/tests/dsh-acp-settlement.test.cjs`，验证离线生命周期和加载行为。在 `hub-backend` 执行 `python3 e2e_dsh_subagent_settlement.py --adapter-entry /absolute/npm/root/@openma/deepseek-harness-acp/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`，可使用明确指定的已安装适配器与合成回环模型进行隔离验收，不调用生产模型或桌面 UI。
+
 DeepSeek Harness 收到 `max_tokens` 且工具操作已结束时，会在原会话中续跑一次，要求模型从已保存的工具结果接着做。再次达到输出上限时，会显示本轮未完成。
 
 ## 连数据库
