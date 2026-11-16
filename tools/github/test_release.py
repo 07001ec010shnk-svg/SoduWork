@@ -12,9 +12,15 @@ from unittest.mock import patch
 
 import check_public_ci
 import release
+import linux_signing
 
 
 class ReleaseTests(unittest.TestCase):
+    def linux_checks(self, ctx):
+        return {'ok': True, 'linuxSigning': {'schema': 1, 'primaryFingerprint': 'A' * 40,
+                'rpmEmbedded': True, 'detached': linux_signing.package_names(ctx['version']),
+                'publicKey': linux_signing.PUBLIC_KEY}}
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
@@ -310,7 +316,7 @@ class ReleaseTests(unittest.TestCase):
             folder.mkdir()
             for name in release.expected(ctx, shard):
                 (folder / name).write_bytes(b'accepted fixture')
-            release.seal(ctx, shard, folder, {'ok': True})
+            release.seal(ctx, shard, folder, self.linux_checks(ctx) if shard == 'linux' else {'ok': True})
             for file in folder.iterdir():
                 shutil.move(file, self.root / file.name)
             folder.rmdir()
@@ -368,6 +374,24 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(release.SHARDS["client"], ["windows", "linux", "macos-arm64", "macos-x64"])
         with self.assertRaises(KeyError):
             release.expected({"version": "1.2.3"}, "android")
+
+    def test_linux_release_requires_signatures_public_key_and_verified_receipt(self):
+        ctx = {**self.ctx, 'component': 'client'}
+        for name in release.expected(ctx, 'linux'):
+            (self.root / name).write_bytes(b'accepted fixture')
+        checks = self.linux_checks(ctx)
+        for changed in [{}, {'rpmEmbedded': False}, {'primaryFingerprint': 'short-id'},
+                        {'detached': []}, {'publicKey': 'unpublished-key.asc'}]:
+            bad = {'ok': True, 'linuxSigning': {**checks['linuxSigning'], **changed} if changed else {}}
+            with self.subTest(changed=changed), self.assertRaisesRegex(ValueError, 'signing acceptance'):
+                release.seal(ctx, 'linux', self.root, bad)
+        for name in linux_signing.asset_names(ctx['version'])[3:]:
+            file = self.root / name
+            file.unlink()
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, 'artifact files'):
+                release.seal(ctx, 'linux', self.root, checks)
+            file.write_bytes(b'accepted fixture')
+        release.seal(ctx, 'linux', self.root, checks)
 
 
 if __name__ == "__main__":

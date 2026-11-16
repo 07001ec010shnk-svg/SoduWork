@@ -8,6 +8,7 @@ const scenarios = [
   ['ubuntu22-deb', 'ubuntu:22.04', 'deb', 'deb'],
   ['ubuntu24-deb', 'ubuntu:24.04', 'deb', 'deb'],
   ['rocky9-rpm', 'rockylinux:9', 'rpm', 'rpm'],
+  ['fedora45-rpm', 'fedora:45', 'rpm', 'rpm'],
   ['ubuntu22-tgz', 'ubuntu:22.04', 'tar.gz', 'tgz'],
 ];
 async function main() {
@@ -16,6 +17,8 @@ async function main() {
   const packages = await fs.mkdtemp(path.join(os.tmpdir(), 'soduwork-public-accept-'));
   const checks = [];
   try {
+    await fs.copyFile(path.join(contract.dist, 'SoduWork-Linux-Signing-Key.asc'),
+      path.join(packages, 'SoduWork-Linux-Signing-Key.asc'));
     const old = {};
     for (const item of record.artifacts) {
       await fs.copyFile(path.join(contract.dist, item.name), path.join(packages, item.name));
@@ -44,6 +47,7 @@ async function main() {
         assert.equal(result.nodeShimExecutable, true);
         assert.equal(result.credentialProviderDependencyVerified, kind !== 'tgz');
         assert.equal(result.upgradeDependencyResolutionVerified, false);
+        assert.equal(result.rpmSignatureVerified, kind === 'rpm');
         for (const phase of ['fresh', 'restart', ...(previous ? ['old'] : []), 'restored']) {
           const smoke = await contract.read(path.join(output, phase + '.json'));
           assert.equal(smoke.secureStorage?.backend, 'gnome_libsecret');
@@ -52,6 +56,7 @@ async function main() {
         checks.push({ name, ok: true, upgraded: !!previous, reinstalled: !previous,
           oldVersion: previous ? previous.version : '', secureStorageBackend: 'gnome_libsecret',
           credentialProviderDependencyVerified: result.credentialProviderDependencyVerified,
+          rpmSignatureVerified: result.rpmSignatureVerified,
           upgradeDependencyResolutionVerified: false });
       } finally { if (created) await run('docker', ['rm', '-f', container]); }
     }

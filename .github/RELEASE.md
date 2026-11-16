@@ -9,7 +9,7 @@
 | Component | Build and acceptance | GitHub Release assets |
 | --- | --- | --- |
 | source | Export the committed tree; verify the file inventory, public boundary and shared quality gates | Source ZIP without Git history |
-| client | Windows fresh installation, repair, upgrade and compatibility; Mac DMG, signature, restart and upgrade; installation, startup, upgrade and removal in Ubuntu 22/24 and Rocky 9 containers | Windows x64 EXE, Linux x64 DEB/RPM/tar.gz, Mac ARM64/x64 DMG |
+| client | Windows fresh installation, repair, upgrade and compatibility; Mac DMG, signature, restart and upgrade; installation, startup, upgrade and removal in Ubuntu 22/24, Rocky 9 and Fedora 45 containers; RPM/OpenPGP verification | Windows x64 EXE, Linux x64 DEB/RPM/tar.gz with detached signatures and public key, Mac ARM64/x64 DMG |
 | hub | Shared self-hosting Dockerfile; disposable PostgreSQL, migrations, baked release identity, health/readiness, frontend assets, Pi/Codex versions, Runner entrypoint, non-root writable directories, restart, image export and reload | Linux amd64 Docker image tar.gz |
 
 Hub release and Compose builds share `ops/self-host/Dockerfile`; the former
@@ -30,6 +30,17 @@ The Intel macOS release job applies GitHub's temporary [Apple ticket networking 
 Before running the public Client release, configure these repository or environment secrets: `SODUWORK_MAC_CERTIFICATE_B64`, `SODUWORK_MAC_CERTIFICATE_PASSWORD`, `SODUWORK_MAC_KEYCHAIN_PASSWORD`, `SODUWORK_MAC_SIGN_IDENTITY`, `SODUWORK_MAC_NOTARY_KEY_ID`, `SODUWORK_MAC_NOTARY_ISSUER` and `SODUWORK_MAC_NOTARY_PRIVATE_KEY_B64`. The workflow imports the Developer ID certificate into an ephemeral keychain, stores the `notarytool` profile, and removes both after the job. It appends this keychain to the existing search list so the login Keychain remains accessible, then restores the original list on cleanup or a preparation failure. The release build fails closed when the identity is missing or notarization is disabled. The runner must also be logged into a disposable macOS account whose login Keychain can authorize the signed application; release acceptance sets `SODUWORK_MAC_REAL_KEYCHAIN=1` and writes synthetic ciphertext into an isolated profile and requires later restart and upgrade processes to decrypt those same bytes. Missing, corrupt or unreadable ciphertext fails acceptance instead of being replaced.
 
 For migration from an older ad-hoc-signed macOS release, its reviewed baseline entry may explicitly set `notarization: "legacy-ad-hoc"`. Acceptance verifies its SoduWork identity, older version, exact artifact path and pinned SHA-256 before extraction, then still requires a strict bundle signature. Only that old baseline is exempt from Gatekeeper and stapled-ticket checks, and the exception is recorded in the receipt. New candidate packages always require both checks. Do not mark the candidate as a legacy baseline.
+
+Linux releases require repository secrets `SODUWORK_LINUX_SIGNING_KEY_B64` and
+`SODUWORK_LINUX_SIGNING_PASSPHRASE`, plus repository variable
+`SODUWORK_LINUX_SIGNING_FINGERPRINT`. Missing credentials block the build before
+dependency preparation. RPMs receive embedded OpenPGP signatures; all three Linux
+formats also receive detached signatures. The exported public key and signatures
+are required candidate assets and are hashed after signing. Native RPM acceptance
+requires a trusted signature with `localpkg_gpgcheck=True`. See
+[Linux signing setup and download verification](../docs/linux-package-verification.en.md)
+for key requirements and first-install trust instructions. Standalone DEB signatures
+do not provide automatic APT repository authentication.
 
 ## Repository setup
 

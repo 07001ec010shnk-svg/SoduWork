@@ -26,7 +26,18 @@ if [ "$phase" = prepare ]; then
     else
       apt-get install -y --no-install-recommends libgtk-3-0 libnotify4 libnss3 libxss1 libxtst6 xdg-utils libatspi2.0-0 libuuid1 libsecret-1-0 libgbm1 libasound2
     fi
-  else dnf install -y "$package"; fi
+  else
+    # A fresh system must reject an unknown signing key. Then explicitly trust
+    # the published key and require a real signature, not just RPM digests.
+    if rpmkeys --checksig --verbose "$package" > /evidence/rpm-before-import.txt 2>&1; then
+      printf '%s\n' 'RPM unexpectedly verified before importing the release key' >&2
+      exit 1
+    fi
+    rpm --import /pkg/SoduWork-Linux-Signing-Key.asc
+    LC_ALL=C rpmkeys --checksig --verbose "$package" | tee /evidence/rpm-signature.txt
+    grep -Ei 'signature.*: OK' /evidence/rpm-signature.txt
+    dnf --setopt=localpkg_gpgcheck=True install -y "$package"
+  fi
   if [ "$kind" = tgz ]; then
     mkdir /opt/acceptance
     tar -xzf "$package" -C /opt/acceptance
@@ -143,9 +154,14 @@ if [ "$kind" != tgz ]; then
 fi
 test "$(cat "$profile/acceptance-sentinel.txt")" = preserve-install-acceptance-data
 dependency_verified=false
+rpm_signature_verified=false
+if [ "$kind" = rpm ]; then
+  grep -Ei 'signature.*: OK' /evidence/rpm-signature.txt
+  rpm_signature_verified=true
+fi
 if [ "$kind" != tgz ]; then
   test -s /evidence/installed-credential-provider.txt
   dependency_verified=true
 fi
-printf '{"ok":true,"version":"%s","oldVersion":"%s","upgraded":%s,"reinstalled":%s,"nodeShimExecutable":true,"credentialProviderDependencyVerified":%s,"upgradeDependencyResolutionVerified":false}\n' \
-  "$version" "$accepted_old_version" "$upgraded" "$reinstalled" "$dependency_verified" > /evidence/result.json
+printf '{"ok":true,"version":"%s","oldVersion":"%s","upgraded":%s,"reinstalled":%s,"nodeShimExecutable":true,"credentialProviderDependencyVerified":%s,"upgradeDependencyResolutionVerified":false,"rpmSignatureVerified":%s}\n' \
+  "$version" "$accepted_old_version" "$upgraded" "$reinstalled" "$dependency_verified" "$rpm_signature_verified" > /evidence/result.json
