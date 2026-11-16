@@ -16,6 +16,30 @@ LOCAL = {"localOnly": True, "base": "http://private-probe.invalid/v1", "key": "p
          "model": "private-probe-wire", "authMode": "api-key"}
 
 
+class ProbeMarkerTests(unittest.TestCase):
+    def test_spaced_marker_in_a_single_completed_answer(self):
+        marker = agent_setup._TOKEN
+        chunks = [
+            {"type": "text", "part": {"streamId": "answer", "delta": delta, "done": done}}
+            for delta, done in (("SODUWORK _", False), (" AG ENT", False), ("\t_OK", True))
+        ]
+
+        def matches(events, code=0):
+            return agent_setup._probe_succeeded(
+                "\n".join(json.dumps(event) for event in events), code, marker)
+
+        self.assertTrue(matches(chunks))
+        self.assertFalse(matches(chunks[:-1]))
+        self.assertFalse(matches(chunks, code=1))
+        self.assertFalse(matches([*chunks, {"error": {"message": "model request failed"}}]))
+        self.assertFalse(matches([{"type": "reasoning", "text": "SODUWORK _ AG ENT _OK"}]))
+        self.assertFalse(matches([
+            {"type": "text", "part": {"text": value}}
+            for value in ("SODUWORK _", "AG ENT _OK")
+        ]))
+        self.assertFalse(agent_setup._probe_succeeded(agent_setup._PROMPT, 0, marker))
+
+
 class PrivateProbeRoutingTests(unittest.IsolatedAsyncioTestCase):
     async def test_only_parent_pipe_can_start_and_poll_private_managed_probes(self):
         machine = Runner.__new__(Runner)

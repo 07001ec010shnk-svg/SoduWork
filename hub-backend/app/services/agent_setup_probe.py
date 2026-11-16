@@ -159,7 +159,10 @@ def _responses(output: str) -> tuple[list[str], str]:
 
 def probe_succeeded(output: str, code: int, token: str) -> bool:
     answers, failure = _responses(output)
-    return code == 0 and not failure and any(token in value for value in answers)
+    # Allow whitespace inside a standalone marker without combining replies.
+    return code == 0 and not failure and any(
+        token in value or "".join(value.split()) == token for value in answers
+    )
 
 
 _ERR_FIELD = re.compile(r'"(?:finalError|errorMessage|error_message)"\s*:\s*"([^"]{2,200})"')
