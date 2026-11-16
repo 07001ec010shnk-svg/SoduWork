@@ -16,6 +16,7 @@ RELEASE_SMOKES = tuple(sorted((
     "test_desktop_capabilities.py",
     "test_model_capabilities.py",
     "test_model_capability_probe.py",
+    "test_managed_model_readonly.py",
     "test_endpoint_conversations.py",
     "test_automation_inbox_push.py",
     "test_cloud_sync_notifications.py",

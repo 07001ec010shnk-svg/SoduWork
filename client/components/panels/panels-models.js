@@ -45,6 +45,7 @@ const _MD_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" 
   '<rect x="14" y="14" width="7" height="7" rx="2"/><path d="M14 6h2a2 2 0 0 1 2 2v2M6 14v2a2 2 0 0 0 2 2h2"/></svg>';
 const _MD_TYPES = { chat: '对话模型', image: '图片生成', video: '视频生成' };
 function _mdType(value) { return _MD_TYPES[value] ? value : 'chat'; }
+function _mdCanEdit(provider) { return provider?.personal === true; }
 function _mdTypeOptions(value) {
   const current = _mdType(value);
   return Object.keys(_MD_TYPES).map((key) => '<option value="' + key + '"' +
@@ -194,6 +195,7 @@ async function _mdLoad(options) {
 /* Provider status precedence: personal credentials, company credentials, missing key, missing endpoint. */
 function _mdState(p) {
   if (_mdNew?.id === p.id) return 'draft';
+  if (!_mdCanEdit(p)) return p.baseUrl && p.keySet ? 'org' : 'managed';
   if (!p.baseUrl) return 'noaddr';
   if (p.authMode === 'none' && p.baseUrl) return 'local';
   if (p.myKeySet || _mdKeyEdits[p.id]) return p.localOnly ? 'local' : 'mine';
@@ -205,6 +207,7 @@ const _MD_ST = {
   local: { t: '本地可用', o: 0 },
   mine: { t: '个人额度', o: 0 },
   org: { t: '公司可用', o: 1 },
+  managed: { t: '服务端同步，只读', o: 2 },
   open: { t: '填写 Key', o: 2 },
   noaddr: { t: '需补地址', o: 3 },
   draft: { t: '未保存', o: 4 },
@@ -305,6 +308,7 @@ function _mdRender() {
       '<div class="cfg-master-scroll">' + (visible.length
         ? _mdNavGroupHtml('未保存', visible.filter(p => _mdState(p) === 'draft')) +
           _mdNavGroupHtml('正在使用', active) +
+          _mdNavGroupHtml('组织管理', visible.filter(p => _mdState(p) === 'managed')) +
           _mdNavGroupHtml('可配置服务', available) +
           _mdNavGroupHtml('高级与自定义', advanced)
         : '<div class="cfg-master-empty">' + _mdMessage('models.noResults', '没有匹配“{query}”的服务或模型', { query: _mdQuery }) + '</div>') +
@@ -333,7 +337,7 @@ function _mdNavGroupHtml(title, rows) {
 function _mdCatalogModels(p) {
   // Local catalog definitions mirror the editable myModels snapshot. They are
   // not organization-owned rows and must not outlive a local edit or removal.
-  if (p?.localOnly === true) return [];
+  if (_mdCanEdit(p) && p.localOnly === true) return [];
   return p?.modelDefs?.length ? p.modelDefs :
     (p?.modelNames || []).map(name => ({ name, label: name, modality: 'chat', config: {} }));
 }
@@ -354,7 +358,7 @@ function _mdProviderNameAttrs(p) {
 
 function _mdNavItemHtml(p) {
   const state = _mdState(p);
-  const own = _mdMyModels.filter((m) => m.providerId === p.id);
+  const own = _mdCanEdit(p) ? _mdMyModels.filter((m) => m.providerId === p.id) : [];
   const count = _mdCatalogModels(p).length + own.length;
   const selected = String(_mdOpen) === String(p.id);
   return '<button type="button" class="cfg-nav-item md-nav-item st-' + state +
@@ -369,11 +373,12 @@ function _mdNavItemHtml(p) {
 function _mdDetailHtml(p) {
   const state = _mdState(p);
   const models = _mdCatalogModels(p);
-  const own = _mdMyModels.filter((m) => m.providerId === p.id);
+  const own = _mdCanEdit(p) ? _mdMyModels.filter((m) => m.providerId === p.id) : [];
   const test = _mdTest[p.id];
   const count = models.length + own.length;
   const host = _mdHost(p.baseUrl) || '尚未连接';
   const route = state === 'mine' ? '使用你的个人额度' : state === 'org' ? '使用公司统一额度' :
+    state === 'managed' ? '凭据由管理员维护' :
     state === 'local' ? (p.authMode === 'none' ? '本机免密服务' : '本机保存的访问凭据') : '完成配置后可用';
   return '<header class="cfg-detail-head">' +
       '<span class="cfg-detail-icon">' + _MD_ICON + '</span>' +
@@ -390,7 +395,22 @@ function _mdDetailHtml(p) {
     '</div>';
 }
 
+function _mdReadOnlyBodyHtml(p, models) {
+  return '<div class="md-row-b" id="md-body-' + esc(p.id) + '" role="region">' +
+    '<section class="md-settings-section"><header class="md-section-heading"><b>连接设置</b><small>服务端同步，只读</small></header>' +
+      '<p class="md-model-help" role="note">此服务由管理员维护。如需使用自己的配置，请添加个人服务。</p>' +
+      '<label class="md-field md-field-wide"><span>API 地址</span><input class="md-in" readonly aria-readonly="true" data-user-content value="' +
+        esc(p.baseUrl || '') + '"></label></section>' +
+    '<section class="md-settings-section md-credentials"><header class="md-section-heading"><b>访问凭据</b></header>' +
+      '<div class="md-key-fallback"><b>凭据由管理员维护</b><span>' +
+        (p.keySet ? '使用公司统一额度' : '还没有可用凭据') + '</span></div></section>' +
+    '<section class="cfg-subsection"><div class="cfg-subsection-h"><b>模型清单</b><span>' +
+      _mdMessage('models.itemCount', '{count} 个', { count: models.length }) + '</span></div>' +
+      _mdModelListHtml(p, models, []) + '</section></div>';
+}
+
 function _mdBodyHtml(p, s, ms, own, t) {
+  if (!_mdCanEdit(p)) return _mdReadOnlyBodyHtml(p, ms);
   const validation = _mdValidation?.providerId === p.id ? _mdValidation : null;
   const invalid = field => validation?.field === field ? ' aria-invalid="true"' : '';
   const error = field => '<small id="md-' + field + '-error" class="md-field-error" role="alert"' +
@@ -412,8 +432,6 @@ function _mdBodyHtml(p, s, ms, own, t) {
         '>Anthropic</option>') + '</select></label>' +
         '<label class="md-auth-toggle"><input type="checkbox" data-pnoauth="' + esc(p.id) + '"' +
           (p.authMode === 'none' ? ' checked' : '') + '><span>本地服务无需密钥</span></label>' : '') +
-      (!p.personal && p.addressOverridden ? '<button class="md-link md-reset-url" data-preset="' + esc(p.id) +
-        '">恢复组织默认地址</button>' : '') +
     '</div>' + (p.kind === 'anthropic'
       ? '<p class="md-model-help" role="note">Anthropic 协议：连接测试通过也不能用于当前企业模型对话通道。请为该通道配置供应商的 OpenAI 兼容地址与对应密钥；此配置可保留给支持 Anthropic 的 Agent。</p>' : '') +
     '</section><section class="md-settings-section md-credentials">' +
@@ -424,9 +442,7 @@ function _mdBodyHtml(p, s, ms, own, t) {
         '<div class="md-keyrow">' +
           '<input type="password" class="md-in" id="md-key-input" data-pkey="' + esc(p.id) + '" ' +
             'autocomplete="new-password" placeholder="' +
-            (p.myKeySet ? '输入新的以替换，留空则不改'
-                        : (p.keySet ? '公司那把已经能用；想走自己的额度就贴自己的'
-                                    : '粘贴你自己的 API Key')) + '">' +
+            (p.myKeySet ? '输入新的以替换，留空则不改' : '粘贴你自己的 API Key') + '">' +
           '<button class="md-eye" data-peye="' + esc(p.id) + '" aria-pressed="false" title="只显示本次输入的内容">显示</button>' +
           '<button class="md-test primary" data-ptest="' + esc(p.id) + '"' + (t && t.state === 'ing' ? ' disabled' : '') + '>' + (t && t.state === 'ing' ? '测试中…' : '保存并测试连接') + '</button>' +
         '</div>' +
@@ -435,9 +451,8 @@ function _mdBodyHtml(p, s, ms, own, t) {
                           (p.localOnly ? '<b>本地访问密钥已配置</b><span>密钥仅保存在当前设备，本地模型不使用 Hub 模型额度</span>'
                             : '<b>当前使用这个模型的个人 Key</b><span>' + _mdMessage('models.keyLength', '个人 Key 已配置 · {count} 位，请求会优先使用你的个人额度', { count: p.myKeyLen }) + '</span>') +
                         '</div><button type="button" class="md-clear-key" data-pclear="' + esc(p.id) + '" aria-label="' + clearKeyLabel + '" title="' + clearKeyLabel + '"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="7.25"></circle><path d="M6.5 10h7"></path></svg><span>' + clearKeyLabel + '</span></button></div>'
-                      : (p.keySet ? '<div class="md-key-fallback"><b>当前使用公司凭据</b><span>公司已配置这家服务，你也可以随时切回个人 Key</span></div>'
-                                  : '<div class="md-key-fallback"><b>还没有可用凭据</b><span>' + (p.localOnly
-                                    ? '请填写本地服务的 API Key，或确认该服务无需密钥' : '公司未配置这家服务，请填写你的个人 API Key') + '</span></div>')) +
+                      : '<div class="md-key-fallback"><b>还没有可用凭据</b><span>' + (p.localOnly
+                          ? '请填写本地服务的 API Key，或确认该服务无需密钥' : '粘贴你自己的 API Key') + '</span></div>') +
           (t ? '<span role="status" class="md-test-r is-' + t.state + '">' +
                  (t.state === 'ing' ? '正在测…' : esc(t.detail || '')) + '</span>' : '') +
         '</div>'
@@ -479,7 +494,7 @@ function _mdProvider(pid) {
 function _mdTouchProvider(pid, patch) {
   if (_mdSaveFlight) return;
   const p = _mdProvider(pid);
-  if (!p) return;
+  if (!_mdCanEdit(p)) return;
   Object.assign(p, patch || {});
   const field = _mdValidation?.field;
   if (_mdValidation?.providerId === pid && Object.prototype.hasOwnProperty.call(patch || {}, field === 'url' ? 'baseUrl' : 'name')) {
@@ -496,6 +511,7 @@ function _mdTouchProvider(pid, patch) {
 /* Track ownership so a local edit never becomes an implicit Hub replacement. */
 function _mdMarkOwnedDirty(providerOrId) {
   const provider = typeof providerOrId === 'string' ? _mdProvider(providerOrId) : providerOrId;
+  if (!_mdCanEdit(provider)) return;
   if (provider?.localOnly === true) { _mdLocalDirty = true; _mdLocalKeyIds.add(provider.id); }
   else _mdManagedDirty = true;
   _mdDirty = true; _mdMark();
@@ -526,7 +542,8 @@ function _mdBind(box) {
   box.querySelectorAll('[data-pkey]').forEach(el => el.addEventListener('input', () => {
     if (_mdSaveFlight || el.isConnected === false) return;
     const pid = el.getAttribute('data-pkey');
-    const provider = _mdProvider(pid); if (provider) provider._capStale = true;
+    const provider = _mdProvider(pid); if (!_mdCanEdit(provider)) return;
+    provider._capStale = true;
     for (const key of _mdChecks.keys()) if (JSON.parse(key)[0] === pid) _mdClearCheck(key);
     if (el.value.trim()) _mdKeyEdits[pid] = el.value.trim();
     else delete _mdKeyEdits[pid];
@@ -565,13 +582,13 @@ function _mdBind(box) {
   box.querySelectorAll('[data-pclear]').forEach(el => el.addEventListener('click', async () => {
     if (_mdSaveFlight || el.isConnected === false) return;
     const pid = el.getAttribute('data-pclear');
-    _mdKeyEdits[pid] = null;    /* null explicitly removes the personal key. */
     const p = _mdProvider(pid);
+    if (!_mdCanEdit(p)) return;
+    _mdKeyEdits[pid] = null;    /* null explicitly removes the personal key. */
     _mdMarkOwnedDirty(p || pid);
-    el.textContent = p && p.addressOverridden ? '（保存后此地址将没有凭据）' : '（保存后回落到公司凭据）';
+    el.textContent = '（保存后此地址将没有凭据）';
     el.disabled = true;
-    // Clearing a personal key is the removal action for built-in providers.
-    // Persist it immediately so the provider leaves the usable/default list.
+    // Persist key removal immediately so the personal service leaves the usable list.
     const saved = await _mdSave(false);
     if (!saved) _mdRender();
   }));
@@ -579,6 +596,7 @@ function _mdBind(box) {
   box.querySelectorAll('[data-mdel]').forEach(el => el.addEventListener('click', async () => {
     if (_mdSaveFlight || el.isConnected === false) return;
     const [pid, i] = el.getAttribute('data-mdel').split('|');
+    if (!_mdCanEdit(_mdProvider(pid))) return;
     const own = _mdMyModels.filter(m => m.providerId === pid);
     const target = own[+i];
     const at = _mdMyModels.indexOf(target);
@@ -611,7 +629,7 @@ async function _mdDoTest(el) {
   const pid = el.getAttribute('data-ptest');
   if (_mdTest[pid]?.state === 'ing') return;
   const p = _mdProvider(pid);
-  if (!p) return;
+  if (!_mdCanEdit(p)) return;
   const error = _mdProviderError(p);
   if (error) {
     _mdValidation = error; delete _mdTest[pid];
@@ -662,7 +680,7 @@ function _mdMark() {
 
 function _mdPayload(excludeDraft = false) {
   const skippedId = excludeDraft ? _mdNew?.id : null;
-  const all = (_mdData && _mdData.providers ? _mdData.providers : []).filter(p => p.id !== skippedId);
+  const all = (_mdData && _mdData.providers ? _mdData.providers : []).filter(p => p.id !== skippedId && _mdCanEdit(p));
   if (_mdNew && !excludeDraft && !all.some((p) => p.id === _mdNew.id)) {
     all.push(_mdNew);
   }
@@ -671,16 +689,17 @@ function _mdPayload(excludeDraft = false) {
     authMode: p.authMode || 'key', note: p.note || '', localOnly: p.localOnly === true }));
   const localProviders = all.filter(p => p.localOnly === true);
   const localIds = new Set([...localProviders.map(p => p.id), ..._mdLocalKeyIds]);
+  const managedIds = new Set(all.filter(p => p.localOnly !== true).map(p => p.id));
   const payload = {};
   if (_mdManagedDirty) {
     payload.providers = providers.filter(p => p.localOnly !== true);
-    payload.models = _mdMyModels.filter(m => m.localOnly !== true && !localIds.has(m.providerId));
-    payload.keys = Object.fromEntries(Object.entries(_mdKeyEdits).filter(([id]) => !localIds.has(id)));
+    payload.models = _mdMyModels.filter(m => m.localOnly !== true && managedIds.has(m.providerId));
+    payload.keys = Object.fromEntries(Object.entries(_mdKeyEdits).filter(([id]) => managedIds.has(id)));
     payload.expectedRevision = _mdData && _mdData.revision;
   }
   if (_mdLocalDirty && (!excludeDraft || [..._mdLocalKeyIds].some(id => id !== skippedId))) {
     payload.localProviders = localProviders;
-    payload.localModels = _mdMyModels.filter(m => m.providerId !== skippedId && (m.localOnly === true || localIds.has(m.providerId)));
+    payload.localModels = _mdMyModels.filter(m => m.providerId !== skippedId && localIds.has(m.providerId));
     payload.localKeys = Object.fromEntries(Object.entries(_mdKeyEdits).filter(([id]) => id !== skippedId && localIds.has(id)));
     payload.localRevision = _mdData && _mdData.localRevision;
   }
