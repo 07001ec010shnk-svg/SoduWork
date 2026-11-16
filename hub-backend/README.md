@@ -93,6 +93,48 @@ limit persists, the turn is reported as incomplete with retained progress instea
 of a protocol error. Successful continuation clears the earlier truncation;
 protocol and host-cleanup failures retain priority.
 
+## Other harness terminal outcomes
+
+Managed installs and updates use reviewed versions: DeepSeek ACP 0.4.41,
+Kimi Code 2.6.2 and Qwen Code 0.27.4. Version checks refer to those targets,
+including when the locally installed package is newer. SoduWork updates the
+pins after compatibility validation; discovery does not replace installed software.
+
+Kimi Code 2.6.2 and Qwen Code 0.27.4 can also translate a native output limit
+into a successful ACP response. Host-only preloads preserve their native final
+outcome, verify the complete reviewed source hashes, and reject unknown versions
+with an update instruction. The preloads never change installed packages or tool
+execution. They are packaged for macOS, Linux and Windows; Qwen now requires
+Node 22.15 or later for the host loader, even if an older package declares a lower
+engine requirement.
+
+Kimi preserves the final provider stop reason across tool validation and rejects
+native failed turns. Qwen retains its own bounded output recovery and propagates
+recovery errors; its separate session-input budget is not relabeled as an output
+limit. SoduWork's invocation-local Qwen settings select native
+`model.loopProtection = "stop"`, so a detected repeated failure stops instead of
+only warning. This overrides `warn`/`off` for the managed invocation without
+changing operator files or lowering the general task budget. Neither harness
+receives an additional host retry for exhausted output recovery.
+
+Codex ACP negotiates its versioned `sessionFailure` capability and reads the
+current prompt's typed failure before accepting `end_turn`; error prose alone is
+not completion evidence. Invalid typed failures also stop settlement. The v1
+capability also changes tool reports: omitted approval fields are restored only
+from the same live tool call, and bounded terminal deltas and result snapshots
+remain available in completed tool cards. Native subagent-session capabilities
+are not enabled by this negotiation. Pi,
+OpenCode, DeepSeek, Kimi and Qwen preserve a real later error over an earlier
+truncation, while successful recovery clears the old truncation state.
+
+Run `python3 -m unittest test_kimi_runtime test_qwen_runtime test_codex_acp_outcome
+test_acp_error_messages test_local_turn_outcome` in the backend test environment.
+The standalone `e2e_kimi_outcome.py`, `e2e_qwen_turn_outcome.py` and
+`e2e_codex_acp_outcome.py` fixtures use
+explicitly selected installed runtimes and isolated loopback providers; see their
+`--help` for required paths. Codex acceptance also checks real permission
+approvals/denials and command output. They do not exercise paid model services.
+
 ## Database configuration
 
 Set `DATABASE_URL` in private configuration when overriding the SQLite default:

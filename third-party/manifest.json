@@ -156,6 +156,24 @@
       "source": "https://www.npmjs.com/package/@openma/deepseek-harness-acp/v/0.4.41",
       "path": "third-party/licenses/deepseek-harness-acp-LICENSE.txt",
       "sha256": "877d3493a49af1fe61191dfd8f6b62036f1084a6b74009a288630d8abe597a85"
+    },
+    {
+      "id": "qwen-code-compatibility",
+      "name": "@qwen-code/qwen-code reviewed compatibility anchors",
+      "version": "0.27.4",
+      "license": "Apache-2.0",
+      "source": "https://www.npmjs.com/package/@qwen-code/qwen-code/v/0.27.4",
+      "path": "third-party/licenses/qwen-code-LICENSE.txt",
+      "sha256": "55367b61ccd2a016a0159ad886bd66a3ee6cb5e873d0c75c803c897dd245b075"
+    },
+    {
+      "id": "kimi-code-compatibility",
+      "name": "@moonshot-ai/kimi-code reviewed compatibility anchors",
+      "version": "2.6.2",
+      "license": "MIT",
+      "source": "https://www.npmjs.com/package/@moonshot-ai/kimi-code/v/2.6.2",
+      "path": "third-party/licenses/kimi-code-LICENSE.txt",
+      "sha256": "23cc68e17992e0b512ae2e80afc5787d7d8e0fbfbdb4fff54ec0245508fa400e"
     }
   ],
   "piVersion": "1.4.0",

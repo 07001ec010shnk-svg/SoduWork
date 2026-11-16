@@ -56,6 +56,45 @@ class AcpErrorMessagesTests(unittest.TestCase):
         message = "Internal error: upstream unavailable"
         self.assertEqual(bridge._friendly_bridge_error("dsh", message), message)
 
+    def test_kimi_and_verified_qwen_output_limits_do_not_add_host_retries(self):
+        cases = [
+            ('kimi', {}, True),
+            ('qwen', {'soduwork': {'outputLimit': True}}, True),
+            ('qwen', {}, False),
+            ('qwen', {'soduwork': {'outputLimit': 'true'}}, False),
+            ('qwen', {'soduwork': {'outputLimit': 1}}, False),
+            ('qwen', {'soduwork': 'outputLimit'}, False),
+            ('qwen', [], False),
+            ('other', {'soduwork': {'outputLimit': True}}, False),
+        ]
+        for agent, metadata, incomplete in cases:
+            with self.subTest(agent=agent, metadata=metadata), TemporaryDirectory() as folder:
+                acp = bridge.AcpBridge([], folder, agent, 'workspace', session_id='retained-native')
+                prompts = []
+
+                def request(method, params):
+                    if method == 'initialize':
+                        return {'protocolVersion': 1, 'agentCapabilities': {'loadSession': True}}
+                    self.assertEqual(params['sessionId'], 'retained-native')
+                    if method == 'session/load':
+                        return {}
+                    self.assertEqual(method, 'session/prompt')
+                    prompts.append(params['prompt'])
+                    return {'stopReason': 'max_tokens', '_meta': metadata}
+
+                with patch.object(acp, 'start'), patch.object(acp, 'request', side_effect=request), \
+                        patch.object(acp.access, 'apply'), patch.object(bridge.qwen_runtime, 'apply_model'), \
+                        patch.object(bridge, '_emit') as emit:
+                    if incomplete:
+                        self.assertEqual(acp.run('Preserve existing work'), 2)
+                    else:
+                        with self.assertRaises(bridge.BridgeError):
+                            acp.run('Preserve existing work')
+                self.assertEqual(prompts, [[{'type': 'text', 'text': 'Preserve existing work'}]])
+                endings = [call.args[0]['part']['reason'] for call in emit.call_args_list
+                           if call.args[0].get('type') == 'step_finish']
+                self.assertEqual(endings, ['max_tokens'] if incomplete else [])
+
     def test_dsh_output_recovery_is_bounded_and_keeps_the_original_session(self):
         compacted = 'Compacted 4 history items (~32000 tokens).'
         for agent, reasons, tool_status, compact_reply, resumes, succeeds in [

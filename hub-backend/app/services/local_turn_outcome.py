@@ -8,7 +8,7 @@ RECOVERY_NOTE = "（SoduWork 自动恢复）模型输出被截断，正从同一
 
 
 def observe(cli: str, event: dict, terminal: dict) -> None:
-    if cli in {"pi", "opencode", "dsh"} and event.get("error"):
+    if cli in {"pi", "opencode", "dsh", "kimi", "qwen"} and event.get("error"):
         # A protocol/runtime failure after an attempted continuation is stronger
         # evidence than the earlier output limit. _on_line retains its diagnosis.
         terminal.pop("outputTruncated", None)
@@ -17,7 +17,7 @@ def observe(cli: str, event: dict, terminal: dict) -> None:
         if terminal.pop("piSemanticError", False):
             terminal.pop("result", None)
         return
-    if cli in {"opencode", "dsh"} and event.get("type") == "step_finish" and not event.get("contextOnly"):
+    if cli in {"opencode", "dsh", "kimi", "qwen"} and event.get("type") == "step_finish" and not event.get("contextOnly"):
         part = event.get("part")
         reason = part.get("reason") if isinstance(part, dict) else None
         if reason in {"length", "max_tokens"} and not terminal.get("isError"):

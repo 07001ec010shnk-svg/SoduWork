@@ -207,6 +207,11 @@ class BridgeAccess:
     def _codex_operation(self, params: dict, call: dict):
         call_id = str(call.get("toolCallId") or "")
         cached = self.native_calls.get(call_id, ({}, 0))[0]
+        # Codex ACP's negotiated AIR contract omits kind on approvals for an
+        # already-started command/edit. Recover it only from this live call;
+        # an explicitly different kind must never inherit another operation.
+        if call.get("kind") is None and cached:
+            call["kind"] = cached.get("kind")
         # A permission update can omit fields, but a changed tool kind cannot
         # inherit another operation's inputs. Never parse display titles.
         if cached.get("kind") == call.get("kind"):

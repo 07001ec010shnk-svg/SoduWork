@@ -29,6 +29,7 @@ try:
     from . import opencode_turn_outcome
     from . import qwen_runtime
     from . import opencode_model_selection
+    from . import codex_acp_outcome
 except ImportError:  # direct script entry used by source Runner
     from acp_access import BridgeAccess, AccessError
     from acp_transition import Transition
@@ -38,6 +39,7 @@ except ImportError:  # direct script entry used by source Runner
     import opencode_turn_outcome
     import qwen_runtime
     import opencode_model_selection
+    import codex_acp_outcome
 
 _PROTOCOL = 1
 _MAX_FILE_BYTES = 4 * 1024 * 1024
@@ -215,6 +217,7 @@ class AcpBridge:
         self.message_stream_emitted = False
         self.message_count = 0
         self.tools: dict[str, str] = {}
+        self.codex_tool_output = codex_acp_outcome.ToolOutput(agent_name)
         self.terminals: dict[str, _Terminal] = {}
         self.stderr_head: list[str] = []
         self.stderr_tail: list[str] = []
@@ -570,6 +573,7 @@ class AcpBridge:
             return
         if self.transition.update(update) is False:
             return
+        self.codex_tool_output.consume(update)
         self.access.observe_tool(update)
         if kind == "agent_thought_chunk":
             text = _text(update.get("content"))
@@ -644,6 +648,7 @@ class AcpBridge:
         if kind == "tool_call_update":
             text = _text(update.get("content"))
             if update.get("status") in ("completed", "failed"):
+                text = self.codex_tool_output.finish(update, text)
                 _emit({"type": "tool_execution_end",
                        "toolName": self.tools.get(
                            str(update.get("toolCallId") or ""), "Tool"),
@@ -663,8 +668,21 @@ class AcpBridge:
             _emit({"type": "step_finish", "contextOnly": True, "part": {
                 "contextWindow": update.get("size"), "tokens": tokens}})
 
+    def _output_limited(self, result: dict) -> bool:
+        if result.get("stopReason") != "max_tokens":
+            return False
+        if self.agent_name in {"dsh", "opencode", "kimi"}:
+            return True
+        # Qwen also uses max_tokens for its input/session budget. Only the
+        # reviewed host projection identifies an exhausted output recovery.
+        meta = result.get("_meta")
+        owned = meta.get("soduwork") if isinstance(meta, dict) else None
+        return (self.agent_name == "qwen" and isinstance(owned, dict)
+                and owned.get("outputLimit") is True)
+
     def _client_capabilities(self) -> dict:
         return {
+            **codex_acp_outcome.capabilities(self.agent_name),
             # codex-acp only advertises its custom enterprise gateway when the
             # ACP client explicitly opts in. Other ACP agents safely ignore it.
             "auth": {"_meta": {"gateway": True}},
@@ -752,10 +770,12 @@ class AcpBridge:
                 "prompt": content,
             })
             self._flush_message()
-            if self.agent_name == "dsh" or (self.agent_name == "opencode"
-                                            and result.get("stopReason") == "max_tokens"):
+            failure = codex_acp_outcome.failure(self.agent_name, result)
+            if failure:
+                raise BridgeError(failure)
+            if self.agent_name in {"dsh", "kimi", "qwen"} or self._output_limited(result):
                 reason = str(result.get("stopReason") or "")
-                if reason in {"", "end_turn", "max_tokens"}:
+                if reason in {"", "end_turn"} or self._output_limited(result):
                     _emit({"type": "step_finish", "part": {
                         "reason": "max_tokens" if reason == "max_tokens" else "stop"}})
             if self.outcome and result.get("stopReason") in (None, "", "end_turn"):
@@ -792,7 +812,7 @@ class AcpBridge:
         reason = str(result.get("stopReason") or "")
         if reason in ("", "end_turn"):
             return 0
-        if self.agent_name in {"dsh", "opencode"} and reason == "max_tokens":
+        if self._output_limited(result):
             return 2
         raise BridgeError("Agent stopped this turn: " + reason)
 

@@ -7,19 +7,32 @@ import threading
 import time
 import tempfile
 import unittest
+import uuid
 from unittest.mock import patch
 
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite:///:memory:"
 _data = tempfile.TemporaryDirectory(prefix="soduwork-test-truncated-")
-os.environ["SODUWORK_DATA_ROOT"] = _data.name
-from app.services import ai_local, local_stream, local_turn_outcome, model_errors
-from app.services.local_base import _RUNS
+with patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+                             "SODUWORK_DATA_ROOT": _data.name}):
+    from app.services import ai_local, local_base, local_stream, local_turn_outcome, model_errors
+    from app.services.local_base import _RUNS
 
 
 class TurnOutcomeTests(unittest.TestCase):
     def setUp(self):
-        self.ref = "isolated-truncated"
-        self.run = {"state": "running", "cli": "pi", "ws": _data.name,
+        self.temp = tempfile.TemporaryDirectory(prefix="soduwork-turn-outcome-")
+        self.addCleanup(self.temp.cleanup)
+        environment = patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///:memory:",
+                                               "SODUWORK_DATA_ROOT": self.temp.name})
+        environment.start()
+        self.addCleanup(environment.stop)
+        # Archives outlive _RUNS entries. Patch the cached store aliases too,
+        # because another test module may have imported them before this one.
+        for module in (local_base, local_stream, ai_local):
+            store = patch.object(module, "_STORE", os.path.join(self.temp.name, "local-runs"))
+            store.start()
+            self.addCleanup(store.stop)
+        self.ref = "isolated-truncated-" + uuid.uuid4().hex
+        self.run = {"state": "running", "cli": "pi", "ws": self.temp.name,
                     "seq": 0, "lines": [], "cfg": {}, "artifactMode": "files",
                     "expectedOutputPaths": ["product-source.zip"]}
         _RUNS[self.ref] = self.run
@@ -156,7 +169,7 @@ class TurnOutcomeTests(unittest.TestCase):
         for name, changes, fields, error, expected in cases:
             with self.subTest(name=name):
                 self.run.clear()
-                self.run.update(state="running", cli="pi", ws=_data.name, seq=0, lines=[], cfg={},
+                self.run.update(state="running", cli="pi", ws=self.temp.name, seq=0, lines=[], cfg={},
                                 artifactMode="files", expectedOutputPaths=[], piSettledByWatchdog=True)
                 terminal = self.event("stop")
                 self.run.update(changes)
@@ -283,6 +296,30 @@ class TurnOutcomeTests(unittest.TestCase):
                 self.assertEqual(self.run["exit"], code)
                 self.assertEqual(self.run.get("completionRetries", 0), 0)
                 self.assertNotIn("AcpBridgeError", json.dumps(page, ensure_ascii=False))
+
+    def test_kimi_and_qwen_explicit_output_limit_survives_exit_and_preserves_session(self):
+        for cli in ('kimi', 'qwen'):
+            for failed in (False, True):
+                with self.subTest(cli=cli, failed=failed):
+                    self.run.update(state='running', cli=cli, cliSid='retained-native', queue=[])
+                    self.run.pop('failureKind', None)
+                    terminal = {}
+                    local_stream._on_line(self.ref, json.dumps({'type': 'step_finish',
+                        'part': {'reason': 'max_tokens'}}), terminal)
+                    if failed:
+                        local_stream._on_line(self.ref, json.dumps({'error': {
+                            'name': 'AcpBridgeError', 'message': 'synthetic transport failure'}}), terminal)
+                    with patch.object(local_stream, '_resume') as resume:
+                        local_stream._finish(self.ref, 2, terminal, '')
+                    resume.assert_not_called()
+                    self.assertEqual(self.run['state'], 'failed')
+                    self.assertEqual(self.run['cliSid'], 'retained-native')
+                    if failed:
+                        self.assertIn('synthetic transport failure', self.run['error'])
+                        self.assertNotEqual(self.run.get('failureKind'), 'execution_incomplete')
+                    else:
+                        self.assertEqual(self.run['failureKind'], 'execution_incomplete')
+                        self.assertEqual(self.run['error'], local_turn_outcome.TRUNCATED)
 
     def test_dsh_successful_native_continuation_clears_only_output_truncation(self):
         terminal = {}

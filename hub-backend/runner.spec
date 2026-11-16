@@ -110,6 +110,8 @@ a = Analysis(
         (os.path.join(backend, "app", "agent_catalog.json"), "app"),
         (os.path.join(backend, "app", "services", "dsh_session_storage.mjs"), "app/services"),
         (os.path.join(backend, "app", "services", "dsh_acp_settlement.mjs"), "app/services"),
+        (os.path.join(backend, "app", "services", "kimi_acp_outcome.mjs"), "app/services"),
+        (os.path.join(backend, "app", "services", "qwen_acp_outcome.mjs"), "app/services"),
         (os.path.join(backend, "app", "services", "codex_gateway_startup.mjs"), "app/services"),
         (os.path.join(backend, "app", "services", "dsh_gateway_bundle"), "app/services/dsh_gateway_bundle"),
     ] + skill_data + license_data + ca_data),

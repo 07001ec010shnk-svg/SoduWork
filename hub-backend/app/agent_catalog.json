@@ -181,6 +181,7 @@
       "install": {
         "installer": "npm",
         "pkg": "@qwen-code/qwen-code",
+        "version": "0.27.4",
         "source": "",
         "blurb": "Apache-2.0 开源编码 Agent；通过 ACP 接入，支持OpenAI 兼容模型。",
         "warn": "",
@@ -225,6 +226,7 @@
       "install": {
         "installer": "npm",
         "pkg": "@openma/deepseek-harness-acp",
+        "version": "0.4.41",
         "source": "",
         "blurb": "MIT 开源的 DeepSeek 官方 Agent 框架（dsh）；通过 ACP 接入，支持OpenAI 兼容模型或个人 DeepSeek Key。",
         "warn": "",
@@ -277,6 +279,7 @@
       "install": {
         "installer": "npm",
         "pkg": "@moonshot-ai/kimi-code",
+        "version": "2.6.2",
         "source": "https://github.com/MoonshotAI/kimi-code",
         "blurb": "Kimi 官方编码助手，通过 ACP 接入，使用已授权的企业模型。",
         "warn": "",
