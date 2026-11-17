@@ -8,6 +8,18 @@ const TaskSync = require('../core/task-sync.js');
 const source = fs.readFileSync(path.join(__dirname, '../core/store-lifecycle.js'), 'utf8') + '\n' +
   fs.readFileSync(path.join(__dirname, '..', 'core', 'store.js'), 'utf8');
 
+test('fresh and partial configurations hide desktop widgets without rewriting explicit choices', () => {
+  for (const saved of [undefined, { theme: 'saved' }, { dockVisible: true, petVisible: true },
+    { dockVisible: false, petVisible: true }, { dockVisible: true, petVisible: false }]) {
+    const seed = saved ? { soduwork_work_cfg_v5: JSON.stringify(saved) } : {};
+    const f = fixture({}, seed);
+    assert.equal(f.Store.cfg.dockVisible, saved?.dockVisible ?? false);
+    assert.equal(f.Store.cfg.petVisible, saved?.petVisible ?? false);
+    assert.equal(f.values.get('soduwork_work_cfg_v5'), seed.soduwork_work_cfg_v5);
+    assert.equal(f.Store._cfgRevision, 0);
+  }
+});
+
 test('a remote skin patch wins over an older config fetch and refreshes the originating window', async () => {
   const config = deferred(), calls = [];
   const f = fixture({ online: true, getConfig: () => config.promise,

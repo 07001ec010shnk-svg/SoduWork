@@ -11,7 +11,8 @@ async function fixture(t, fixes, options = {}) {
   const body = { template: 'method', key: 'draft-check', name: 'Draft check', version: '1.0.1', description: 'Fixture', instructions: 'Summarize input' };
   const write = valid => {
     fs.writeFileSync(file, valid ? JSON.stringify(body) : '{"name":"invalid "quote""}');
-    if (options.fileTime) fs.utimesSync(file, options.fileTime, options.fileTime);
+    if (Number.isFinite(options.writeAt)) fs.utimesSync(file, options.writeAt / 1000, options.writeAt / 1000);
+    else if (options.fileTime) fs.utimesSync(file, options.fileTime, options.fileTime);
   };
   if (options.existingInvalid) write(false);
   const runtime = { async rpc(op, value) {
@@ -67,6 +68,21 @@ test('Runner stops after two invalid repairs and reports logical failure', async
   assert.equal(f.observed.length, 1);
   assert.equal(f.observed[0].state, 'failed');
   assert.equal(f.handle.outputSnapshot().pluginValidation[0].state, 'invalid');
+});
+test('Runner validates draft writes at the rounded session boundary', async t => {
+  const since = 1700000000123;
+  t.mock.method(Date, 'now', () => since);
+  for (const fixes of [false, true]) {
+    const f = await fixture(t, fixes, { writeAt: since - 0.125 });
+    const result = await f.turn.completion;
+    const mtime = fs.statSync(f.file).mtimeMs;
+    assert.ok(mtime < since && Math.round(mtime) === since, 'The fixture must exercise fractional filesystem precision');
+    assert.equal(result.ok, fixes);
+    assert.equal(f.calls.filter(row => row.op === 'job.comment').length, fixes ? 1 : 2);
+    assert.equal(f.observed[0].state, fixes ? 'completed' : 'failed');
+    assert.equal(f.handle.outputSnapshot().pluginValidation[0].state, fixes ? 'ready' : 'invalid');
+    if (!fixes) assert.equal(result.failureKind, 'plugin-validation');
+  }
 });
 test('Runner identity change during draft repair ends validation as cancelled', async t => {
   const f = await fixture(t, true, { switchOwnerOnRepair: true }), result = await f.turn.completion;

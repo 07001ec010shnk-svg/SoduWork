@@ -40,7 +40,7 @@ const repChar=t=>{if(!t)return'？';return[...t].find(c=>/[\u4e00-\u9fa5a-zA-Z0-
 const Store={
   _tasks:[],
   /* Preserve existing settings, tolerate malformed startup data, and remove server-owned fields. */
-  _cfg:stripServerOwned(Object.assign({mode:'quad',shape:'ball',remind:'light',gender:'boy',theme:'vivid',character:'soduwork',locale:'zh-CN',_lastSkinId:'soduwork-logo',hubX:null,hubY:null,tubeCols:1},safeParseCfg(localStorage.getItem(LS_CFG)))),
+  _cfg:stripServerOwned(Object.assign({dockVisible:false,petVisible:false,mode:'quad',shape:'ball',remind:'light',gender:'boy',theme:'vivid',character:'soduwork',locale:'zh-CN',_lastSkinId:'soduwork-logo',hubX:null,hubY:null,tubeCols:1},safeParseCfg(localStorage.getItem(LS_CFG)))),
   _syncT:null,_syncC:null,_wsOff:null,_taskRetryT:null,_taskFlushPromise:null,
   _taskInFlight:Object.create(null),
   _taskPriorityFlushPromise:null,

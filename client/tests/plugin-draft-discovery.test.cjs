@@ -33,6 +33,26 @@ function publicDraft(session) {
   return runtime.decorate(session.sessionId, { items: snapshot.items }).find(item => item.pluginDraft);
 }
 
+test('draft candidates preserve the output inventory millisecond boundary', async t => {
+  const { cwd } = fixture(t), file = path.join(cwd, drafts.DRAFT_NAME);
+  const since = 1700000000123;
+  fs.writeFileSync(file, JSON.stringify(body));
+  for (const [offset, included] of [[-0.125, true], [-1, false], [1, true]]) {
+    const at = (since + offset) / 1000;
+    fs.utimesSync(file, at, at);
+    for (const scan of [outputs.scan, outputs.scanAsync]) {
+      const snapshot = await scan(cwd, since, since);
+      assert.equal(snapshot.files.some(row => row.path === file), included);
+      for (const collect of [candidates.collect, candidates.collectAsync]) {
+        assert.equal((await collect(cwd, snapshot)).some(row => row.path === file), included);
+        // A declared timestamp cannot bring an older on-disk draft into scope.
+        const declared = { since: since - 1000, pluginSince: since, files: [{ path: file, at: since + 1000 }] };
+        assert.equal((await collect(cwd, declared)).some(row => row.path === file), included);
+      }
+    }
+  }
+});
+
 test('resource repairs refresh the public revision without changing draft identity or bypassing checksums', t => {
   const { cwd } = fixture(t), file = path.join(cwd, drafts.DRAFT_NAME);
   const expected = require('node:crypto').createHash('sha256').update('corrected resource').digest('hex');
