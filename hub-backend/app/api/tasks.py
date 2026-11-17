@@ -22,6 +22,7 @@ from ..services.task_dispatch_context import (
     _attach_dev_flow, _attach_skills, _fill_repo_wire, _settle_work_dir,
     _aio_thread, _link_task_repo, _stale_runner_hint, _push_task,
 )
+from ..timestamps import iso_utc
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 log = logging.getLogger("uvicorn.error")
@@ -222,7 +223,7 @@ async def get_delivery_state(
         "blockers": truth.get("blockers") or [],
         "approvals": approvals,
         "outputContract": contract,
-        "reviewedAt": task.reviewed_at.isoformat() if task.reviewed_at else None,
+        "reviewedAt": iso_utc(task.reviewed_at) if task.reviewed_at else None,
         "engineering": {
             "projectId": getattr(task, "project_id", None),
             "repoId": str(getattr(task, "repo_id", "") or "").strip(),
