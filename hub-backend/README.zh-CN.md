@@ -82,9 +82,9 @@ OpenCode 原生和 ACP 执行均保留当前回合的模型停止原因。达到
 
 ## OpenCode 安装与网络诊断
 
-Runner 归档下载、模型网关连通性预检与 macOS Runner 的安全控制连接共用严格的 TLS 信任配置。默认保留 Python/OpenSSL 的系统根证书，同时加载随包提供的 `certifi` 公共 CA 文件，避免冻结可执行文件依赖用户机器上不存在的构建时 OpenSSL 证书路径。证书链与主机名仍须通过校验。这不改变外部原生底座自身的 HTTPS 配置。
+macOS、Windows 和 Linux 上的 Runner 归档下载、模型网关连通性预检与安全控制连接共用一套 TLS 配置。默认通过 MIT 许可的 `truststore` 使用安装机的系统信任：macOS 使用 Security framework，Windows 使用 CryptoAPI，Linux 通过 OpenSSL 使用系统 CA 存储。不追加随包提供的公共 CA 文件。原生验证能力缺失或证书被拒绝时直接失败，不换另一套信任策略重试。证书链与主机名仍须通过校验。这不改变外部原生底座自身的 HTTPS 配置。
 
-非空的 `SSL_CERT_FILE` 或 `SSL_CERT_DIR` 会明确替换上述默认信任范围；路径缺失或无效时直接失败，不回退到公共根证书。配置私有 CA 时应提供完整的所需信任集合。空值不会启用独占的显式信任覆盖，默认路径发现仍遵循 Python/OpenSSL 的环境变量语义。仅在 HTTPS 请求时加载证书，包括从 HTTP 跳转到 HTTPS；普通 HTTP 不依赖证书配置。现有下载代理选择和模型网关直连策略保持不变。
+非空的 `SSL_CERT_FILE` 或 `SSL_CERT_DIR` 会用指定的 CA 文件或 OpenSSL 哈希 CA 目录明确替换默认系统信任。路径缺失或无效时直接失败，不回退到系统或随包根证书。配置此覆盖时应提供完整的所需信任集合。空值使用默认系统信任。HTTP 客户端仅在 HTTPS 请求时加载证书，包括从 HTTP 跳转到 HTTPS；普通 HTTP 不依赖证书配置。现有下载代理选择和模型网关直连策略保持不变。
 
 受管安装器依次尝试明确配置的镜像、当前连接的 Hub 和官方发行源。macOS 上通过 Python 安装器下载归档时，每次尝试都会按协议合并系统 HTTP/HTTPS 代理与环境变量覆盖值。明确设为空的代理变量会禁用对应协议的系统代理。来自系统的代理同时保留系统绕过规则和 `NO_PROXY`；空 `NO_PROXY` 不会取消系统例外。显式代理覆盖仍采用标准环境绕过行为，当前 Hub 的精确来源（协议、主机、端口）保持直连。TLS 证书校验和固定 SHA-256 校验始终启用。这些下载规则不改变 npm 依赖安装或模型网关的连接策略。
 
@@ -104,7 +104,7 @@ python3 fetch_opencode_assets.py darwin-arm64 darwin-x64 darwin-x64-baseline
 python3 e2e_runner_tls.py --output /absolute/evidence/directory
 ```
 
-检查覆盖随包 CA 资源、默认根证书缺失、显式信任覆盖，以及拒绝不可信证书和主机名不匹配的证书。`--source-only` 可不打包执行同一调用路径。这些测试不能替代完整桌面、生产模型或其他操作系统验证。
+检查覆盖随包原生验证模块、使用临时信任锚的真实 TLS 握手、显式信任覆盖，以及拒绝不可信证书和主机名不匹配的证书；不修改机器的证书信任存储。`--source-only` 可不打包执行同一调用路径。这些测试不能替代完整桌面、生产模型或其他操作系统验证。
 
 ## API 概览
 

@@ -670,8 +670,10 @@ def _llm_gate_check(prof: dict, cfg: dict) -> str:
     from urllib.parse import urlparse
     from .runtime_tls import https_handler
     host = urlparse(base).hostname or base
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), https_handler())
     try:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            https_handler())
         opener.open(urllib.request.Request(
             base.rstrip("/") + "/models", headers={"User-Agent": "SoduWork-Gate/1"}),
             timeout=5).close()

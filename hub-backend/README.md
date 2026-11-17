@@ -92,9 +92,9 @@ Native and ACP OpenCode executions preserve the current turn's provider finish r
 
 ## OpenCode installation and network diagnostics
 
-Runner archive downloads, model-gateway reachability checks and the macOS Runner's secure control connection share a strict TLS trust configuration. By default, they retain Python/OpenSSL system roots and add the packaged `certifi` public CA bundle, including in frozen executables whose build-time OpenSSL certificate paths do not exist on the user's machine. Certificate chains and hostnames remain verified. This does not change external native harnesses' own HTTPS configuration.
+Runner archive downloads, model-gateway reachability checks and secure control connections share one TLS configuration on macOS, Windows and Linux. By default, MIT-licensed `truststore` uses the installed operating system's trust: Security framework on macOS, CryptoAPI on Windows, and the system CA store through OpenSSL on Linux. No packaged public CA bundle is added. Missing native verification support or a rejected certificate fails without retrying under another trust policy. Certificate chains and hostnames remain verified. This does not change external native harnesses' own HTTPS configuration.
 
-Nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR` values explicitly replace that default trust selection; a missing or invalid path fails without falling back to public roots. Supply the complete required trust set when configuring a private CA. Empty values do not select an exclusive override; default path discovery still follows Python/OpenSSL environment semantics. Trust is loaded only for HTTPS requests, including redirects from HTTP; plain HTTP does not depend on certificate configuration. Existing download proxy selection and direct model-gateway routing are unchanged.
+Nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR` values explicitly replace default system trust with the configured CA file or OpenSSL hashed CA directory. A missing or invalid path fails without falling back to system or bundled roots. Supply the complete required trust set when configuring this override. Empty values select default system trust. HTTP clients load trust only for HTTPS requests, including redirects from HTTP; plain HTTP does not depend on certificate configuration. Existing download proxy selection and direct model-gateway routing are unchanged.
 
 The managed installer tries an explicitly configured mirror, the connected Hub, then the official release. On macOS, archive downloads through the Python installer merge system HTTP/HTTPS proxy settings with environment overrides by scheme on every attempt. An explicitly empty proxy variable disables that scheme's system proxy. System-sourced proxies retain their system bypass rules alongside `NO_PROXY`; an empty `NO_PROXY` does not cancel the system exceptions. Explicit proxy overrides retain standard environment bypass behavior, and requests to the exact connected Hub origin stay direct. TLS certificate verification and pinned SHA-256 verification remain enabled. These download rules do not change npm dependency installation or model-gateway routing.
 
@@ -114,7 +114,7 @@ Verify the production network modules with real loopback HTTPS and a frozen PyIn
 python3 e2e_runner_tls.py --output /absolute/evidence/directory
 ```
 
-The check verifies the packaged CA resource, missing default roots, strict explicit overrides, and rejection of untrusted or mismatched certificates. `--source-only` exercises the same paths without freezing. These fixtures do not replace full desktop, production model or other operating-system verification.
+The check verifies the packaged native verifier, real TLS with a disposable trust anchor, strict explicit overrides, and rejection of untrusted or mismatched certificates. It does not modify the machine's trust store. `--source-only` exercises the same paths without freezing. These fixtures do not replace full desktop, production model or other operating-system verification.
 
 ## API and trust boundaries
 

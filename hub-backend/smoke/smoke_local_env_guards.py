@@ -106,7 +106,9 @@ def t_codex_temp_boundary() -> None:
             ok(again.get("CODEX_HOME") == runtime_home, "同一会话续聊复用同一 Codex 状态目录")
 
             pi_env = local_base._env_for(
-                local_base._PROFILES["pi"], {"local_workspace_root": work})
+                local_base._PROFILES["pi"], {"local_workspace_root": work,
+                    "llm": {"base": "http://model.invalid/v1", "model": "fixture",
+                            "key": "fixture-model-key"}}, runtime_ref="pi-temp-boundary")
             ok(pi_env.get("TEMP") == os.path.join(work, "temp"),
                "其他底座仍严格使用用户设定工作根下的 temp", pi_env.get("TEMP"))
         finally:
@@ -161,7 +163,8 @@ def t_remote_reinjection() -> None:
         forwarded = []
         with tempfile.TemporaryDirectory(prefix="soduwork-turn-cfg-") as store:
             for index in range(2):
-                current = {"llm": {"key": "synthetic-turn-%d" % index}}
+                current = {"llm": {"key": "synthetic-turn-%d" % index},
+                           "pluginResourceBundles": []}
                 admission = "comment:smoke-%d" % index
                 prepared = {**current, "_admissionKey": admission, "_inputImages": []}
                 message = {"op": "job.comment", "ref": ref, "text": "continue",
