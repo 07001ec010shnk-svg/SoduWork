@@ -112,6 +112,17 @@ Administrator: admin
 .\start.cmd --check --desktop
 ```
 
+检查通过后，在 PowerShell 中运行 `.\start.cmd --desktop`；在命令提示符（CMD）中运行 `start.cmd --desktop`。两种终端都可使用，不需要避开 CMD。
+
+Git Bash 中的 `sh start.sh --desktop` 并非无效命令，但它通过 `PATH` 查找 Python，与 Windows 入口的选择方式不同。`start.cmd` 在有 Python 启动器 `py` 时先尝试 Python 3.12，再尝试 `py -3`；没有 `py` 时才使用 `PATH` 中的 `python`。安装了 Python 3.13 等受支持版本，不代表两个终端会选中同一个解释器。
+
+提示 Python 版本过低或找不到解释器时，先在原终端查看 `python --version`；装有 `py` 时再查看 `py -0p` 列出的版本和路径。必要时用已安装的原生 Windows Python 3.12+ 的完整路径检查，检查通过后用相同解释器启动（替换示例路径）：
+
+```powershell
+& 'C:\Path\To\Python\python.exe' .\start.py --check --desktop
+& 'C:\Path\To\Python\python.exe' .\start.py --desktop
+```
+
 ### macOS 打不开启动文件
 
 打开终端，输入 `cd `（末尾留一个空格），把解压后的源码文件夹拖进终端，再按回车。然后执行：
@@ -127,6 +138,12 @@ sh start.sh --desktop
 
 密码不显示字符或星号是正常的，输入完按回车。短于 12 个字符或两次不一致时会重新提示。账号是 `admin`；没有共享默认密码。忘记已有密码时不要删数据库，以免丢失数据。
 
+### 首次设置密码时提示标准输入不是终端
+
+未初始化的实例需要设置管理员密码；默认方式要求 Python 将标准输入识别为交互终端（TTY）。Git Bash 窗口可见，并不保证原生 Windows Python 会将它识别为 TTY；管道、重定向或某些集成终端也可能触发此检查。这与密码输入不显示字符是两种情况。
+
+先在原生 PowerShell 或 CMD 的交互窗口中，从源码目录运行 Windows 入口，不加管道或输入重定向。自动化或确实需要非交互输入时，显式添加 `--password-stdin`，通过受保护的标准输入提供首次密码；该参数不会自动生成密码，也不用于重置已有密码。不要把密码写进命令参数、脚本或日志。保留现有数据目录，无需删除数据库重试。
+
 ### 安装很慢、失败或提示网络错误
 
 长步骤的「Still running」表示安装进程尚未结束，并不代表下载已经成功。查看终端打印的 `startup.log`；检查网络、代理及 npm/Python 包下载是否可用，修正后重跑同一入口。不要删除数据目录。首次 Electron 下载也需要联网。
@@ -138,6 +155,18 @@ npm 注册表与二进制下载使用不同的地址。设置 npm 镜像只改�
 | npm 包 | `npm_config_registry` 或 npm 的 `registry` 配置 |
 | Electron 二进制 | `ELECTRON_MIRROR`，见下面的桌面启动排障 |
 | Windows PortableGit 归档 | `SODUWORK_PORTABLE_GIT_MIRROR`，见下面的镜像与离线说明 |
+
+#### Git 克隆或依赖下载出现证书错误
+
+先区分失败发生在哪一步：
+
+- **`git clone` 报 schannel `0x80092012` / 撤销检查失败**：这是 Git 获取源码时的证书撤销检查问题，发生在启动器运行之前。核对系统时间、可信证书链、代理及证书撤销服务的可达性；受管理的网络应请管理员确认代理证书与访问策略。切换 `sh` / `cmd` 启动入口不能修复克隆失败。不建议设置全局 `http.schannelCheckRevoke=false`，它会关闭撤销检查并影响后续 Git 请求。
+- **Electron 或 PortableGit 下载报 `UNABLE_TO_VERIFY_LEAF_SIGNATURE` 等证书链错误**：检查对应下载地址及代理提供的证书链。企业 TLS 代理需要由管理员提供可信 CA，并按所用 Git / Node 下载工具的方式配置信任；Git 的证书配置不等于 Node 的配置。不要用 `NODE_TLS_REJECT_UNAUTHORIZED=0` 绕过校验；即使某个归档有固定摘要，也不能保护同一安装过程中所有请求。
+- **只看到 `TypeError: fetch failed`**：这是通用网络错误，不足以判断是 GitHub 不可达或证书问题。查看 `startup.log` 中同一失败步骤的底层错误（如 `cause.code`）及下载地址，再分别核查 DNS、代理、超时或 TLS。
+
+网络受限时，按本节的代理说明、[PortableGit 镜像与离线归档](#windows-portablegit-镜像与离线归档)或[Electron 镜像说明](#浏览器能打开桌面端打不开)处理。镜像返回 `404` / `403` 时，先核对具体版本、架构、文件路径及访问权限，不要据此推断所有镜像都不可用。修正配置后保持证书校验开启，重新运行同一入口。
+
+需要求助时，提供失败步骤、终端类型、Python / Node / Git 版本，以及相关错误和底层错误码；先移除日志中的密码、令牌、代理凭据和私有地址。
 
 #### 使用代理下载
 

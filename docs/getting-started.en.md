@@ -111,6 +111,17 @@ To check prerequisites without installing anything:
 .\start.cmd --check --desktop
 ```
 
+After the check passes, run `.\start.cmd --desktop` in PowerShell or `start.cmd --desktop` in Command Prompt (CMD). Both terminals are supported; there is no need to avoid CMD.
+
+`sh start.sh --desktop` in Git Bash is not inherently invalid, but it finds Python through `PATH`, unlike the Windows entry point. When the Python launcher `py` is available, `start.cmd` first tries Python 3.12, then `py -3`; it uses `python` from `PATH` only when `py` is absent. Having a supported version such as Python 3.13 installed does not mean both terminals select the same interpreter.
+
+If Python is missing or too old, check `python --version` in the original terminal and, if `py` is installed, inspect the versions and paths listed by `py -0p`. If needed, check with the full path to an installed native Windows Python 3.12+ interpreter, then start with that same interpreter after the check passes (replace the example path):
+
+```powershell
+& 'C:\Path\To\Python\python.exe' .\start.py --check --desktop
+& 'C:\Path\To\Python\python.exe' .\start.py --desktop
+```
+
 ### macOS launcher permissions
 
 Open Terminal, type `cd ` with a trailing space, drag the extracted source folder into the terminal, then press Enter. Run:
@@ -126,6 +137,12 @@ No `sudo` is needed. Linux desktops can also use the final command. On a headles
 
 Hidden input is normal: no characters or asterisks appear. Press Enter when done. Passwords shorter than 12 characters or a mismatched confirmation prompt you to try again. The account is `admin`; there is no shared default password. Do not delete the database to reset a forgotten password.
 
+### First-time password setup says stdin is not a terminal
+
+An uninitialized instance needs an administrator password. By default, Python must recognize standard input as an interactive terminal (TTY). A visible Git Bash window does not guarantee that native Windows Python recognizes it as a TTY; pipes, redirection, or some integrated terminals can also trigger this check. This is different from hidden password input.
+
+First try the Windows entry point from the source directory in an interactive native PowerShell or CMD window, without a pipe or input redirection. For automation or intentional non-interactive input, explicitly add `--password-stdin` and supply the initial password through protected standard input. This flag does not generate a password or reset an existing one. Do not put passwords in command arguments, scripts, or logs. Keep the existing data directory; deleting the database is unnecessary.
+
 ### Downloads are slow or setup fails
 
 “Still running” means the installation process has not exited; it does not prove a download has succeeded. Read the printed `startup.log`, check network/proxy and npm/Python package download access, then rerun the same launcher. Do not delete the data directory. The initial Electron download also needs internet access.
@@ -137,6 +154,18 @@ The npm registry and binary downloads use separate endpoints. Changing the npm r
 | npm packages | `npm_config_registry` or npm's `registry` configuration |
 | Electron binaries | `ELECTRON_MIRROR`; see desktop troubleshooting below |
 | Windows PortableGit archives | `SODUWORK_PORTABLE_GIT_MIRROR`; see mirror and offline instructions below |
+
+#### Certificate errors during Git clone or dependency downloads
+
+Identify which step failed first:
+
+- **`git clone` reports schannel `0x80092012` / revocation check failure**: this is Git's certificate revocation check while obtaining the source, before the launcher runs. Check the system clock, trusted certificate chain, proxy, and access to certificate revocation services. On a managed network, ask the administrator to confirm the proxy certificate and access policy. Switching between `sh` and `cmd` launchers cannot fix cloning. Avoid setting global `http.schannelCheckRevoke=false`: it disables revocation checks and affects subsequent Git requests.
+- **Electron or PortableGit downloads report certificate chain errors such as `UNABLE_TO_VERIFY_LEAF_SIGNATURE`**: check the certificate chain presented by the download endpoint and proxy. A corporate TLS proxy needs an administrator-provided trusted CA configured for the Git / Node download tool in use; Git's certificate settings are not Node's settings. Do not bypass verification with `NODE_TLS_REJECT_UNAUTHORIZED=0`. A pinned checksum for one archive does not protect every request in the installation process.
+- **Only `TypeError: fetch failed` is shown**: this is a generic network error, not proof that GitHub is unreachable or that a certificate is invalid. Check the underlying error (such as `cause.code`) and download URL for the same failed step in `startup.log`, then investigate DNS, proxy, timeout, or TLS errors as appropriate.
+
+For restricted networks, use the proxy instructions in this section, [PortableGit mirrors and offline archives](#windows-portablegit-mirrors-and-offline-archives), or the [Electron mirror instructions](#browser-works-but-desktop-does-not). If a mirror returns `404` / `403`, check the specific version, architecture, file path, and access permissions; that response does not mean all mirrors are unavailable. Keep certificate verification enabled and rerun the same launcher after correcting the configuration.
+
+When asking for help, include the failed step, terminal type, Python / Node / Git versions, and the relevant error and underlying error code. Remove passwords, tokens, proxy credentials, and private addresses from logs first.
 
 #### Download through a proxy
 
