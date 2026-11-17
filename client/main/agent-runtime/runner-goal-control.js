@@ -41,7 +41,7 @@ function createRunnerGoalControls(options) {
     continueGoal() {
       if (!state.goalVisible) return { ok: false, reason: '当前没有可继续的目标' };
       if (!state.goalPaused) return { ok: false, reason: '当前目标没有暂停' };
-      if (state.stopPending || state.pendingPermissions?.length || state.status === 'streaming' || state.status === 'queued' || turnQueue.size()) {
+      if (state.pluginGenerationPreparing || state.pluginGenerationActive || state.stopPending || state.pendingPermissions?.length || state.status === 'streaming' || state.status === 'queued' || turnQueue.size()) {
         return { ok: false, reason: '当前还有消息正在执行或排队' };
       }
       turnQueue.resume();
@@ -61,7 +61,7 @@ function createRunnerGoalControls(options) {
       state.intent = '';
       state.goalPaused = false;
       state.goalLimit = null;
-      if (state.pendingPermissions?.length || state.status === 'streaming' || state.status === 'queued') {
+      if (state.pluginGenerationPreparing || state.pendingPermissions?.length || state.status === 'streaming' || state.status === 'queued') {
         state.cancelRequested = true;
         clearTimer();
         requestStop();

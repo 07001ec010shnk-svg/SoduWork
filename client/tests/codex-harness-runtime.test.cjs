@@ -636,6 +636,7 @@ test('Codex Harness latches an immediate cancel until dispatch returns its real 
     assert.equal(sent.queued, false);
     assert.equal(session.snapshot().status, 'streaming');
 
+    await until(() => calls.some(row => row.op === 'job.dispatch'));
     assert.deepEqual(session.cancel(), { ok: true });
     assert.equal(session.snapshot().status, 'aborted');
     assert.equal(calls.filter((row) => row.op === 'job.stop').length, 0);
@@ -854,6 +855,7 @@ test('Runner goal pause keeps the native session and resumes without a fake user
 
     const next = session.send({ text: 'RUN_AGAIN' });
     assert.equal(next.queued, false);
+    await until(() => calls.filter(row => row.op === 'job.comment').length === 2);
     assert.equal(session.controlGoal('pause').ok, true);
     assert.equal((await timeout(next.completion)).paused, true);
     await until(() => calls.filter((row) => row.op === 'job.stop').length === 2);

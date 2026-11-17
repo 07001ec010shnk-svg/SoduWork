@@ -199,6 +199,7 @@ async send(text, turnAttachments, sendOptions) {
             ctx.acc.state.tools.slice(toolFrom), outputSnapshot),
         };
       };
+      let pluginGate = null;
       let restoreSkills = () => {};
       let restoreTools = () => {};
       let connectors = null;
@@ -270,6 +271,22 @@ async send(text, turnAttachments, sendOptions) {
         modelPrompt = require('./input-context.cjs').augment(modelPrompt,
           [turn.promptText, materialUnderstanding.eligible ? materialUnderstanding.prompt : ''].filter(Boolean).join('\n\n'));
         await ctx.beginTurnJournal(turn);
+        // Native recovery remains part of the original logical submission.
+        if (!(turn.internal && turn.runtimeRecovery) || !ctx.run.pluginGenerationTurn) ctx.run.pluginGenerationTurn = {};
+        const pluginGenerationTurn = ctx.run.pluginGenerationTurn;
+        const permissionRevision = ctx.accessPolicy?.revision;
+        pluginGate = await require('./plugin-generation-gate.cjs').begin({
+          handle: ctx.handle, app: ctx.opts.app, identity: ctx.identity, logicalOwner: pluginGenerationTurn,
+          cancelled: () => interrupted() || ctx.closed || ctx.goalCancelled || Boolean(ctx.run.stopReason) ||
+            ctx.liveAccess.changing() || Boolean(ctx.accessChanges.pending()) || ctx.accessPolicy?.revision !== permissionRevision,
+          changed: () => ctx._emit({ kind: 'plugin-validation' }),
+          repair: async prompt => {
+            await ctx._promptComplete(prompt, { pluginRepair: true });
+            return { ok: ctx.acc.status() === 'idle' && !ctx.run.stopReason,
+              cancelled: interrupted() || ctx.closed || ctx.goalCancelled };
+          },
+        });
+        if (!pluginGate.canStart()) return { ok: true, cancelled: true, manualStop: true };
         let completion;
         try {
           completion = await ctx._promptComplete(modelPrompt, { images: nativeImages ? visualInputs : [] });
@@ -479,8 +496,11 @@ async send(text, turnAttachments, sendOptions) {
           goalMode: runAsGoal, request: rawText,
           pluginIds: effectivePluginIds, projectId: turn.projectId, skills: selectedSkills.names,
         });
-        return (deliveryResult = { ok: true, paused: Boolean(ctx.limitRequest) && !recovering,
+        deliveryResult = await pluginGate.finish({ ok: true, paused: Boolean(ctx.limitRequest) && !recovering,
           recovering, modelRecoveryGoal: runAsGoal, snapshot: ctx._snapshot() });
+        deliveryResult = { ...deliveryResult, snapshot: ctx._snapshot() };
+        if (deliveryResult.ok === false) ctx.failedLastTurn = true;
+        return deliveryResult;
       } catch (e) {
         if (interrupted() || ctx.closed || e?.code === 'EVIDENCE_INTERRUPTED' &&
             ctx.acc.status() === 'aborted' && !ctx.goalCancelled && !ctx.limitRequest)
@@ -553,6 +573,7 @@ async send(text, turnAttachments, sendOptions) {
             ...require('../../core/token-quota').fields(e),
           modelRecoveryGoal: runAsGoal, snapshot: ctx._snapshot() };
       } finally {
+        pluginGate?.dispose();
         runControl.finishTurn(ctx.run);
         try { restoreTools(); restoreSkills(); }
         finally {

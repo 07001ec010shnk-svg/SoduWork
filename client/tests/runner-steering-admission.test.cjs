@@ -148,6 +148,7 @@ for (const operation of ['dispatch', 'comment']) for (const outcome of ['rejecte
     if (operation === 'dispatch') {
       active = f.handle.submit('initial request', []);
       later = f.handle.submit('later request', [{ path: f.file, name: 'queued.txt' }], { submissionId: 'later' });
+      await until(() => f.calls.some(row => row.op === 'job.dispatch'));
       reply = f.dispatch;
     } else {
       await f.cancelOriginal();

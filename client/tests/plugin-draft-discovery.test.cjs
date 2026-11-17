@@ -53,7 +53,7 @@ test('resource repairs refresh the public revision without changing draft identi
   assert.equal(publicDraft(handle(cwd, Date.now() + 1000)), undefined, 'resource repair cannot claim an older draft in a new chat');
 });
 
-test('large embedded drafts retain bounded metadata and declared resource repair tracking', t => {
+test('large embedded drafts retain bounded metadata without tracking unused adjacent resource bytes', t => {
   const { cwd } = fixture(t);
   fs.writeFileSync(path.join(cwd, drafts.DRAFT_NAME), JSON.stringify({ ...body,
     resources: [{ ...body.resources[0], content: 'a'.repeat(300_000), encoding: 'utf8' }] }));
@@ -61,7 +61,7 @@ test('large embedded drafts retain bounded metadata and declared resource repair
   assert.equal(before.pluginName, body.name);
   fs.writeFileSync(path.join(cwd, 'templates/report.md'), 'changed external resource');
   const after = publicDraft(handle(cwd));
-  assert.notEqual(after.pluginRevision, before.pluginRevision);
+  assert.equal(after.pluginRevision, before.pluginRevision);
   assert.ok(JSON.stringify(after).length < 2000, 'resource bytes never enter renderer metadata');
 });
 
