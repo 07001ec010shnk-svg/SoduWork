@@ -22,12 +22,6 @@ CATALOG: dict[str, dict] = acp_specs()
 def find_bin(key: str) -> str | None:
     """Find an installed ACP agent without mistaking SoduWork itself for one."""
     spec = CATALOG.get(key) or {}
-    if key == "claude":
-        from .agent_native_install import active_binary
-        from .local_base import _data_root
-        if not active_binary(_data_root()):
-            return None
-        return agent_npm_runtime.private_bin(spec.get("bins") or ()) or None
     override = os.environ.get("SODUWORK_AGENT_%s_BIN" % key.upper().replace("-", "_"))
     if override:
         path = os.path.abspath(os.path.expanduser(override))
@@ -114,10 +108,6 @@ def command_argv(key: str, exe: str, args: list[str], ws: str,
 
 def runtime_issue(key: str, *, probe: bool = False) -> str:
     """Return a human-readable runtime defect before a task is created."""
-    if key == "claude":
-        from .claude_runtime import runtime_issue as claude_issue
-        from .local_base import _data_root
-        return claude_issue(_data_root())
     if key != "dsh":
         return ""
     exe = find_bin(key) or ""
@@ -129,19 +119,14 @@ def runtime_issue(key: str, *, probe: bool = False) -> str:
     return dsh_runtime.runtime_issue(expected_version=expected)
 
 
-def home_env(key: str, env: dict, work_root: str) -> None:
+def home_env(key: str, env: dict, work_root: str, *, installation_root: str | None = None) -> None:
     """Keep private agent state under the Runner's managed data root.
 
     DSH's Windows encryption-filter compatibility is installed by apply_env;
     merely relocating its home does not fix same-volume staging failures.
+    Private probes relocate writable state, not the installed runtime code.
     """
     declaration = (CATALOG.get(key) or {}).get("home") or {}
-    if key == "claude":
-        from .claude_runtime import environment
-        env.update(environment(work_root, env))
-        for name in ("NODE_OPTIONS", "ELECTRON_RUN_AS_NODE", "CLAUDECODE"):
-            env.pop(name, None)
-        return
     if not declaration or not work_root:
         return
     folder = declaration["folder"]
@@ -158,7 +143,13 @@ def home_env(key: str, env: dict, work_root: str) -> None:
     from . import agent_shell
     agent_shell.apply(env, key)
     if key == "dsh":
-        dsh_runtime.apply_env(env, work_root)
+        dsh_runtime.apply_env(env, installation_root or work_root)
+    elif key == "kimi":
+        from . import kimi_runtime
+        kimi_runtime.apply_env(env)
+    elif key == "qwen":
+        from . import qwen_runtime
+        qwen_runtime.apply_env(env)
 
 
 def inject_llm_env(key: str, env: dict, llm: dict, *, mode: str = "work") -> None:
@@ -166,7 +157,8 @@ def inject_llm_env(key: str, env: dict, llm: dict, *, mode: str = "work") -> Non
     base = str((llm or {}).get("base") or "")
     secret = str((llm or {}).get("key") or "")
     model = str((llm or {}).get("model") or "")
-    if not (base and secret and model):
+    local_only = (llm or {}).get("localOnly") is True
+    if not (base and model and (secret or local_only)):
         return
     if key == "kimi":
         # Kimi's plain KIMI_API_KEY is a config-file key, not a shell override.
@@ -177,11 +169,19 @@ def inject_llm_env(key: str, env: dict, llm: dict, *, mode: str = "work") -> Non
         env["KIMI_MODEL_PROVIDER_TYPE"] = "anthropic" if llm.get("kind") == "anthropic" else "openai"
         env["KIMI_CODE_NO_AUTO_UPDATE"] = "1"
         env["KIMI_DISABLE_TELEMETRY"] = "1"
+        # Kimi requires a non-empty API key even when the selected local model
+        # is anonymous. Satisfy its client-side validation without borrowing
+        # personal credentials or modifying the saved model configuration.
+        if local_only and not secret.strip():
+            secret = "soduwork-anonymous-local"
     # Generic ACP Agents can describe standard environment-based model routing.
     # Custom authentication/bootstrap protocols remain explicit adapters below.
     fields = {"base": base, "key": secret, "model": model}
     for target, source in ((CATALOG.get(key) or {}).get("modelEnv") or {}).items():
-        env[target] = fields[source]
+        if source == "key" and not secret:
+            env.pop(target, None)
+        else:
+            env[target] = fields[source]
     if key == "qwen":
         # Qwen's internal bootstrap markers are process-local. Inheriting them
         # from a shell or IDE can replace argv, enter the updater and exit
@@ -195,10 +195,14 @@ def inject_llm_env(key: str, env: dict, llm: dict, *, mode: str = "work") -> Non
             "QWEN_CODE_LAUNCHER_PID", "QWEN_CODE_STARTUP_VERSION",
         ):
             env.pop(name, None)
-        env.update(OPENAI_API_KEY=secret, OPENAI_BASE_URL=base, OPENAI_MODEL=model,
+        env.update(OPENAI_BASE_URL=base, OPENAI_MODEL=model,
                    QWEN_MODEL=model, QWEN_CODE_NO_RELAUNCH="1",
                    QWEN_CODE_SKIP_UPDATE_CHECK_ONCE="true",
                    QWEN_ARTIFACT_NO_AUTO_OPEN="1")
+        if secret:
+            env["OPENAI_API_KEY"] = secret
+        else:
+            env.pop("OPENAI_API_KEY", None)
     elif key == "dsh":
         from . import dsh_gateway
         dsh_gateway.inject_env(env, llm)
@@ -217,7 +221,7 @@ def inject_llm_env(key: str, env: dict, llm: dict, *, mode: str = "work") -> Non
             "methodId": "gateway",
             "_meta": {"gateway": {
                 "baseUrl": base.rstrip("/"),
-                "headers": {"Authorization": "Bearer " + secret},
+                "headers": {"Authorization": "Bearer " + secret} if secret else {},
                 "providerName": "SoduWork 模型服务",
             }},
         }

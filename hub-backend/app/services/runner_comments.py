@@ -118,6 +118,11 @@ async def comment(machine, m, read_local_files, read_packet=None, drop_transfer=
     from app.services import runtime_images
     try:
         cfg = {**dict(m.get("cfg") or {}), "_admissionKey": str(m.get("_admissionKey") or "")}
+        # Controls belong to the admitted message, never a renewable model grant.
+        for key in ("taskGoal", "taskGoalControl"):
+            cfg.pop(key, None)
+            if key in m:
+                cfg[key] = m[key]
         if prepared_skills is not None:
             cfg["skillSelection"] = prepared_skills["selection"]
         if prepared_plugins is not None:

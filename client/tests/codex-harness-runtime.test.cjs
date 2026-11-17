@@ -636,6 +636,7 @@ test('Codex Harness latches an immediate cancel until dispatch returns its real 
     assert.equal(sent.queued, false);
     assert.equal(session.snapshot().status, 'streaming');
 
+    await until(() => calls.some(row => row.op === 'job.dispatch'));
     assert.deepEqual(session.cancel(), { ok: true });
     assert.equal(session.snapshot().status, 'aborted');
     assert.equal(calls.filter((row) => row.op === 'job.stop').length, 0);
@@ -797,18 +798,21 @@ test('Runner goal pause keeps the native session and resumes without a fake user
   const alias = 'goal-native-loop';
   const expectedRef = _uuidV5(NAMESPACE, 'chat:' + alias + ':codex-harness');
   const calls = [];
-  let resumed = false;
+  let resumed = false, stopped = false;
   const runtime = {
     async rpc(op, payload) {
       calls.push({ op, payload });
       if (op === 'job.dispatch') return { ok: true, data: { ref: expectedRef } };
-      if (op === 'job.stop') return { ok: true, data: { ok: true } };
+      if (op === 'job.stop') { stopped = true; return { ok: true, data: { ok: true } }; }
       if (op === 'job.comment') {
         resumed = true;
+        stopped = false;
         return { ok: true, data: { ok: true } };
       }
       if (op === 'job.session') return { ok: true, data: {
-        ok: true, status: resumed ? 'done' : 'running', round: resumed ? 2 : 1,
+        ok: true, ref: expectedRef, status: stopped ? 'stopped' : resumed ? 'done' : 'running', round: resumed ? 2 : 1,
+        taskGoal: { status: stopped ? 'paused' : resumed ? 'completed' : 'working',
+          elapsedMs: 1000, steps: 1, budgetMs: 240 * 60000, maxSteps: 1000, continuations: 0 },
         items: resumed ? [{ seq: 1, kind: 'say', text: 'GOAL_DONE' }] : [],
       } };
       throw new Error('unexpected rpc: ' + op);
@@ -848,12 +852,14 @@ test('Runner goal pause keeps the native session and resumes without a fake user
     assert.equal((await timeout(continued.completion)).ok, true);
     const comment = calls.find((row) => row.op === 'job.comment').payload;
     assert.equal(comment.recordUser, false);
+    assert.equal(comment.taskGoalControl, 'continue');
     assert.match(comment.promptText, /原目标/);
     assert.deepEqual(session.snapshot().messages.map((row) => row.role),
       ['user', 'assistant']);
 
     const next = session.send({ text: 'RUN_AGAIN' });
     assert.equal(next.queued, false);
+    await until(() => calls.filter(row => row.op === 'job.comment').length === 2);
     assert.equal(session.controlGoal('pause').ok, true);
     assert.equal((await timeout(next.completion)).paused, true);
     await until(() => calls.filter((row) => row.op === 'job.stop').length === 2);

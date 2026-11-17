@@ -21,12 +21,11 @@ from .agent_version_probe import probe as cached_probe
 
 NODE_MINIMUMS = {
     "pi": (22, 19, 0),
-    "qwen": (22, 0, 0),
+    "qwen": (22, 15, 0),
     "codex-harness": (20, 0, 0),
     "dsh": (22, 15, 0),
     "codex": (20, 0, 0),
     "kimi": (22, 19, 0),
-    "claude": (22, 0, 0),
 }
 _INSTALL_LOCK = threading.Lock()
 _NODE_IDENTITY = """(() => {
@@ -321,6 +320,10 @@ def node_env(key: str = "", *, engine: str = "") -> dict:
     # npm itself evaluates the complete semver range during installation.
     if re.fullmatch(r">=\d+(?:\.\d+){0,2}", engine.strip()):
         required = version_tuple(engine.strip()[2:])
+    # These adapters also load reviewed host modules via registerHooks. An
+    # older package's engines field cannot lower the host API requirement.
+    if key in {"qwen", "dsh", "kimi"}:
+        required = max(required, NODE_MINIMUMS[key])
     actual = version_tuple(pair.get("node", ""))
     has_runtime = bool(pair.get("nodePath") and pair.get("npm"))
     compatible = not any(required) or actual >= required

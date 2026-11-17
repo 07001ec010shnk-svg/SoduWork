@@ -1,12 +1,22 @@
 /* System-authored capability and requirement copy, shared by renderer and main process. */
 (function (global) {
   const rows = {
+    "正在整理本轮成果…": ["Preparing this turn’s outputs…","今回の成果を整理しています…","이번 작업의 결과를 정리하는 중…"],
+    "正在检查插件草稿…": ["Checking the plugin draft…","プラグインの下書きを確認しています…","플러그인 초안을 확인하는 중…"],
+    "正在修复插件草稿…": ["Repairing the plugin draft…","プラグインの下書きを修正しています…","플러그인 초안을 수정하는 중…"],
+    "正在检查插件草稿": ["Checking the plugin draft","プラグインの下書きを確認中","플러그인 초안 확인 중"],
+    "正在修复插件草稿": ["Repairing the plugin draft","プラグインの下書きを修正中","플러그인 초안 수정 중"],
+    "插件草稿未通过检查，请修复后再安装": ["The plugin draft failed validation. Repair it before installing.","プラグインの下書きが検証に失敗しました。修正してからインストールしてください。","플러그인 초안이 검증에 실패했습니다. 수정 후 설치하세요."],
+    '未找到该账号，请检查输入是否正确。': ['Account not found. Check that you entered it correctly.', 'アカウントが見つかりません。入力内容を確認してください。', '계정을 찾을 수 없습니다. 입력한 계정이 올바른지 확인하세요.'],
+    '密码不正确，请重新输入。': ['Incorrect password. Please try again.', 'パスワードが正しくありません。もう一度入力してください。', '비밀번호가 올바르지 않습니다. 다시 입력하세요.'],
+    '如果你已注册，请确认服务地址是否正确。': ['If you already have an account, check that the server address is correct.', '登録済みの場合は、サーバーのアドレスが正しいか確認してください。', '이미 가입했다면 서버 주소가 올바른지 확인하세요.'],
     '切换成果摘要面板': ['Toggle output summary panel', '成果サマリーパネルを切り替え', '산출물 요약 패널 전환'],
     '关闭成果摘要': ['Close output summary', '成果サマリーを閉じる', '산출물 요약 닫기'],
     '核对成果并选择验收方式': ['Review outputs and choose a review method', '成果を確認して検収方法を選択', '성과를 확인하고 검수 방식 선택'],
     '过程与验证材料': ['Process and verification materials', '作業過程と検証の資料', '작업 과정 및 검증 자료'],
     '本轮没有可自动核验的交付物，请使用手动验收确认实际结果': ['This delivery has no fixed output for automatic review. Analyze it if needed, then confirm the actual result manually.', 'この納品には自動検収できる固定成果物がありません。必要に応じて分析し、実際の結果を手動で確認してください。', '이 납품 버전에는 자동 검수할 고정 산출물이 없습니다. 필요하면 분석한 뒤 실제 결과를 수동으로 확인하세요.'],
     '自动验收需要明确的验收标准和固定交付版本，请先补齐或选择手动验收': ['Automatic review requires acceptance criteria and a fixed delivery version. Complete them first or choose manual review.', '自動検収には明確な検収基準と固定された納品バージョンが必要です。先に補うか、手動検収を選択してください。', '자동 검수에는 명확한 검수 기준과 고정된 납품 버전이 필요합니다. 먼저 해당 내용을 갖추거나 수동 검수를 선택하세요.'],
+    '自动验收需要明确的验收标准和固定交付版本，请切换为“手动验收”，核对交付成果后确认。': ['Automatic review requires acceptance criteria and a fixed delivery version. Switch to manual review, inspect the delivered outputs, then confirm.', '自動検収には明確な検収基準と固定された納品バージョンが必要です。「手動検収」に切り替え、納品された成果物を確認してから承認してください。', '자동 검수에는 명확한 검수 기준과 고정된 납품 버전이 필요합니다. “수동 검수”로 전환하여 납품된 산출물을 검토한 뒤 확인하세요.'],
     '暂时无法读取验收条件，请刷新后重试': ['Review prerequisites could not be loaded. Refresh and try again.', '検収条件を読み込めませんでした。更新して再試行してください。', '검수 조건을 불러오지 못했습니다. 새로고침 후 다시 시도하세요.'],
     '模型的单次输出上限已被思考内容用完，尚未生成答复。请检查模型管理中的最大输出量；也可降低模型支持的思考强度或选择其他模型后继续。部分模型不支持关闭思考。已有内容和工具结果已保留，不会自动重复执行。': ['Reasoning used the entire response token limit before an answer was produced. Check the maximum output setting, reduce the reasoning effort if supported, or select another model to continue. Some models cannot disable reasoning. Existing content and tool results are preserved; completed actions will not be repeated automatically.', '回答が生成される前に、思考で1回の出力上限を使い切りました。最大出力設定を確認し、対応する思考強度を下げるか別のモデルを選んで続行してください。思考を無効にできないモデルもあります。既存の内容とツール結果は保持され、完了済みの操作は自動で繰り返されません。', '답변을 생성하기 전에 추론이 단일 출력 한도를 모두 사용했습니다. 최대 출력 설정을 확인하거나, 지원되는 추론 강도를 낮추거나 다른 모델을 선택해 계속하세요. 일부 모델은 추론을 끌 수 없습니다. 기존 내용과 도구 결과는 보존되며 완료된 작업은 자동 반복되지 않습니다.'],
     '插件开发助手': ['Plugin Developer', 'プラグイン開発アシスタント', '플러그인 개발 도우미'],

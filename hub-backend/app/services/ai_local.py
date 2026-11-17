@@ -15,7 +15,7 @@ from types import SimpleNamespace
 # ai_exec uses ai_local._RUNS for routing, so object identity must be preserved.
 from .local_base import (_CTX_WINDOW_DEFAULT, _LOCK, _PROFILES, _RUNS, _STORE,  # noqa: F401
                          _cfg_profile, _data_root, _env_for, _workspace_root,
-                         _claude_bin, _opencode_bin)
+                         _opencode_bin)
 from .local_base import (_load_baseline, _read_events, _record_event, _save_baseline, _save_meta,  # noqa: F401
                          _pid_alive, _store_dir, raw_tail_sync, reclaim,
                          _friendly, ctx_pct)
@@ -524,7 +524,8 @@ def _dispatch_sync_once(cfg: dict, t, files: list | None = None,
     key = ((assignee or {}).get("id") or default_assignee(cfg)["id"]).split(":", 1)[-1]
     prof = _PROFILES.get(key)
     if not prof:
-        return {"ok": False, "error": f"不认识的本地 CLI：{key}"}
+        return {"ok": False, "code": "AGENT_UNAVAILABLE",
+                "error": f"执行底座 {key} 已不可用，请选择其他底座；原会话历史已保留"}
     if (ctx.get("personalPlugin") or {}).get("key") and not str(
             ctx.get("personalPluginContext") or "").strip():
 
@@ -698,6 +699,13 @@ def _dispatch_sync_once(cfg: dict, t, files: list | None = None,
         return {"ok": False, "error": str(exc)}
     if staged:
         ctx["inputFiles"] = staged
+    from . import local_task_goal
+    goal_contract = local_task_goal.normalize(ctx.get("taskGoal")) if key != "pi" else {}
+    if key != "pi" and "taskGoal" in ctx and not goal_contract:
+        return {"ok": False, "error": "任务目标或预算无效，请检查后重试"}
+    goal_seed = {"cli": key}
+    if goal_contract and not local_task_goal.initialize(goal_seed, goal_contract):
+        return {"ok": False, "error": "当前底座尚未验证任务级自动续跑，请使用受支持的底座"}
     prompt = _compose(t, ctx)
     mode = "plan" if ctx.get("mode") == "plan" or (policy or {}).get("mode") == "readonly" else "work"
     artifact_mode = str(ctx.get("deliveryMode") or "").strip().lower()
@@ -721,6 +729,7 @@ def _dispatch_sync_once(cfg: dict, t, files: list | None = None,
             "cli": key, "ws": ws, "state": "running", "started": time.time(), "ended": None,
             "taskId": getattr(t, "id", ""), "title": getattr(t, "title", ""),
             "model": model,
+            "modelLocalOnly": dict(cfg.get("llm") or {}).get("localOnly") is True,
             "reasoningEffort": reasoning_effort,
             # Delivery mode belongs to the node; a development task's requirements node still returns its document.
             "artifactMode": artifact_mode,
@@ -763,6 +772,10 @@ def _dispatch_sync_once(cfg: dict, t, files: list | None = None,
             "usage": {"input": 0, "output": 0, "total": 0, "cost": 0.0, "turns": 0, "steps": 0},
             "firstStarted": time.time(),
         }
+        if goal_contract:
+            _RUNS[sid].update(goalContract=goal_seed["goalContract"], goalState=goal_seed["goalState"],
+                              goalTurnOwned=True, conversationMode="goal")
+            prompt = local_task_goal.work_prompt(_RUNS[sid], prompt)
     from .runtime_messages import epoch_ms
     conversation_text = str(ctx.get("conversationUserText") or "").strip()
     if conversation_text:
@@ -810,6 +823,7 @@ def _bundle_artifact(run: dict, entries: list[tuple[str, float]]) -> dict | None
 
 
 def status_sync(cfg: dict, ref: str) -> dict:
+    from . import local_task_goal
     with _LOCK:
         run = _RUNS.get(ref)
     if not run:
@@ -863,6 +877,7 @@ def status_sync(cfg: dict, ref: str) -> dict:
         "error": run.get("error") or "",
         "failureKind": run.get("failureKind") or "",
         "failurePath": run.get("failurePath") or "",
+        **({"taskGoal": local_task_goal.snapshot(run)} if run.get("goalContract") and run.get("cli") != "pi" else {}),
         # Identify outputs by paths relative to this execution's workspace.
         # Keep relative paths in filenames as well.
         # Preserve website directory structure so extracted HTML can resolve styles and assets.
@@ -912,6 +927,7 @@ def session_sync(cfg: dict, ref: str, since: int = 0, limit: int = 400) -> dict:
     """Return incremental console activity plus current context occupancy, segment count, and
     state. Use memory when available and archives for older or restarted sessions.
     """
+    from . import local_task_goal
     with _LOCK:
         run = _RUNS.get(ref)
     # A client can reconnect before the startup reclaim pass reaches this ref.
@@ -960,6 +976,7 @@ def session_sync(cfg: dict, ref: str, since: int = 0, limit: int = 400) -> dict:
             "tokens": tokens, "ctxPct": round(pct, 1), "ctxWindow": win,
             "ctxWindowKnown": known, "error": err, "workDir": ws,
             "failureKind": failure_kind, "failurePath": failure_path,
+            **({"taskGoal": local_task_goal.snapshot(run)} if run.get("goalContract") and cli != "pi" else {}),
             "cli": cli, "cliName": cli_name, "cliSid": cli_sid, "model": model,
             "activeExecutionSelection": {"agentId": cli, "modelName": model,
                 "reasoningEffort": str(run.get("reasoningEffort") or "")},

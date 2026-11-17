@@ -64,6 +64,20 @@ test('long attachment names preserve their file type for system and Markdown pre
   assert.match(html,/<h1>Long filename<\/h1>/);
 });
 
+test('multibyte attachment names fit the native filesystem before system handoff', async context => {
+  const fixture = harness(context);
+  fixture.state.type = 'application/octet-stream';
+  for (const filename of ['报告'.repeat(50) + '.docx', '😀'.repeat(90) + '.xlsx']) {
+    assert.equal((await fixture.open(filename)).external, true);
+    const target = fixture.state.opened.at(-1);
+    const basename = path.basename(target);
+    assert.ok(Buffer.byteLength(basename, 'utf8') <= 180);
+    assert.ok(basename.isWellFormed());
+    assert.equal(path.extname(target), path.extname(filename));
+    assert.deepEqual(fs.readFileSync(target), fixture.state.data);
+  }
+});
+
 test('Markdown renders as a safe native preview while CSV, JSON and plain text stay literal', async t=>{
   const h=harness(t);
   for(const [filename,type] of [['报告.md','text/markdown'],['说明.txt','text/plain'],['数据.csv','text/csv'],['资料.json','application/json']]){
@@ -79,6 +93,15 @@ test('Markdown renders as a safe native preview while CSV, JSON and plain text s
     assert.equal(w.options.webPreferences.javascript,false);assert.equal(w.options.webPreferences.sandbox,true);assert.equal(w.options.webPreferences.nodeIntegration,false);
   }
   h.state.type='text/plain; charset="windows-1252"';await h.open('latin.txt');assert.match(h.state.windows.at(-1).url,/charset=windows-1252/);
+});
+
+test('Markdown attachments preserve numeric ranges and explicit strikethrough', async t=>{
+  const h = harness(t);
+  h.state.type = 'text/markdown';
+  h.state.data = Buffer.from('找 3~5 个用户，运行 7~14 天。~~旧建议~~');
+  assert.equal((await h.open('ranges.md')).native, true);
+  const html = Buffer.from(h.state.windows.at(-1).url.split(',')[1], 'base64').toString();
+  assert.match(html, /<p>找 3~5 个用户，运行 7~14 天。<del>旧建议<\/del><\/p>/);
 });
 
 test('Markdown filename preview is independent of a generic server MIME and strips active content', async t=>{

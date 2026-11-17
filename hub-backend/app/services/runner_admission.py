@@ -246,6 +246,9 @@ def comment_digest(ref: str, payload: dict) -> str:
     """Keep immutable intent, without retaining prompts or renewable credentials."""
     value = {"ref": str(ref), "text": str(payload.get("text") or ""),
              "executionSelection": payload.get("executionSelection")}
+    for key in ("taskGoal", "taskGoalControl"):
+        if key in payload:
+            value[key] = payload[key]
     if payload.get("pluginTurn"):
         value["plugins"] = (payload["pluginTurn"].get("args") or {}).get("plugins")
     if payload.get("turnSkills"):

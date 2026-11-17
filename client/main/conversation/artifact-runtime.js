@@ -70,17 +70,20 @@ async function snapshotAsync(session) {
   const cwd = session.cwd, sessionId = session.sessionId, owner = session.deliveryOwner;
   const asynchronous = session.outputSnapshotAsync, synchronous = session.outputSnapshot, list = session.outputs;
   const recovered = recoveredFiles(session);
-  const scanned = typeof asynchronous === 'function'
+  let scanned = typeof asynchronous === 'function'
     ? await asynchronous.call(session)
     : typeof synchronous === 'function' ? await synchronous.call(session)
       : { files: typeof list === 'function' ? await list.call(session) : [] };
+  const candidates = cwd ? await pluginDrafts.collectAsync(cwd, scanned || {}) : [];
+  const validation = await require('../pi-session/plugin-generation-gate.cjs').inspect({ handle: session, snapshot: scanned, files: candidates });
+  scanned = { ...scanned, pluginValidation: validation };
   if (session.cwd !== cwd || session.sessionId !== sessionId || session.deliveryOwner !== owner ||
       session.outputSnapshotAsync !== asynchronous || session.outputSnapshot !== synchronous || session.outputs !== list)
     throw Error('会话成果来源已变化，请刷新后重试');
-  return sessionSnapshot(session, scanned, recovered);
+  return sessionSnapshot(session, scanned, recovered, candidates);
 }
 
-function sessionSnapshot(session, scanned, recovered) {
+function sessionSnapshot(session, scanned, recovered, candidates) {
   if (!session) return null;
   const savedReports = require('./saved-report-artifacts');
   if (!recovered) recovered = recoveredFiles(session);
@@ -127,20 +130,24 @@ function sessionSnapshot(session, scanned, recovered) {
     if (legacy >= 0) items[legacy] = item; else items.push(item);
     indexed.add(path.resolve(file.path));
   }
-  for (const file of pluginDrafts.collect(session.cwd, got)) {
+  for (const file of candidates || pluginDrafts.collect(session.cwd, got)) {
     const existing = items.findIndex(row => row.path && path.resolve(row.path) === file.path);
     const previous = existing >= 0 ? items[existing] : null;
-    const item = { ...file, ...previous, pluginDraft: true, pluginPackage: file.pluginPackage,
+    const item = { ...file, ...previous, pluginDraft: true, pluginPackage: file.pluginPackage, skillPackage: file.skillPackage === true,
       pluginName: file.pluginName, pluginVersion: file.pluginVersion,
       // Identity/superseded come from this scan's merge, never from the row the
       // earlier snapshot cached here — a rename must move the identity forward.
       pluginIdentity: file.pluginIdentity || '', pluginSuperseded: file.pluginSuperseded === true,
       pluginRevision: file.pluginRevision, pluginRevisionAt: file.pluginRevisionAt,
+      pluginValidation: (got.pluginValidation || []).find(row => row.relative === file.relative && row.revision === file.pluginRevision) || { state: 'pending' },
       artifactId: previous && previous.artifactId || deliveryContract._artifactId('file', file.relative),
       kind: 'file', primary: previous ? previous.primary !== false : false,
       preview: false, actions: ['open', 'reveal'] };
     if (existing >= 0) items[existing] = item; else items.push(item);
   }
+  // Delivery consumers need the same installation metadata as the artifact index.
+  const indexedByPath = new Map(items.filter(item => item.path).map(item => [path.resolve(item.path), item]));
+  delivery.items = (delivery.items || []).map(item => item.path && indexedByPath.get(path.resolve(item.path)) || item);
   return { got: got || {}, delivery, items };
 }
 
@@ -197,9 +204,11 @@ function publicArtifact(ref, item) {
     primary: item ? item.primary !== false : true,
     processEvidence: Boolean(item && item.processEvidence),
     changedInTurn: Boolean(item && item.changedInTurn),
-    ...(item && item.pluginDraft ? { pluginDraft: true, pluginPackage: Boolean(item.pluginPackage),
+    ...(item && item.pluginDraft ? { pluginDraft: true, pluginPackage: Boolean(item.pluginPackage), skillPackage: Boolean(item.skillPackage),
       pluginName: safeText(item.pluginName, 120), pluginVersion: safeText(item.pluginVersion, 40),
       pluginIdentity: safeText(item.pluginIdentity, 160), pluginSuperseded: item.pluginSuperseded === true,
+      pluginValidation: item.pluginValidation || { state: 'pending' },
+      pluginInstallable: item.pluginValidation?.state === 'ready',
       pluginRevision: safeText(item.pluginRevision, 64), pluginRevisionAt: Number(item.pluginRevisionAt || item.at || 0) } : {}),
     actions: Array.isArray(item && item.actions) ? item.actions.slice(0, 6) : ['open', 'reveal'],
     runtime: item && item.kind === 'website' ? {

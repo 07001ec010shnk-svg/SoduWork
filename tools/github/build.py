@@ -17,9 +17,12 @@ import time
 import urllib.request
 
 from release import ROOT, context, expected, first_release, policy, read, require, seal, write
+import linux_signing
 
 
 def run(*args, cwd=ROOT, env=None):
+    env = {key: value for key, value in (os.environ if env is None else env).items()
+           if not key.startswith(linux_signing.PREFIX)}
     subprocess.run([str(a) for a in args], cwd=cwd, env=env, check=True)
 
 
@@ -68,6 +71,8 @@ def package_native(ctx, shard, scratch, *, validation=False):
     target_arch = "arm64" if shard == "macos-arm64" else "x64"
     actual_arch = {"amd64": "x64", "x86_64": "x64", "arm64": "arm64", "aarch64": "arm64"}.get(platform.machine().lower())
     require(actual_arch == target_arch, "Native host architecture mismatch")
+    if shard == "linux" and not validation:
+        linux_signing.settings(os.environ)
     prepare_python(scratch, shard)
     # A narrow bridge for the retained generic inventory/acceptance tools.
     # Values come from the real GitHub context, never a fabricated GitLab run.
@@ -77,8 +82,11 @@ def package_native(ctx, shard, scratch, *, validation=False):
            # runners. Retain pinned hashes, without domestic mirror fallbacks.
            "SODUWORK_NODE_MIRROR": "https://nodejs.org/download/release",
            "SODUWORK_PYTHON_MIRROR": "https://github.com/astral-sh/python-build-standalone/releases/download",
+           "SODUWORK_PORTABLE_GIT_MIRROR": "https://github.com/git-for-windows/git/releases/download",
            "SODUWORK_RUNTIME_MIRROR_ONLY": "1"}
     require(not env.get("SODUWORK_INTERNAL_BUILD"), "Internal-only builds cannot enter public workflows")
+    # Only the isolated signing helper receives private Linux credentials.
+    env = {key: value for key, value in env.items() if not key.startswith(linux_signing.PREFIX)}
     if validation:
         # Validation emits only a checksum report. Public release entry points
         # still require the distribution review and full upgrade acceptance.
@@ -95,9 +103,15 @@ def package_native(ctx, shard, scratch, *, validation=False):
     if shard.startswith("macos-"):
         env["SODUWORK_MACOS_ARCH"] = target_arch
         run(npm, "run", "build:mac", cwd=ROOT / "client", env=env)
+        python = ROOT / "hub-backend/.venv/bin/python"
+        run(python, "-m", "unittest", "test_runner_tls", cwd=ROOT / "hub-backend", env=env)
+        run(python, ROOT / "hub-backend/scripts/check_runner_tls_bundle.py",
+            ROOT / "client/runner/soduwork-runner", env=env)
         run("node", "tools/ci/release-artifacts.cjs", "inventory", "macos", target_arch, env=env)
     else:
         run(npm, "run", "build" if shard == "windows" else "build:linux", "--", "--publish", "never", cwd=ROOT / "client", env=env)
+        if shard == "linux" and not validation:
+            linux_signing.sign_packages(ROOT / "client/dist", ctx["version"], os.environ)
         run("node", "tools/ci/release-artifacts.cjs", "inventory", shard, env=env)
     return env
 
@@ -129,7 +143,12 @@ def native(ctx, shard, folder, scratch):
         receipt = ROOT / "release-evidence/linux/acceptance.json"
     for name in expected(ctx, shard):
         shutil.copyfile(ROOT / "client/dist" / name, folder / name)
-    return read(receipt)
+    checks = read(receipt)
+    if shard == "linux":
+        # Verify again after native acceptance and copying the accepted bytes.
+        checks["linuxSigning"] = linux_signing.verify_packages(
+            folder, ctx["version"], linux_signing.settings(os.environ)[0])
+    return checks
 
 
 def android(ctx, folder, scratch, *, signing_env=None):

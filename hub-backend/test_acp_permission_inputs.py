@@ -141,6 +141,32 @@ class CodexPermissionInputsTests(unittest.TestCase):
                 self.assertFalse(self.requests[-1]["allowSession"])
                 self.assertEqual(self.requests[-1]["arguments"]["changes"][0]["_meta"]["kind"], change)
 
+    def test_air_and_standard_edit_approvals_keep_the_same_live_diff(self):
+        event = self.file_event()
+        self.access.observe_tool(event)
+        operations = []
+        for call in ({"toolCallId": "file-1", "kind": "edit", "status": "pending"},
+                     {"toolCallId": "file-1", "title": "Editing files", "locations": []}):
+            self.assertFalse(self.access.native_permission({"toolCall": call}))
+            operations.append(self.requests[-1])
+        for operation in operations:
+            self.assertEqual(operation["kind"], "edit")
+            self.assertEqual(operation["arguments"]["changes"][0]["newText"], "# Actual document\n")
+            self.assertEqual(operation["target"], str(self.work / "report.md"))
+            self.assertFalse(operation["allowSession"])
+        self.assertEqual(operations[0], operations[1])
+
+    def test_air_missing_kind_never_restores_another_or_completed_edit(self):
+        self.access.observe_tool(self.file_event())
+        for call in ({"toolCallId": "different"}, {"toolCallId": "file-1", "kind": "execute"},
+                     {"toolCallId": "file-1", "kind": ""}, {"toolCallId": "file-1", "kind": False}):
+            self.assertFalse(self.access.native_permission({"toolCall": call}))
+            self.assertTrue(self.requests[-1]["arguments"]["inputUnavailable"])
+            self.assertNotIn("changes", self.requests[-1]["arguments"])
+        self.access.observe_tool({"sessionUpdate": "tool_call_update", "toolCallId": "file-1", "status": "completed"})
+        self.assertFalse(self.access.native_permission({"toolCall": {"toolCallId": "file-1"}}))
+        self.assertTrue(self.requests[-1]["arguments"]["inputUnavailable"])
+
     def test_partial_updates_refresh_content_and_completed_calls_are_not_reused(self):
         self.access.observe_tool(self.file_event())
         changed = self.file_event(content=[{"type": "diff", "path": str(self.work / ".env"),
@@ -199,6 +225,24 @@ class CodexPermissionInputsTests(unittest.TestCase):
         self.assertFalse(self.access.native_permission(request))
         self.assertNotEqual(self.requests[-1]["action"], "native.command")
         self.assertFalse(self.requests[-1]["allowSession"])
+
+    def test_air_command_kind_restores_legacy_authoritative_execution_context(self):
+        original = 'powershell.exe -NoProfile -Command "Write-Output fixture"'
+        source = {"itemId": "shell-1", "command": original, "cwd": str(self.work),
+                  "networkApprovalContext": {"host": "fixture.invalid", "protocol": "https"},
+                  "futureExecutionField": {"strict": True}}
+        self.access.observe_tool({"sessionUpdate": "tool_call", "toolCallId": "shell-1", "kind": "execute",
+                                  "status": "in_progress", "rawInput": {"command": original, "cwd": str(self.work)}})
+        operations = []
+        for extra in ({"kind": "execute", "status": "pending"}, {}):
+            self.assertFalse(self.access.native_permission({"toolCall": {"toolCallId": "shell-1",
+                "rawInput": {"command": "Write-Output fixture", "cwd": str(self.work)}, **extra},
+                "_meta": {"codex": {"params": source}}}))
+            operations.append(self.requests[-1])
+        self.assertEqual(operations[0], operations[1])
+        self.assertEqual(operations[1]["arguments"], source)
+        self.assertEqual(operations[1]["action"], "native.command")
+        self.assertEqual(operations[1]["tool"], "codex.shell")
 
     def test_titles_mismatched_metadata_and_mcp_payloads_are_never_shell_proof(self):
         for raw in (None, {"server": "mcp", "tool": "execute", "arguments": {"command": "something"}}):

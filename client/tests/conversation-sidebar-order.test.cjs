@@ -121,7 +121,11 @@ test('the home rail starts a new conversation and utility pages reclaim the side
   assert.match(source, /const CONVERSATION_KEYS = new Set\(\['create', 'pichat'\]\)/);
   assert.match(source, /const RAIL_MORE_ITEMS = \[/);
   assert.match(source, /\['create', '[^']+', 'home'\]/);
-  assert.match(source, /const RAIL_MORE_ITEMS = \[[\s\S]*?\['aidesk', 'AI [^']+', 'aidesk'\]/);
+  const more = source.match(/const RAIL_MORE_ITEMS = (\[[\s\S]*?\n  \]);/);
+  assert.ok(more, 'The More menu must retain its explicit entries');
+  const moreItems = vm.runInNewContext(more[1]);
+  assert.deepEqual(Array.from(moreItems, item => item[0]), ['memory'],
+    'Memory remains in More while AI team navigation is temporarily hidden');
   assert.match(source, /data-rail-menu="more"/);
   assert.doesNotMatch(source, /data-rail-menu="collaboration"/);
   assert.match(source, /function syncWorkspaceLayout\(key\)/);
