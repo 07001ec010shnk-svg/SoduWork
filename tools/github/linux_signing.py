@@ -152,9 +152,13 @@ def sign_packages(folder, version, signing_env):
             shutil.which("gpg"), "--no-options", "--homedir", home, "--batch", "--no-armor",
             "--pinentry-mode", "loopback", "--passphrase-file", passfile,
             "--digest-algo", "SHA256", "--local-user", fingerprint + "!"))
-        signer += ' --detach-sign --output "%{__signature_filename}" "%{__plaintext_filename}"'
+        # RPM 6 passes input/output as macro arguments instead of defining the
+        # legacy filename macros used by RPM 4.17.
+        positional = command("rpm", "--eval", "%{?__openpgp_sign_cmd:1}", env=env).strip() == b"1"
+        signer += (' --detach-sign --output %{shescape:%{2}} -- %{shescape:%{1}}' if positional else
+                   ' --detach-sign --output "%{__signature_filename}" "%{__plaintext_filename}"')
         command("rpmsign", "--define", "_gpg_name " + fingerprint,
-                "--define", "__gpg_sign_cmd " + signer, "--addsign",
+                "--define", ("__gpg_sign_cmd() " if positional else "__gpg_sign_cmd ") + signer, "--addsign",
                 output / f"SoduWork-{version}-linux.rpm", env=env)
         for name in package_names(version):
             gpg(home, env, "--pinentry-mode", "loopback", "--passphrase-fd", "0",
