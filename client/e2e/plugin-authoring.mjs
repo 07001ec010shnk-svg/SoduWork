@@ -306,7 +306,8 @@ try {
   await click('[data-install-plugin-draft]');
   await page.waitFor(() => document.querySelector('#capLocalOnly'), null);
   assert.equal(await page.run(() => document.querySelector('.nplugin-draft-error').hidden), true);
-  assert.equal(await page.run(() => document.querySelector('.cap-plugin-preview b').textContent), retryBody.name);
+  assert.equal(await page.run(() => Array.from(document.querySelectorAll('.cap-plugin-preview b'))
+    .find(node => node.checkVisibility())?.textContent), retryBody.name);
   await shot('10-corrected-draft-install-preview');
   await click('#capLocalOnly');
   await page.waitFor(() => document.querySelector('#capLocalTry'), null);
