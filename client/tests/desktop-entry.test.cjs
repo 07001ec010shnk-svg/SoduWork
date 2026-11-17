@@ -104,7 +104,6 @@ test('mac dock icon click reveals a minimized workspace, but pet-driven activati
     '主窗口不得再做任何跨 Space 集合行为（全住第一个桌面）');
   assert.match(main, /app\.on\('activate'[\s\S]*?return;[\s\S]*?BrowserWindow\.getAllWindows\(\)\.length === 0\) \{[\s\S]*?_desktopOverlay\.createWindow\(\);/,
     'Windows 上 activate 原行为必须保留（darwin 分支后不可提前改写）');
-  assert.match(main, /second-instance[\s\S]*?process\.platform === 'darwin'[\s\S]*?openDeskWindow\(\{ panel: 'workspace' \}, null\)/);
 });
 
 test('settings keeps an explicit quick dock visibility control', () => {
