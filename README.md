@@ -111,7 +111,7 @@ See [Run from source: send your first AI message](docs/getting-started.en.md#sen
 <details>
 <summary><b>Try the live demo</b></summary>
 
-Download the client from [Releases](https://github.com/mdiri-ai/SoduWork/releases), enter `https://soduwork.ai` under **Connection** on the sign-in screen, then sign up and sign in.
+Download the client from [Releases](https://github.com/mdiri-ai/SoduWork/releases/latest), enter `https://service.soduwork.ai` under **Connection** on the sign-in screen, then sign up and sign in.
 
 > The demo is for evaluation only. Don't upload real business data or anything sensitive.
 
@@ -119,6 +119,8 @@ Download the client from [Releases](https://github.com/mdiri-ai/SoduWork/release
 
 <details>
 <summary><b>Install the desktop client</b></summary>
+
+Follow the illustrated [desktop installation and first conversation guide](docs/desktop-quickstart.en.md).
 
 | OS | Package |
 | --- | --- |
