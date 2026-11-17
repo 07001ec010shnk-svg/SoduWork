@@ -149,6 +149,32 @@ approvals/denials and command output. They do not exercise paid model services.
 
 ## Database configuration
 
+Domain ordering accepts signed 32-bit integers and legacy decimal strings.
+Malformed values, booleans, fractions and overflow return HTTP 400 before any
+record is changed. Omitting a rank or sending null keeps the existing rank on
+PATCH; creation retains its zero default. Schedule numeric fields and client
+update progress use the same integer validation, with their existing clamping
+and optional-field defaults. New schedule timezone values must name a valid
+IANA zone; omitted values keep the previous configuration, while null or empty
+text selects the existing default. Historical invalid zones remain readable
+through the default timezone fallback.
+
+Migration `0091_domain_sort_validation` repairs historical SQLite domain ranks
+whose stored type or range is invalid. Valid ranks, domain IDs and associations
+are preserved. Repaired entries are placed after valid ranks when space remains;
+if the maximum rank is exhausted, entries tie at that maximum and are ordered
+by creation time and ID. Each repair first records
+the original storage type, lossless original value and replacement in a
+`domain.sort_repair` audit entry in the same transaction. The repair also runs
+when adopting a pre-Alembic database and is idempotent. PostgreSQL domain data
+is unchanged. Back up the database before upgrading; downgrade does not restore
+invalid values. Administrators can review the audit entries and adjust ordering.
+
+Offline regressions: `python3 -m unittest test_api_integer_validation
+test_domain_sort_validation test_domain_sort_migration
+test_schedule_update_input_validation`. These suites are registered in the
+release quality gate.
+
 Set `DATABASE_URL` in private configuration when overriding the SQLite default:
 
 | Environment | Value |

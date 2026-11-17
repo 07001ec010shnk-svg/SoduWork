@@ -455,6 +455,9 @@ def _backfill_data(conn) -> None:
     model_privacy.scrub_schedule_models(conn)
     model_privacy.scrub_receipts(conn)
     import_module("migrations.versions.0090_requirement_creator").migrate_data(conn)
+    # Adoption stamps head directly; retain the same original-value audit and
+    # safe rank repair as the numbered SQLite upgrade.
+    import_module("migrations.versions.0091_domain_sort_validation").repair_domain_sorts(conn)
 
     # Pre-Alembic ledgers predate occurrence identities. Backfill before adding the unique
     # index so adoption remains safe even when the historical table already has many rows.
