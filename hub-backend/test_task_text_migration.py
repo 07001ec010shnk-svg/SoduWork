@@ -107,6 +107,9 @@ class TaskTextMigrationTests(unittest.TestCase):
                 assert connection.execute(text("SELECT title,source FROM task WHERE id='legacy'")).one() == (title, source)
                 assert connection.scalar(text("SELECT version_num FROM alembic_version")) == _head_revision()
             engine.dispose()
+            # Adoption and versioned upgrades must agree with ORM metadata.
+            # Keep Alembic's normal type comparison enabled for this regression.
+            command.check(_config())
         """)
         with tempfile.TemporaryDirectory(prefix="soduwork-task-text-migration-") as directory:
             result = subprocess.run([sys.executable, "-c", code],
