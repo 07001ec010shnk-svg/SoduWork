@@ -2,7 +2,9 @@
 use put/get/delete without storing binary data in the database. Persist the selected backend
 with each object.
 """
+import hashlib
 import os
+import re
 import shutil
 from io import BytesIO
 
@@ -39,10 +41,44 @@ def _client():
     return _minio_client
 
 
+_NAME_LIMIT = 255  # Per-component limit: bytes on POSIX filesystems, UTF-16 units on NTFS.
+_WINDOWS_PATH_LIMIT = 259
+_WINDOWS_INVALID = re.compile(r'[<>:"|?*\x00-\x1f]')
+_WINDOWS_RESERVED = re.compile(r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)", re.I)
+_SAFE_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,16}")
+
+
+def _native_name_ok(name: str, path: str) -> bool:
+    if os.name == "nt":
+        return (len(name.encode("utf-16-le")) // 2 <= _NAME_LIMIT
+                and len(path) <= _WINDOWS_PATH_LIMIT
+                and not _WINDOWS_INVALID.search(name)
+                and not name.endswith((" ", "."))
+                and not _WINDOWS_RESERVED.match(name))
+    return len(os.fsencode(name)) <= _NAME_LIMIT
+
+
+def _hashed_name(key: str, safe: str) -> str:
+    # Object keys embed the uploaded filename, which can exceed native limits
+    # (long or multibyte names) or contain characters Windows rejects. Keep a
+    # readable ASCII prefix and extension; the digest keeps the key unique.
+    head, _, tail = safe.rpartition("__")
+    suffix = os.path.splitext(tail or safe)[1]
+    suffix = suffix if _SAFE_SUFFIX.fullmatch(suffix) else ""
+    head = re.sub(r"[^A-Za-z0-9._-]", "_", head)[:120]
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:40]
+    return (head + "__" if head else "") + "h-" + digest + suffix
+
+
 def _local_path(key: str) -> str:
     os.makedirs(_LOCAL_DIR, exist_ok=True)
     safe = key.replace("/", "__").replace("\\", "__")
-    return os.path.join(_LOCAL_DIR, safe)
+    legacy = os.path.join(_LOCAL_DIR, safe)
+    # Existing objects keep their original mapping; only names the filesystem
+    # cannot store, and therefore could never have been written, are hashed.
+    if _native_name_ok(safe, legacy) or os.path.exists(legacy):
+        return legacy
+    return os.path.join(_LOCAL_DIR, _hashed_name(key, safe))
 
 
 def put(key: str, data: bytes, content_type: str) -> str:
