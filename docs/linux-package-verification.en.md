@@ -76,7 +76,7 @@ local package signature checking. The public key and detached signatures travel
 through the same immutable candidate inventory as the installers. Acceptance
 verifies them again before sealing the release receipt.
 
-The committed 1.13.15 RPM upgrade baseline is explicitly marked `legacy-unsigned`.
+The committed 1.13.16 RPM upgrade baseline is explicitly marked `legacy-unsigned`.
 Only this old-package test path can install without an OpenPGP signature, after
 rechecking the pinned SHA-256 in the disposable container. Its exception and hash
 are recorded in the acceptance receipt. New candidates always require signatures.
