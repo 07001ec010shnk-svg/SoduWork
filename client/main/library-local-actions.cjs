@@ -17,7 +17,21 @@ function item(index, id, deleted = false) {
   if (!row || (!deleted && row.deletedAt)) throw error('LOCAL_LIBRARY_NOT_FOUND', '资料不存在或已在回收站');
   return row;
 }
-function name(value, fallback) { return safeFilename(String(value || '').trim(), fallback).slice(0, 160); }
+function name(value, fallback, marker = '') {
+  const filename = safeFilename(String(value || '').trim(), fallback);
+  if (!marker && filename.length <= 160) return filename;
+  const parts = splitFilename(filename), ending = marker + parts.extension;
+  const extension = ending.length <= 160 && Buffer.byteLength(ending, 'utf8') <= 180 ? parts.extension : '';
+  const suffix = marker + extension;
+  let prefix = '', bytes = Buffer.byteLength(suffix, 'utf8');
+  for (const character of extension ? parts.stem : filename) {
+    const size = Buffer.byteLength(character, 'utf8');
+    if (prefix.length + character.length + suffix.length > 160 || bytes + size > 180) break;
+    prefix += character;
+    bytes += size;
+  }
+  return safeFilename(prefix + suffix, fallback);
+}
 const nameKey = value => String(value || '').normalize('NFC').toLowerCase();
 function visibleFilename(row) {
   const title = name(row.title, row.filename), suffix = row.filename.match(/(\.[^./\\]+)$/)?.[1] || '';
@@ -36,7 +50,7 @@ function splitFilename(value) {
   return index > 0 ? { stem: name.slice(0, index), extension: name.slice(index) } : { stem: name, extension: '' };
 }
 function nextItemName(index, row) {
-  const desired = visibleFilename(row), parts = splitFilename(desired);
+  const desired = visibleFilename(row);
   const occupied = candidate => {
     const key = nameKey(candidate);
     return index.items.some(other => other.id !== row.id && !other.deletedAt && other.folderId === row.folderId && nameKey(visibleFilename(other)) === key) ||
@@ -44,7 +58,7 @@ function nextItemName(index, row) {
   };
   if (!occupied(desired)) return desired;
   for (let number = 1; number < 100000; number += 1) {
-    const candidate = parts.stem + '（' + number + '）' + parts.extension;
+    const candidate = name(desired, row.filename, '（' + number + '）');
     if (!occupied(candidate)) return candidate;
   }
   throw error('LIBRARY_NAME_CONFLICT', '当前文件夹下可用文件名已耗尽，请整理后重试');

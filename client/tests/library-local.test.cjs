@@ -68,6 +68,62 @@ test('same destination suffixes duplicate imports while creates, folders and tra
   assert.equal((await f.call('list', { scope: 'all' })).items.length, 3);
 });
 
+test('long imported filenames preserve extensions in metadata and native open paths', async context => {
+  const runtime = fixture(context);
+  for (const filename of ['a'.repeat(170) + '.txt', 'b'.repeat(170) + '.pdf', 'c'.repeat(155) + '😀😀.md']) {
+    const content = 'content for ' + filename;
+    const saved = (await runtime.call('upload', { name: filename, dataBase64: data(content) })).item;
+    assert.equal(path.extname(saved.filename), path.extname(filename));
+    assert.equal(saved.kind, 'document');
+    assert.ok(saved.filename.length <= 160);
+    assert.ok(Buffer.byteLength(saved.filename, 'utf8') <= 180);
+    assert.ok(saved.filename.isWellFormed());
+    assert.equal((await runtime.call('readBinary', { id: saved.id })).name, saved.filename);
+    await runtime.call('openExternal', { id: saved.id });
+    const target = runtime.opened.at(-1);
+    assert.equal(path.extname(target), path.extname(filename));
+    assert.equal(fs.readFileSync(target, 'utf8'), content);
+  }
+});
+
+test('duplicate long imports preserve distinct suffixes within character and byte limits', async context => {
+  for (const [label, filename] of [
+    ['ASCII', 'a'.repeat(156) + '.txt'],
+    ['Chinese', '报'.repeat(58) + '.txt'],
+    ['emoji', '😀'.repeat(43) + '.txt'],
+  ]) {
+    await context.test(label, async nested => {
+      const runtime = fixture(nested), names = [];
+      for (let index = 0; index < 3; index += 1) {
+        const content = 'independent import ' + index;
+        const saved = (await runtime.call('upload', { name: filename, dataBase64: data(content) })).item;
+        names.push(saved.filename);
+        assert.ok(saved.filename.length <= 160);
+        assert.ok(Buffer.byteLength(saved.filename, 'utf8') <= 180);
+        assert.ok(saved.filename.isWellFormed());
+        assert.equal(path.extname(saved.filename), '.txt');
+        if (index) assert.ok(saved.filename.endsWith('（' + index + '）.txt'));
+        assert.equal((await runtime.call('readBinary', { id: saved.id })).name, saved.filename);
+        await runtime.call('openExternal', { id: saved.id });
+        assert.equal(fs.readFileSync(runtime.opened.at(-1), 'utf8'), content);
+      }
+      assert.equal(new Set(names).size, 3);
+    });
+  }
+});
+
+test('renaming a long title retains its file type and original bytes', async context => {
+  const runtime = fixture(context);
+  const original = (await create(runtime, { filename: 'original.txt', content: 'unchanged bytes' })).item;
+  const updated = await runtime.call('updateItem', { id: original.id, title: 'x'.repeat(155) + '😀😀' });
+  assert.equal(path.extname(updated.item.filename), '.txt');
+  assert.ok(updated.item.filename.length <= 160);
+  assert.ok(updated.item.filename.isWellFormed());
+  assert.equal((await runtime.call('readBinary', { id: original.id })).name, updated.item.filename);
+  await runtime.call('openExternal', { id: original.id });
+  assert.equal(fs.readFileSync(runtime.opened.at(-1), 'utf8'), 'unchanged bytes');
+});
+
 test('batch delete moves local items to trash and preserves per-item failures', async t => {
   const f = fixture(t);
   const first = (await create(f, { filename: 'first.txt' })).item;
