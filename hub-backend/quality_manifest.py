@@ -80,6 +80,7 @@ RELEASE_SMOKES = tuple(sorted((
     "smoke/smoke_acp_team_admin.py",
     "smoke/smoke_admin_security.py",
     "test_admin_projects.py",
+    "test_repository_path_boundary.py",
     "test_schedule_router_domains.py",
     "test_schedule_account_ownership.py",
     "test_task_owner_access.py",
