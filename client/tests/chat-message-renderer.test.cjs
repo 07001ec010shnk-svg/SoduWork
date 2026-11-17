@@ -13,7 +13,8 @@ const taskControllerSource = fs.readFileSync(
 const markdownSource = fs.readFileSync(
   path.join(__dirname, '../components/panels/chat-markdown.js'), 'utf8');
 const markedSource = fs.readFileSync(
-  path.join(__dirname, '../vendor/markdown/marked.umd.js'), 'utf8');
+  path.join(__dirname, '../vendor/markdown/marked.umd.js'), 'utf8') + '\n' + fs.readFileSync(
+  path.join(__dirname, '../core/markdown.js'), 'utf8');
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) => ({
@@ -624,9 +625,11 @@ test('desktop loads Markdown dependencies before the chat renderer', () => {
   const html = fs.readFileSync(path.join(__dirname, '../desk.html'), 'utf8');
   const rendererAt = html.indexOf('components/panels/chat-message-renderer.js');
   const markedAt = html.indexOf('vendor/markdown/marked.umd.js');
+  const markdownPolicyAt = html.indexOf('core/markdown.js');
   const purifierAt = html.indexOf('vendor/markdown/purify.min.js');
   const markdownAt = html.indexOf('components/panels/chat-markdown.js');
   assert.ok(markedAt >= 0 && purifierAt >= 0 && rendererAt > markedAt && rendererAt > purifierAt);
+  assert.ok(markdownPolicyAt > markedAt && markdownPolicyAt < markdownAt);
   assert.ok(markdownAt > purifierAt && markdownAt < rendererAt);
 });
 

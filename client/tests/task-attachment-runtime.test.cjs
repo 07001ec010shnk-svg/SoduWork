@@ -95,6 +95,15 @@ test('Markdown renders as a safe native preview while CSV, JSON and plain text s
   h.state.type='text/plain; charset="windows-1252"';await h.open('latin.txt');assert.match(h.state.windows.at(-1).url,/charset=windows-1252/);
 });
 
+test('Markdown attachments preserve numeric ranges and explicit strikethrough', async t=>{
+  const h = harness(t);
+  h.state.type = 'text/markdown';
+  h.state.data = Buffer.from('找 3~5 个用户，运行 7~14 天。~~旧建议~~');
+  assert.equal((await h.open('ranges.md')).native, true);
+  const html = Buffer.from(h.state.windows.at(-1).url.split(',')[1], 'base64').toString();
+  assert.match(html, /<p>找 3~5 个用户，运行 7~14 天。<del>旧建议<\/del><\/p>/);
+});
+
 test('Markdown filename preview is independent of a generic server MIME and strips active content', async t=>{
   const h=harness(t);h.state.type='application/octet-stream';h.state.data=Buffer.from('# 标题\n\n<script>alert(1)</script>\n\n![远程图片](https://evil.example/x.png)');
   assert.equal((await h.open('说明.md')).native,true);
