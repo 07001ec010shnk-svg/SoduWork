@@ -62,8 +62,27 @@ async def _get_or_create_session(session: AsyncSession, task_id: str,
         return row
 
 
+def _event_display_value(value):
+    """Make the display projection PostgreSQL-safe without editing Runner archives.
+
+    PostgreSQL text cannot contain U+0000. Use its one-character visible symbol
+    so existing field limits still hold. Detail keys are selected by our event
+    schema; copy their values recursively, leaving transport identities/digests
+    and literal backslash escapes untouched.
+    """
+    if isinstance(value, str):
+        return value.replace("\x00", "\u2400")
+    if isinstance(value, dict):
+        return {key: _event_display_value(part) for key, part in value.items()}
+    if isinstance(value, list):
+        return [_event_display_value(part) for part in value]
+    return value
+
+
 async def _insert_event_once(session: AsyncSession, values: dict) -> None:
     """Insert one replay event idempotently across heartbeat/live-read writers."""
+    values = {key: _event_display_value(value) if key in {"kind", "tool", "text", "detail"}
+              else value for key, value in values.items()}
     from .cloud_sync_notifications import mark
     mark(session, "", execution_id=values.get("session_id"))
     dialect = session.get_bind().dialect.name

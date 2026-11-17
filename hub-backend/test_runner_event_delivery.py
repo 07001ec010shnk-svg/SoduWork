@@ -1,6 +1,7 @@
 """Durable transport fault tests with isolated disk, database and fake sockets."""
 import asyncio
 import contextvars
+import copy
 import os
 import subprocess
 import sys
@@ -204,6 +205,29 @@ class DurableDeliveryTests(unittest.IsolatedAsyncioTestCase):
         row, events = await self.stored()
         self.assertEqual((row.delivery_seq, len(events)), (0, 0))
         await self.accept(self.message())
+
+    async def test_nul_display_projection_preserves_packet_digest_and_replay(self):
+        await self.seed()
+        message = self.message()
+        message["snapshot"]["items"][0].update(
+            text="before\x00after\\u0000\n\t中文", full="full\x00output",
+            tool="r" * 119 + "\x00", arguments={"path": "path\x00name"},
+            services=[{"name": "service\x00name"}])
+        message["digest"] = snapshot_digest(message["snapshot"])
+        original = copy.deepcopy(message)
+        ack, _ = await self.accept(message)
+        self.assertEqual(message, original)
+        self.assertEqual(ack["digest"], original["digest"])
+        self.assertEqual(ack["persistedThrough"], 1)
+        await self.accept(message)
+        row, events = await self.stored()
+        self.assertEqual((row.persisted_seq, len(events)), (1, 1))
+        self.assertEqual(row.delivery_digest, original["digest"])
+        self.assertEqual(events[0].text, "before␀after\\u0000\n\t中文")
+        self.assertEqual(events[0].tool, "r" * 119 + "␀")
+        self.assertEqual(events[0].detail["full"], "full␀output")
+        self.assertEqual(events[0].detail["arguments"], {"path": "path␀name"})
+        self.assertEqual(events[0].detail["services"], [{"name": "service␀name"}])
 
     async def test_packet_ack_does_not_skip_event_gap_and_late_page_repairs_cursor(self):
         await self.seed()
