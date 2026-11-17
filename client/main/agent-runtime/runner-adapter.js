@@ -1488,7 +1488,11 @@ async function createRunnerHandle(request, defaults, initialSession) {
     let gate;
     try {
       gate = await pluginGeneration.begin({ handle, app, identity, cancelled,
-        outputSnapshot: () => outputs.scanAsync(cwd, outputSince, state.startedAt),
+        // The gate compares content revisions against its pre-dispatch baseline.
+        // Filesystem clocks can lag the conversation clock, so time filtering
+        // here could let a newly generated invalid draft bypass validation.
+        // Public output snapshots retain their conversation ownership boundary.
+        outputSnapshot: () => outputs.scanAsync(cwd, 0, state.startedAt),
         repair: prompt => continueTurn(prompt, [], { ...options, promptText: prompt, recordUser: false }, true),
         changed() {
           const phase = pluginGeneration.records(handle).find(row => ['checking', 'repairing'].includes(row.state))?.state;
