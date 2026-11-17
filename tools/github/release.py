@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import urllib.error
 import urllib.request
+from linux_signing import asset_names, package_names, PUBLIC_KEY
 
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
@@ -133,18 +134,28 @@ def fingerprint(file):
 def expected(ctx, shard):
     stem = "SoduWork-" + ctx["version"]
     return {"source": [stem + "-source.zip"], "hub": [stem + "-hub-image.tar.gz"],
-            "windows": [stem + "-Setup.exe"], "linux": [stem + "-linux." + ext for ext in ["deb", "rpm", "tar.gz"]],
+            "windows": [stem + "-Setup.exe"], "linux": asset_names(ctx["version"]),
             "macos-arm64": [stem + "-mac-arm64.dmg"], "macos-x64": [stem + "-mac-x64.dmg"]}[shard]
 
 
 def seal(ctx, shard, folder, checks):
     require(shard in SHARDS[ctx["component"]], "Unexpected shard")
     require(checks.get("ok") is True, "Acceptance did not pass")
+    if shard == "linux":
+        validate_linux_signing(ctx, checks)
     names = expected(ctx, shard)
     require(sorted(p.name for p in folder.iterdir()) == sorted(names), "Unexpected artifact files")
     record = {**ctx, "shard": shard, "artifacts": [fingerprint(folder / name) for name in names], "acceptance": checks}
     write(folder / (shard + "-receipt.json"), record)
     return record
+
+
+def validate_linux_signing(ctx, checks):
+    signing = checks.get("linuxSigning", {})
+    require(signing.get("schema") == 1 and signing.get("rpmEmbedded") is True
+            and re.fullmatch(r"[A-F0-9]{40}", signing.get("primaryFingerprint", ""))
+            and signing.get("detached") == package_names(ctx["version"])
+            and signing.get("publicKey") == PUBLIC_KEY, "Missing Linux package signing acceptance")
 
 
 def candidate(ctx, folder):
@@ -154,6 +165,8 @@ def candidate(ctx, folder):
         receipt = read(folder / name)
         require(all(receipt.get(k) == v for k, v in ctx.items()), "Receipt belongs to another run/commit/version")
         require(receipt.get("shard") == shard and receipt.get("acceptance", {}).get("ok") is True, "Invalid acceptance")
+        if shard == "linux":
+            validate_linux_signing(ctx, receipt["acceptance"])
         require([a["name"] for a in receipt["artifacts"]] == expected(ctx, shard), "Incomplete platform inventory")
         for item in receipt["artifacts"]:
             require(fingerprint(folder / item["name"]) == item, "Artifact changed: " + item["name"])

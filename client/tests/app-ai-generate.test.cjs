@@ -172,6 +172,25 @@ test('fast inference uses authorized thinking profiles and modern reasoning outp
   assert.equal(payload({ id: 'gpt-5', thinkingAlwaysOn: true }, p).reasoning_effort, undefined);
 });
 
+test('stateless generation honors detected token parameter compatibility over model-name heuristics', () => {
+  const {payload} = require('../main/app-ai-generate.cjs'), p = normalize(defaults);
+  const modern = payload({id:'private-alias',reasoning:false,compatibility:{maxTokensField:'max_completion_tokens'}},p);
+  assert.equal(modern.max_completion_tokens,256); assert.equal(modern.max_tokens,undefined);
+  const legacy = payload({id:'gpt-5',compatibility:{maxTokensField:'max_tokens'}},p);
+  assert.equal(legacy.max_tokens,256); assert.equal(legacy.max_completion_tokens,undefined);
+});
+
+test('provider rejection keeps only a safe HTTP status and never automatically retries', async () => {
+  for (const status of [400,401,403,404,422,429,503]) {
+    let calls=0;
+    const f=fixture({fetchImpl:async()=>{calls++;return new Response('private-ticket endpoint details', {status});}});
+    const result=await f.generate(f.item,defaults);
+    assert.equal(result.httpStatus,status); assert.equal(result.ok,false);
+    assert.equal(result.code,status===429?'APP_AI_RATE_LIMITED':'APP_AI_PROVIDER_ERROR');
+    assert.equal(calls,1); assert.doesNotMatch(JSON.stringify(result),/private-ticket|endpoint details/);
+  }
+});
+
 test('omitted app models use authenticated scoped Pi defaults and successful receipts never cross devices or Hubs', async t => {
   const agentDefaults = require('../main/local-agent-model-store.cjs'), models = require('../main/local-model-store.cjs');
   const first = 'local:model-' + 'a'.repeat(32), second = 'local:model-' + 'b'.repeat(32), selections = [], posts = [];

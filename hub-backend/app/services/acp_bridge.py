@@ -29,6 +29,7 @@ try:
     from . import opencode_turn_outcome
     from . import qwen_runtime
     from . import opencode_model_selection
+    from . import codex_acp_outcome
 except ImportError:  # direct script entry used by source Runner
     from acp_access import BridgeAccess, AccessError
     from acp_transition import Transition
@@ -38,15 +39,18 @@ except ImportError:  # direct script entry used by source Runner
     import opencode_turn_outcome
     import qwen_runtime
     import opencode_model_selection
+    import codex_acp_outcome
 
 _PROTOCOL = 1
 _MAX_FILE_BYTES = 4 * 1024 * 1024
 _MAX_TERMINALS = 8
 _ENV_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _SECRET_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
+_TASK_OUTPUT_RECOVERY_ENV = "SODUWORK_TASK_OUTPUT_RECOVERY_OWNED"
 _DSH_OUTPUT_CONTINUATION = (
     "上一段模型输出达到单次上限。请沿用当前会话，从最后一个已确认的工具结果继续完成原请求。"
     "已经完成的写入、命令、发送或其他操作不要重复。结果不确定时先只读核对。"
+    "被截断且未执行的工具调用请拆成更小的完整调用，分步写入和验证，避免再次生成过长参数。"
     "如果交付物已经完成，请直接给出结果和已完成的验证。"
 )
 
@@ -214,6 +218,7 @@ class AcpBridge:
         self.message_stream_emitted = False
         self.message_count = 0
         self.tools: dict[str, str] = {}
+        self.codex_tool_output = codex_acp_outcome.ToolOutput(agent_name)
         self.terminals: dict[str, _Terminal] = {}
         self.stderr_head: list[str] = []
         self.stderr_tail: list[str] = []
@@ -221,12 +226,17 @@ class AcpBridge:
         self.outcome = None
         self.dsh_can_compact = False
         self.dsh_compact_reply: list[str] | None = None
+        # The Runner owns this flag. A managed task must not receive a fresh
+        # pair of bridge retries every time its persisted controller resumes it.
+        self.task_output_recovery_owned = os.environ.get(_TASK_OUTPUT_RECOVERY_ENV) == "1"
 
     def start(self) -> None:
         flags = ({"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
                  if os.name == "nt" else {"start_new_session": True})
         agent_env = self.access.agent_environment(self.agent_name, os.environ.copy())
         agent_env.pop(runtime_images.ENV_KEY, None)
+        # This is host control, not provider configuration or a tool environment.
+        agent_env.pop(_TASK_OUTPUT_RECOVERY_ENV, None)
         if self.agent_name == "opencode":
             # Reapply in the child entry for already-running source Runners.
             # Guard/model config and native session/database paths stay intact.
@@ -567,7 +577,9 @@ class AcpBridge:
             return
         if self.loading:
             return
-        self.transition.update(update)
+        if self.transition.update(update) is False:
+            return
+        self.codex_tool_output.consume(update)
         self.access.observe_tool(update)
         if kind == "agent_thought_chunk":
             text = _text(update.get("content"))
@@ -642,6 +654,7 @@ class AcpBridge:
         if kind == "tool_call_update":
             text = _text(update.get("content"))
             if update.get("status") in ("completed", "failed"):
+                text = self.codex_tool_output.finish(update, text)
                 _emit({"type": "tool_execution_end",
                        "toolName": self.tools.get(
                            str(update.get("toolCallId") or ""), "Tool"),
@@ -661,8 +674,21 @@ class AcpBridge:
             _emit({"type": "step_finish", "contextOnly": True, "part": {
                 "contextWindow": update.get("size"), "tokens": tokens}})
 
+    def _output_limited(self, result: dict) -> bool:
+        if result.get("stopReason") != "max_tokens":
+            return False
+        if self.agent_name in {"dsh", "opencode", "kimi"}:
+            return True
+        # Qwen also uses max_tokens for its input/session budget. Only the
+        # reviewed host projection identifies an exhausted output recovery.
+        meta = result.get("_meta")
+        owned = meta.get("soduwork") if isinstance(meta, dict) else None
+        return (self.agent_name == "qwen" and isinstance(owned, dict)
+                and owned.get("outputLimit") is True)
+
     def _client_capabilities(self) -> dict:
         return {
+            **codex_acp_outcome.capabilities(self.agent_name),
             # codex-acp only advertises its custom enterprise gateway when the
             # ACP client explicitly opts in. Other ACP agents safely ignore it.
             "auth": {"_meta": {"gateway": True}},
@@ -750,6 +776,14 @@ class AcpBridge:
                 "prompt": content,
             })
             self._flush_message()
+            failure = codex_acp_outcome.failure(self.agent_name, result)
+            if failure:
+                raise BridgeError(failure)
+            if self.agent_name in {"dsh", "kimi", "qwen"} or self._output_limited(result):
+                reason = str(result.get("stopReason") or "")
+                if reason in {"", "end_turn"} or self._output_limited(result):
+                    _emit({"type": "step_finish", "part": {
+                        "reason": "max_tokens" if reason == "max_tokens" else "stop"}})
             if self.outcome and result.get("stopReason") in (None, "", "end_turn"):
                 native_reason = self.outcome.finish()
                 _emit({"type": "step_finish", "part": {"reason": native_reason}})
@@ -757,6 +791,7 @@ class AcpBridge:
                     result = {**result, "stopReason": "max_tokens"}
             if not self.transition.complete(result):
                 if (self.agent_name == "dsh" and result.get("stopReason") == "max_tokens"
+                        and not self.task_output_recovery_owned
                         and not self.transition.requested
                         and not self.transition.cancel_sent and not self.transition.busy()):
                     if continued_output:
@@ -784,8 +819,8 @@ class AcpBridge:
         reason = str(result.get("stopReason") or "")
         if reason in ("", "end_turn"):
             return 0
-        if self.agent_name == "dsh" and reason == "max_tokens":
-            raise BridgeError("模型输出达到上限。已有文件和工具结果已保留，请继续当前会话完成剩余工作。")
+        if self._output_limited(result):
+            return 2
         raise BridgeError("Agent stopped this turn: " + reason)
 
     def close(self) -> None:

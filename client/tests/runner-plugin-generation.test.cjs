@@ -74,15 +74,60 @@ test('Runner resumed native goal validates the generated draft before completing
   const f = await fixture(t, true, { validFirst: true, goalScenario: true });
   assert.equal((await f.turn.completion).ok, true);
   assert.equal(f.handle.pauseGoal().ok, true);
-  await delay(10);
+  await waitFor(() => f.handle.snapshot().execution.terminalConfirmed);
   const continuation = f.handle.continueGoal();
   assert.equal(continuation.ok, true);
   const result = await continuation.completion;
   assert.equal(result.ok, true);
-  assert.equal(f.calls.filter(row => row.op === 'job.comment').length, 2);
+  assert.deepEqual(f.calls.filter(row => row.op === 'job.comment').map(row => row.value.taskGoalControl),
+    ['continue', undefined]);
   assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).key, 'draft-check');
   assert.equal(f.handle.outputSnapshot().pluginValidation[0].state, 'ready');
 });
+
+async function waitFor(predicate) {
+  for (let attempt = 0; attempt < 200; attempt++) {
+    if (predicate()) return;
+    await delay(10);
+  }
+  assert.fail('Timed out waiting for the Runner state transition');
+}
+
+for (const control of ['pause', 'disable']) {
+  test(control + ' during follow-up baseline scanning reaches the existing native goal', async t => {
+    const f = await fixture(t, true, { goalScenario: true, validFirst: true });
+    await f.turn.completion;
+    const outputs = require('../main/pi-session/outputs'), scan = outputs.scanAsync;
+    let enter, release;
+    const entered = new Promise(resolve => { enter = resolve; });
+    const blocked = new Promise(resolve => { release = resolve; });
+    t.mock.method(outputs, 'scanAsync', async (...args) => {
+      enter();
+      await blocked;
+      return scan(...args);
+    });
+    const next = f.handle.submit('Review the plugin', []);
+    await entered;
+    const queued = control === 'pause' ? f.handle.submit('Check the report', []) : null;
+    assert.equal(f.handle[control + 'Goal']().ok, true);
+    assert.equal(f.calls.some(row => row.op === 'job.stop'), false);
+    release();
+    await next.completion;
+    await waitFor(() => f.calls.some(row => row.op === 'job.stop') && f.handle.snapshot().execution.terminalConfirmed);
+    assert.deepEqual(f.calls.filter(row => row.op === 'job.stop').map(row => row.value.taskGoalControl), [control]);
+    assert.equal(f.calls.some(row => row.op === 'job.comment'), false);
+    if (queued) {
+      const resume = f.handle.continueGoal();
+      assert.equal(resume.accepted, true);
+      assert.equal((await resume.completion).ok, true);
+      assert.equal((await queued.completion).ok, true);
+      const messages = f.calls.filter(row => row.op === 'job.comment' && row.value.recordUser !== false);
+      assert.deepEqual(messages.map(row => [row.value.text, row.value.taskGoalControl]),
+        [['Review the plugin', 'continue'], ['Check the report', undefined]]);
+      assert.equal(f.handle.snapshot().messages.filter(row => row.role === 'user' && row.text === 'Review the plugin').length, 1);
+    }
+  });
+}
 
 test('a goal paused before dispatch resumes the original request with one user message', async t => {
   const outputs = require('../main/pi-session/outputs');
@@ -133,5 +178,63 @@ test('a paused goal cannot resume while its original draft validation is still a
   if (continued.completion) await continued.completion;
   assert.equal(continued.ok, false, 'resume must not revive a paused validation callback');
   assert.equal(result.cancelled, true);
+  assert.equal(f.calls.filter(row => row.op === 'job.comment').length, 0);
+});
+
+function blockFirstCall(t, target, method, matches) {
+  const original = target[method];
+  let enter, release, blocked = false;
+  const entered = new Promise(resolve => { enter = resolve; });
+  const pending = new Promise(resolve => { release = resolve; });
+  t.mock.method(target, method, async function (...args) {
+    if (!blocked && matches(...args)) {
+      blocked = true;
+      enter();
+      await pending;
+    }
+    return original.apply(this, args);
+  });
+  t.after(release);
+  return { entered, release };
+}
+
+test('disabling a goal before its first dispatch releases the next ordinary message', async t => {
+  const baseline = blockFirstCall(t, require('../main/pi-session/outputs'), 'scanAsync', () => true);
+  const f = await fixture(t, true, { goalScenario: true, validFirst: true });
+  await baseline.entered;
+  assert.equal(f.handle.disableGoal().ok, true);
+  baseline.release();
+  assert.equal((await f.turn.completion).cancelled, true);
+  assert.deepEqual(f.calls.filter(row => row.op.startsWith('job.')), []);
+
+  const next = f.handle.submit('List the available files', []);
+  assert.equal(next.accepted, true);
+  await waitFor(() => f.calls.some(row => row.op === 'job.dispatch'));
+  assert.equal((await next.completion).ok, true);
+  const dispatches = f.calls.filter(row => row.op === 'job.dispatch');
+  assert.equal(dispatches.length, 1);
+  assert.equal(dispatches[0].value.ctx.conversationUserText, 'List the available files');
+  assert.equal(dispatches[0].value.ctx.conversationMode, 'adaptive');
+  assert.equal(dispatches[0].value.ctx.taskGoal, undefined);
+});
+
+test('confirmed native goal disable prevents a delayed invalid draft check from starting a repair', async t => {
+  const validation = blockFirstCall(t, require('../main/app-resource-cache.cjs'), 'request',
+    input => input.action === 'draft-check');
+  const f = await fixture(t, true, { goalScenario: true });
+  await validation.entered;
+  let confirmed = false;
+  const unsubscribe = f.handle.on(event => {
+    if (event.kind === 'goal-stop-confirmed') confirmed = true;
+  });
+  t.after(unsubscribe);
+  assert.equal(f.handle.disableGoal().ok, true);
+  await waitFor(() => confirmed);
+  const stop = f.calls.findIndex(row => row.op === 'job.stop' && row.value.taskGoalControl === 'disable');
+  assert.ok(stop >= 0);
+  assert.ok(f.calls.slice(stop + 1).some(row => row.op === 'job.session'));
+  assert.equal(f.handle.snapshot().execution.visible, false);
+  validation.release();
+  assert.equal((await f.turn.completion).cancelled, true);
   assert.equal(f.calls.filter(row => row.op === 'job.comment').length, 0);
 });

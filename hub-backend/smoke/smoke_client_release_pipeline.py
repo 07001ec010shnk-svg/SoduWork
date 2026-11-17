@@ -166,8 +166,8 @@ def main():
             evidence.mkdir(parents=True, exist_ok=True)
             receipt = dict(schema=1, kind="soduwork-native-install-acceptance", ok=True,
                 sourceCommit=build["sourceCommit"], pipelineId=build["pipelineId"], artifacts=build["artifacts"],
-                checks=[dict(name=name, ok=True) for name in
-                    ["ubuntu22-deb", "ubuntu24-deb", "rocky9-rpm", "ubuntu22-tgz"]],
+                checks=[dict(name=name, ok=True, rpmSignatureVerified=name.endswith("-rpm")) for name in
+                    ["ubuntu22-deb", "ubuntu24-deb", "rocky9-rpm", "fedora45-rpm", "ubuntu22-tgz"]],
                 limitations=["Fixture receipt for API orchestration testing; not native installation evidence."])
             receipt_file = evidence / "acceptance.json"
             receipt_file.write_text(json.dumps(receipt))
@@ -180,6 +180,18 @@ def main():
             receipt_file.write_text(json.dumps(receipt))
             node(command, "stage", "linux", success=False)
             receipt["ok"] = True
+            complete_checks = receipt["checks"]
+            receipt["checks"] = [check for check in complete_checks if check["name"] != "fedora45-rpm"]
+            receipt_file.write_text(json.dumps(receipt))
+            node(command, "stage", "linux", success=False)
+            receipt["checks"] = complete_checks
+            for check in complete_checks:
+                if not check["name"].endswith("-rpm"):
+                    continue
+                check["rpmSignatureVerified"] = False
+                receipt_file.write_text(json.dumps(receipt))
+                node(command, "stage", "linux", success=False)
+                check["rpmSignatureVerified"] = True
             receipt_file.write_text(json.dumps(receipt))
             node(command, "stage", "linux")
             signed = {file.name: file.read_bytes() for file in (evidence / "staged").glob("*.release.json")}

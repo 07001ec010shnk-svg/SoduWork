@@ -18,7 +18,8 @@
     "version": "1.13.16",
     "sha256": "48cfcb7825ac69718d8e8be03b1b66adc9667f6de921ae50b8f2128d06fea137",
     "size": 217086157,
-    "url": "https://github.com/mdiri-ai/SoduWork/releases/download/v1.13.16/SoduWork-1.13.16-linux.rpm"
+    "url": "https://github.com/mdiri-ai/SoduWork/releases/download/v1.13.16/SoduWork-1.13.16-linux.rpm",
+    "rpmSignature": "legacy-unsigned"
   },
   "linux-x64-tar.gz": {
     "productName": "SoduWork",

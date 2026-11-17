@@ -160,6 +160,17 @@ test('removed local models fail before dispatch without falling back to Hub or i
   assert.equal(f.requests.length, 0);
 });
 
+test('local parser explains provider HTTP failures without exposing upstream messages', async () => {
+  for (const [httpStatus,expected] of [[400,/请求参数.*兼容/],[401,/凭据/],[403,/权限/],
+    [404,/地址.*模型名称/],[422,/请求参数.*兼容/],[429,/请求过多/],[503,/暂时不可用/]]) {
+    const api=rendererParser(async()=>({ok:false,code:httpStatus===429?'APP_AI_RATE_LIMITED':'APP_AI_PROVIDER_ERROR',
+      httpStatus,reason:'private-provider-key http://private-provider.invalid/v1'}));
+    const result=await api.parseTaskText('原始任务','local:model-'+ 'a'.repeat(32),[],{kind:'automation'});
+    assert.match(result._parseError,new RegExp('HTTP '+httpStatus)); assert.match(result._parseError,expected);
+    assert.doesNotMatch(result._parseError,/private-provider/);
+  }
+});
+
 test('a real private provider timeout is bounded, aborts the request and keeps the result uncertain', async t => {
   const f = await providerFixture(t, () => new Promise(() => {}));
   let captured;

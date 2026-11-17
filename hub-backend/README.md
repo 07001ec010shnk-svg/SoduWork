@@ -62,9 +62,78 @@ Smoke checks live in [`smoke/`](smoke/). To run one directly, use its module fro
 
 ## DeepSeek Harness turn completion
 
-DeepSeek Harness can continue once within the same native session when the model
-reports `max_tokens` and tool activity has settled. It asks the model to finish
-from the saved tool results. A second output limit is reported as incomplete.
+DeepSeek ACP adapters 0.4.40 and 0.4.41 can return while their child agents are
+still running. SoduWork's host-only preload waits for progressing descendants
+through the native `waitForChildren` service, then rechecks the parent's idle
+state and session sequence. Child results can wake another parent turn; its
+latest output limit or error is preserved. Cancellation stops waiting, while
+idle resident children do not keep a completed prompt open.
+
+The preload applies an in-memory compatibility fix to the adapter's reviewed
+prompt and tool-preview blocks on macOS, Linux and Windows. Installed packages and native session
+files are not rewritten. Unknown adapter versions or changed reviewed blocks fail
+with an update instruction instead of silently using the affected behavior.
+The loader is included in source and frozen Runner packages.
+
+Run `node --test client/tests/dsh-acp-settlement.test.cjs` from the root for
+offline lifecycle and loader regressions. From `hub-backend`, run
+`python3 e2e_dsh_subagent_settlement.py --adapter-entry /absolute/npm/root/@openma/deepseek-harness-acp/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`
+for isolated acceptance against an explicitly selected installed adapter and a
+synthetic loopback model. This does not exercise a production model or desktop UI.
+
+On `max_tokens`, the reviewed adapter marks only native pending tool previews as
+not executed before clearing them. DSH discards these calls before execution;
+started tools remain unsettled until their real result arrives. The host preserves
+this distinction through live and archived tool cards, including a later failure.
+
+Once tool activity has settled, DeepSeek Harness can continue within the same
+native session from saved results using smaller calls. Recovery is bounded to
+one continuation, plus one more only after successful native compaction. If the
+limit persists, the turn is reported as incomplete with retained progress instead
+of a protocol error. Successful continuation clears the earlier truncation;
+protocol and host-cleanup failures retain priority.
+
+## Other harness terminal outcomes
+
+Managed installs and updates use reviewed versions: DeepSeek ACP 0.4.41,
+Kimi Code 2.6.2 and Qwen Code 0.27.4. Version checks refer to those targets,
+including when the locally installed package is newer. SoduWork updates the
+pins after compatibility validation; discovery does not replace installed software.
+
+Kimi Code 2.6.2 and Qwen Code 0.27.4 can also translate a native output limit
+into a successful ACP response. Host-only preloads preserve their native final
+outcome, verify the complete reviewed source hashes, and reject unknown versions
+with an update instruction. The preloads never change installed packages or tool
+execution. They are packaged for macOS, Linux and Windows; Qwen now requires
+Node 22.15 or later for the host loader, even if an older package declares a lower
+engine requirement.
+
+Kimi preserves the final provider stop reason across tool validation and rejects
+native failed turns. Qwen retains its own bounded output recovery and propagates
+recovery errors; its separate session-input budget is not relabeled as an output
+limit. SoduWork's invocation-local Qwen settings select native
+`model.loopProtection = "stop"`, so a detected repeated failure stops instead of
+only warning. This overrides `warn`/`off` for the managed invocation without
+changing operator files or lowering the general task budget. Neither harness
+receives an additional host retry for exhausted output recovery.
+
+Codex ACP negotiates its versioned `sessionFailure` capability and reads the
+current prompt's typed failure before accepting `end_turn`; error prose alone is
+not completion evidence. Invalid typed failures also stop settlement. The v1
+capability also changes tool reports: omitted approval fields are restored only
+from the same live tool call, and bounded terminal deltas and result snapshots
+remain available in completed tool cards. Native subagent-session capabilities
+are not enabled by this negotiation. Pi,
+OpenCode, DeepSeek, Kimi and Qwen preserve a real later error over an earlier
+truncation, while successful recovery clears the old truncation state.
+
+Run `python3 -m unittest test_kimi_runtime test_qwen_runtime test_codex_acp_outcome
+test_acp_error_messages test_local_turn_outcome` in the backend test environment.
+The standalone `e2e_kimi_outcome.py`, `e2e_qwen_turn_outcome.py` and
+`e2e_codex_acp_outcome.py` fixtures use
+explicitly selected installed runtimes and isolated loopback providers; see their
+`--help` for required paths. Codex acceptance also checks real permission
+approvals/denials and command output. They do not exercise paid model services.
 
 ## Database configuration
 
@@ -150,6 +219,20 @@ python3 -B tests/unified_requirements_upgrade.py
 The second command creates and tears down an isolated local PostgreSQL instance. Do not point it at a business database. `test_unified_requirements_acl.py` exercises access controls through authenticated HTTP identities and WebSocket projections after real migration.
 
 See [release scope](../docs/release-scope.en.md) for distribution boundaries.
+
+## Non-Pi task continuation
+
+Codex, Codex Harness, OpenCode, DeepSeek Harness, Kimi and Qwen use a Runner-owned task controller when goal mode is selected or a desktop message explicitly requests continuous completion. Pi's existing controller is unchanged. Ordinary questions and instructions without this request keep their existing turn behavior.
+
+Output truncation, context recovery and task completion remain separate decisions. Only typed output-limit receipts can trigger output recovery; authentication, transport, permission and unknown tool outcomes cannot. Goal-owned DeepSeek turns disable the bridge's inner output retry loop so a new process cannot multiply retries. The task record retains at most two output recoveries, with new successful tool progress required for the second. Context recovery retains its own counters and may compact or relay the native session while retaining the SoduWork conversation and workspace.
+
+After a successful work turn, a separate review turn checks actual artifacts and verification results. A fresh structured receipt, successful tool evidence from that review and any declared output checks are required before completion. The receipt is a model-assisted review, not a proof of arbitrary business requirements. Missing, malformed or unsupported evidence pauses the task. Two turns without new successful tool progress also pause it. Original permissions and approval requirements still apply.
+
+The default goal budget is 240 minutes and 1,000 tool steps. Elapsed active time, tool steps, review state and recovery counters persist through internal continuations and Runner restart. Pausing does not consume active time; resuming does not replenish budgets. User messages take precedence at native turn boundaries. Stop and disable controls prevent automatic restart, including while the host is settling. Closing goal mode preserves the files and permits ordinary conversation.
+
+Run `python3 -m unittest test_local_task_goal test_local_task_goal_integration test_context_recovery test_acp_error_messages` for the controller and boundary regressions. These checks use synthetic receipts and isolated processes; they do not establish completion quality for every real model.
+
+With an existing compatible DeepSeek installation, run `python3 e2e_task_goal_dsh.py --adapter-entry /absolute/adapter/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`. This runs the installed adapter, runtime, real file tools and production stream/controller/resume code. A loopback model and a process-scheduling callback are test substitutes. It requires truncation recovery followed by file verification in the same native session, unchanged existing files and no repeated write. It neither installs dependencies nor uses production credentials.
 
 ## OpenCode model selection on resume
 
