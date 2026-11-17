@@ -1,6 +1,12 @@
 /* System-authored capability and requirement copy, shared by renderer and main process. */
 (function (global) {
   const rows = {
+    "正在整理本轮成果…": ["Preparing this turn’s outputs…","今回の成果を整理しています…","이번 작업의 결과를 정리하는 중…"],
+    "正在检查插件草稿…": ["Checking the plugin draft…","プラグインの下書きを確認しています…","플러그인 초안을 확인하는 중…"],
+    "正在修复插件草稿…": ["Repairing the plugin draft…","プラグインの下書きを修正しています…","플러그인 초안을 수정하는 중…"],
+    "正在检查插件草稿": ["Checking the plugin draft","プラグインの下書きを確認中","플러그인 초안 확인 중"],
+    "正在修复插件草稿": ["Repairing the plugin draft","プラグインの下書きを修正中","플러그인 초안 수정 중"],
+    "插件草稿未通过检查，请修复后再安装": ["The plugin draft failed validation. Repair it before installing.","プラグインの下書きが検証に失敗しました。修正してからインストールしてください。","플러그인 초안이 검증에 실패했습니다. 수정 후 설치하세요."],
     '未找到该账号，请检查输入是否正确。': ['Account not found. Check that you entered it correctly.', 'アカウントが見つかりません。入力内容を確認してください。', '계정을 찾을 수 없습니다. 입력한 계정이 올바른지 확인하세요.'],
     '密码不正确，请重新输入。': ['Incorrect password. Please try again.', 'パスワードが正しくありません。もう一度入力してください。', '비밀번호가 올바르지 않습니다. 다시 입력하세요.'],
     '如果你已注册，请确认服务地址是否正确。': ['If you already have an account, check that the server address is correct.', '登録済みの場合は、サーバーのアドレスが正しいか確認してください。', '이미 가입했다면 서버 주소가 올바른지 확인하세요.'],

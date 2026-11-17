@@ -8,7 +8,8 @@ const RESUME_PROMPT = [
 
 function continuationBlocked(state, turnQueue) {
   return Boolean(state.disposed || state.recoveryRequired || state.goalStopAwaitingTerminal || state.pendingTaskGoalControl ||
-    state.turnSubmissionPending || state.preparingPlugins || state.accessChangePending || state.accessRestorePending ||
+    state.turnSubmissionPending || state.pluginGenerationPreparing || state.pluginGenerationActive ||
+    state.preparingPlugins || state.accessChangePending || state.accessRestorePending ||
     state.queueImmediate?.blocked() || state.stopPending || state.manualStopRequested ||
     state.pendingPermissions?.length || state.status === 'streaming' || state.status === 'queued' ||
     turnQueue.active?.() || state.started && !state.terminalConfirmed);
@@ -16,7 +17,7 @@ function continuationBlocked(state, turnQueue) {
 
 function createRunnerGoalControls(options) {
   const {
-    state, turnQueue, snapshot, requestStop, emit, settle, continueTurn, drainTurns,
+    state, turnQueue, snapshot, requestStop, emit, settle, continueTurn, drainTurns, hasPausedPreparation,
   } = options;
 
   function clearTimer() {
@@ -62,7 +63,7 @@ function createRunnerGoalControls(options) {
       state.cancelRequested = false;
       state.goalPaused = false;
       state.goalLimit = null;
-      if (queued) {
+      if (queued && !hasPausedPreparation?.()) {
         queued.options = { ...queued.options, taskGoalControl: 'continue' };
         drainTurns();
         return { ok: true, accepted: true, completion: queued.completion };
@@ -89,7 +90,7 @@ function createRunnerGoalControls(options) {
       // Even an idle native session retains its goal contract. Disable it in
       // the same stop transaction, without starting a model turn.
       requestStop('disable');
-      if (state.pendingPermissions?.length || state.status === 'streaming' || state.status === 'queued') {
+      if (state.pluginGenerationPreparing || state.pendingPermissions?.length || state.status === 'streaming' || state.status === 'queued') {
         state.cancelRequested = true;
         clearTimer();
         state.status = 'aborted';
@@ -97,6 +98,11 @@ function createRunnerGoalControls(options) {
         settle({ ok: true, cancelled: true, snapshot: snapshot() });
       } else {
         state.statusText = '';
+      }
+      if (!state.started) {
+        turnQueue.stopActive();
+        state.cancelRequested = false;
+        queueMicrotask(drainTurns);
       }
       emit('goal-disabled');
       return { ok: true, snapshot: snapshot() };

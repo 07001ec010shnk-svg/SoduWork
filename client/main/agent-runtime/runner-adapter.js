@@ -1,4 +1,5 @@
 'use strict';
+const pluginGeneration = require('../pi-session/plugin-generation-gate.cjs');
 
 const crypto = require('crypto');
 const fs = require('fs');
@@ -286,7 +287,10 @@ function _snapshot(state) {
   const controlled = turn?.options.controlled && !turn.options.pluginDebug &&
     state.taskExecutions?.find(row => row.taskId === turn.options.taskId);
   const controlledView = require('../pi-session/controlled-execution-snapshot.cjs').project(controlled, turn?.id);
-  const executing = state.status === 'streaming';
+  const validating = Boolean((state.pluginGenerationActive || state.pluginGenerationPreparing) &&
+    !state.goalPaused && !state.cancelRequested && (state.status === 'idle' ||
+      state.pluginGenerationPreparing && state.status === 'aborted'));
+  const executing = state.status === 'streaming' || validating;
   const running = executing || state.status === 'queued' || Boolean(state.pendingPermissions?.length);
   const now = Date.now();
   const elapsed = state.startedAt ? Math.max(0, (state.turnEndedAt || now) - state.startedAt) : 0;
@@ -304,12 +308,12 @@ function _snapshot(state) {
   const metrics = require('../pi-session/turn-metrics').collector(state, state._turnMetricsCache ||= {}, 0);
   state.messages.forEach(metrics.visit);
   return {
-    status: controlledView?.status || state.status,
+    status: controlledView?.status || (validating ? 'streaming' : state.status),
     activePlugins: state.activePluginIds ? state.activePluginIds.slice() : [],
     ...(state.thinking ? { thinking: { ...state.thinking, levels: state.thinking.levels.slice() } } : {}),
     ...(state.modelSelection ? { modelSelection: state.modelSelection.view() } : {}),
     ...(state.taskBindings ? state.taskBindings.view() : {}),
-    statusText: controlledView?.statusText ?? state.statusText,
+    statusText: controlledView?.statusText ?? (validating ? '\u6b63\u5728\u6574\u7406\u672c\u8f6e\u6210\u679c\u2026' : state.statusText),
     messages: state.messages.map((row) => ({ ...row,
       attachments: attachmentContract.publicFiles(row.attachments),
       blocks: Array.isArray(row.blocks) ? row.blocks.map((block) => ({ ...block })) : row.blocks })),
@@ -616,7 +620,11 @@ async function createRunnerHandle(request, defaults, initialSession) {
   }
   await restoreTaskOutput(0);
 
+  let generationGateActive = 0;
+  let pausedPreparation = null;
+  const resumedUser = Symbol('already displayed goal request');
   function emit(kind, detail) {
+    if (generationGateActive && kind === 'settled') kind = 'changed';
     state.updatedAt = Date.now();
     const snap = _snapshot(state);
     listeners.forEach((listener) => {
@@ -633,7 +641,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
   async function finishFileJournal() {
     const journal = activeFileJournal;
     if (!journal) return;
-    activeFileJournal = null;
+    if (!generationGateActive) activeFileJournal = null;
     try {
       const after = await fileChangeJournal.snapshot(cwd);
       state.fileChanges = journal.before
@@ -834,7 +842,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
   function requestStop(goalControl) {
     if (!taskGoalSupported) goalControl = undefined;
     if (['pause', 'disable'].includes(goalControl)) {
-      if (!state.started && !state.preparingPlugins) return true;
+      if (!state.started) return true;
       state.pendingTaskGoalControl = goalControl;
       state.goalStopAwaitingTerminal = true;
       state.stopAwaitingTerminal = true;
@@ -842,7 +850,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
       state.terminalConfirmed = false;
       if (!state.stopPending) state.stopSent = false;
     }
-    if (state.preparingPlugins || !state.started || !state.dispatchReady || state.stopSent || state.stopPending) return false;
+    if (state.pluginGenerationPreparing || state.preparingPlugins || !state.started || !state.dispatchReady || state.stopSent || state.stopPending) return false;
     state.stopSent = true;
     state.stopPending = true;
     if (state.stopAwaitingTerminal) state.recoveryRequired = true;
@@ -959,7 +967,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     if (state.polling) return pollFinished;
     const stopOnly = readOnly && state.stopAwaitingTerminal && (state.manualStopRequested || state.goalStopAwaitingTerminal);
     const unavailable = () => state.disposed || state.cancelRequested && !stopOnly;
-    if (unavailable() || !state.started || state.preparingPlugins || state.turnSubmissionPending || submissionFailed && !state.recoveryRequired ||
+    if (unavailable() || !state.started || state.pluginGenerationPreparing || state.preparingPlugins || state.turnSubmissionPending || submissionFailed && !state.recoveryRequired ||
       (turnQueue.active() && turnQueue.active().options.controlled)) return;
     state.polling = true;
     let finishPoll;
@@ -969,7 +977,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const turnGeneration = submissionGeneration;
     const stalePoll = () => {
       if (cancellation === observationCancellation && turnGeneration === submissionGeneration && accessGeneration === (state.accessChangeGeneration || 0)) return false;
-      if (!state.disposed && !state.cancelRequested && !state.preparingPlugins && !state.turnSubmissionPending && !submissionFailed)
+      if (!state.disposed && !state.cancelRequested && !state.pluginGenerationPreparing && !state.preparingPlugins && !state.turnSubmissionPending && !submissionFailed)
         state.timer = setTimeout(poll, 0);
       return true;
     };
@@ -1237,6 +1245,11 @@ async function createRunnerHandle(request, defaults, initialSession) {
   function appendUser(text, attachments, plugins, sentAt, submissionId) {
     const badges = publicPluginBadges(plugins);
     if (badges.length) state.activePluginIds = _pluginIds(badges);
+    const previous = turnQueue.active()?.options[resumedUser];
+    if (previous && state.messages.includes(previous)) {
+      previous.plugins = badges;
+      return;
+    }
     const id = String(submissionId || '').trim().slice(0, 128);
     state.messages.push({ role: 'user', text, sentAt: messageTime.epoch(sentAt) || Date.now(),
       ...(id ? { submissionId: id } : {}),
@@ -1269,7 +1282,6 @@ async function createRunnerHandle(request, defaults, initialSession) {
     state.reconnectSince = 0;
     state.reconnectAttempts = 0;
     state.completion = null;
-    void beginFileJournal('turn:' + state.alias + ':' + (state.turnSerial + 1) + ':' + Date.now().toString(36));
     state.title = state.title || _title(text || state.goal, displayName + ' 工作会话');
     emit('started');
     const taskContext = taskJournal.context();
@@ -1365,11 +1377,11 @@ async function createRunnerHandle(request, defaults, initialSession) {
     return completion;
   }
 
-  function continueTurn(text, attachments, turnOptions) {
+  function continueTurn(text, attachments, turnOptions, repairing = false) {
     const generation = beginSubmission();
     const turnPolicy = state.nextAccessPolicy || state.accessPolicy;
     const next = turnOptions || {};
-    const nextGoal = taskGoalSupported && !next.controlled && !next.taskGoalControl &&
+    const nextGoal = taskGoalSupported && !repairing && !next.controlled && !next.taskGoalControl &&
       (!state.goalVisible || state.taskGoal?.status === 'completed') ? taskGoal.fromText(text) : null;
     if (nextGoal) taskGoal.activate(state, nextGoal);
     state.status = 'streaming';
@@ -1382,7 +1394,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
       ? '已收到，' + displayName + ' 将按顺序继续…'
       : '已收到，' + displayName + ' 正在理解这句话…';
     messageStream.finish();
-    state.startedAt = Date.now();
+    if (!repairing) state.startedAt = Date.now();
     state.turnEndedAt = 0;
     emit('started');
     state.runtimeError = '';
@@ -1390,7 +1402,6 @@ async function createRunnerHandle(request, defaults, initialSession) {
     state.reconnectSince = 0;
     state.reconnectAttempts = 0;
     state.completion = null;
-    void beginFileJournal('turn:' + state.alias + ':' + (state.turnSerial + 1) + ':' + Date.now().toString(36));
     const completion = waitForTurn();
     state.turnSerial += 1;
     const turnId = 'turn:' + state.alias + ':' + state.turnSerial + ':' + Date.now().toString(36);
@@ -1400,7 +1411,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     runtime.rpc('job.comment', {
       ref: state.runnerRef, text, turnId,
       ...(nextGoal ? { taskGoal: nextGoal } : {}),
-      ...(taskGoalSupported && next.taskGoalControl ? { taskGoalControl: next.taskGoalControl } : {}),
+      ...(taskGoalSupported && !repairing && next.taskGoalControl ? { taskGoalControl: next.taskGoalControl } : {}),
       ...(executionModelId(state.model) !== state.lastExecutionModelId || adapterId === 'codex' && dispatchedEffort !== state.lastExecutionReasoningEffort
         ? { executionSelection: { agentId: adapterId, modelName: executionModelId(state.model), reasoningEffort: dispatchedEffort } } : {}),
       sentAt: messageTime.epoch(next.sentAt),
@@ -1463,8 +1474,77 @@ async function createRunnerHandle(request, defaults, initialSession) {
       });
     return completion;
   }
+  async function sendWithGenerationGate(send, text, attachments, options, stopRequested = () => false) {
+    const revision = (state.nextAccessPolicy || state.accessPolicy)?.revision;
+    const cancellation = observationCancellation;
+    const owner = handle.deliveryOwner;
+    const account = require('../device-auth-request').accountScopeKey(identity);
+    const cancelled = () => Boolean(state.disposed || state.cancelRequested || state.goalPaused || stopRequested() || cancellation !== observationCancellation ||
+      (state.nextAccessPolicy || state.accessPolicy)?.revision !== revision);
+    state.pluginGenerationPreparing = true;
+    // Baseline scanning yields before native admission. Fence the previous
+    // turn's timers and in-flight observations before that first await.
+    invalidateObservation();
+    let gate;
+    try {
+      gate = await pluginGeneration.begin({ handle, app, identity, cancelled,
+        outputSnapshot: () => outputs.scanAsync(cwd, outputSince, state.startedAt),
+        repair: prompt => continueTurn(prompt, [], { ...options, promptText: prompt, recordUser: false }, true),
+        changed() {
+          const phase = pluginGeneration.records(handle).find(row => ['checking', 'repairing'].includes(row.state))?.state;
+          if (phase && !cancelled()) {
+            state.status = 'streaming';
+            state.statusText = phase === 'repairing' ? '\u6b63\u5728\u4fee\u590d\u63d2\u4ef6\u8349\u7a3f\u2026' : '\u6b63\u5728\u68c0\u67e5\u63d2\u4ef6\u8349\u7a3f\u2026';
+          }
+          emit('changed');
+        },
+      });
+      if (gate.canStart()) await beginFileJournal('turn:' + state.alias + ':' + (state.turnSerial + 1) + ':' + Date.now().toString(36));
+    } finally {
+      state.pluginGenerationPreparing = false;
+      if (state.pendingTaskGoalControl && !state.disposed) requestStop();
+    }
+    if (!gate.canStart()) {
+      gate.dispose();
+      activeFileJournal = null;
+      const result = state.goalPaused ? { ok: true, paused: true } : { ok: true, cancelled: true, manualStop: true };
+      if (state.goalPaused && turnQueue.active()) {
+        const active = turnQueue.active();
+        pausedPreparation = { text: active.text, attachments: active.attachments, options: active.options,
+          user: state.messages.findLast(row => row.role === 'user'), owner, account };
+      }
+      if (state.manualStopRequested) releaseManualStop();
+      return { ...result, snapshot: _snapshot(state) };
+    }
+    generationGateActive++; state.pluginGenerationActive = generationGateActive;
+    let native;
+    try { native = send(text, attachments, options); }
+    catch (error) { gate.dispose(); generationGateActive--; state.pluginGenerationActive = generationGateActive; throw error; }
+    return Promise.resolve(native).then(result => gate.finish(result)).then(result => {
+      if (result?.failureKind === 'plugin-validation') {
+        state.status = 'unreachable'; state.statusText = result.reason;
+        state.completion = { reason: 'error', error: result.reason };
+      } else if (result?.cancelled) {
+        if (!state.goalPaused && !state.pendingPermissions.length) {
+          state.status = 'aborted'; state.statusText = '\u5df2\u505c\u6b62';
+          state.completion = { reason: 'cancelled' };
+        }
+      } else if (result?.ok && !result.paused && !result.recovering && !cancelled()) {
+        state.status = 'idle'; state.statusText = '';
+      }
+      return result;
+    }).finally(() => {
+      gate.dispose();
+      generationGateActive--; state.pluginGenerationActive = generationGateActive;
+      if (!generationGateActive) activeFileJournal = null;
+      emit(state.status === 'idle' ? 'settled' : state.status === 'unreachable' ? 'failed' : 'changed');
+      if (!generationGateActive) queueMicrotask(drainTurns);
+    }).then(result => result && typeof result === 'object'
+      ? { ...result, snapshot: _snapshot(state) } : result);
+  }
+
   function drainTurns() {
-    if (state.disposed || state.queueImmediate.blocked() || state.accessChangePending || state.goalPaused || state.cancelRequested || turnQueue.blocked() ||
+    if (state.disposed || state.pluginGenerationPreparing || state.pluginGenerationActive || state.queueImmediate.blocked() || state.accessChangePending || state.goalPaused || state.cancelRequested || turnQueue.blocked() ||
         state.status === 'streaming' || state.status === 'queued' || state.turnSubmissionPending || state.pendingPermissions.length || state.stopPending ||
         (state.started && !state.dispatchReady)) return;
     const next = turnQueue.take();
@@ -1511,14 +1591,17 @@ async function createRunnerHandle(request, defaults, initialSession) {
         if (!pluginTurn.requestedIds(preparedOptions).length && !preparedOptions.skills?.length && typeof opts.resolveConnectors !== 'function') {
           appendUser(next.text, next.attachments, [], preparedOptions.sentAt, preparedOptions.submissionId);
           emit('turn-dequeued', { queueId: next.id, taskId: next.options.taskId || '' });
-          return state.started ? continueTurn(next.text, next.attachments, preparedOptions)
-            : dispatch(next.text, next.attachments, preparedOptions);
+          return sendWithGenerationGate(state.started ? continueTurn : dispatch,
+            next.text, next.attachments, preparedOptions, () => next.stopRequested);
         }
         return sendWithPlugins();
       };
       const sendWithPlugins = () => require('./prepared-turn.cjs').send({
         state, opts, next, skillTurn, pluginTurn, emit, invalidateObservation, redactors,
-        appendUser, dispatch, continueTurn, conversationPrompt: _conversationPrompt, skillRows: _skillRows, TURN_SKILLS,
+        appendUser,
+        dispatch: (text, files, options) => sendWithGenerationGate(dispatch, text, files, options, () => next.stopRequested),
+        continueTurn: (text, files, options) => sendWithGenerationGate(continueTurn, text, files, options, () => next.stopRequested),
+        conversationPrompt: _conversationPrompt, skillRows: _skillRows, TURN_SKILLS,
         onSkillFailure: value => { skillSelectionFailure = value; },
       });
       if (state.modelSelection.needsApply(next.options.modelName))
@@ -1554,8 +1637,20 @@ async function createRunnerHandle(request, defaults, initialSession) {
     emit,
     settle,
     drainTurns,
-    continueTurn: (text, attachments, options) => state.started
-      ? continueTurn(text, attachments, options) : dispatch(text, attachments, options),
+    hasPausedPreparation: () => Boolean(pausedPreparation),
+    continueTurn(text, files, options) {
+      const pending = pausedPreparation;
+      pausedPreparation = null;
+      if (!pending) return sendWithGenerationGate(state.started ? continueTurn : dispatch, text, files, options);
+      if (pending.owner !== handle.deliveryOwner ||
+          pending.account !== require('../device-auth-request').accountScopeKey(identity))
+        return Promise.resolve({ ok: true, cancelled: true, manualStop: true });
+      // Baseline preparation paused before admission. Re-enter the queue with
+      // the original inputs so runtime selection and grants are resolved afresh.
+      return handle.submit(pending.text, pending.attachments, {
+        ...pending.options, taskGoalControl: options.taskGoalControl, submissionId: '', [resumedUser]: pending.user,
+      }).completion;
+    },
   }) : {};
   state.queueImmediate = require('./runner-queue-immediate').create({
     state, queue: turnQueue, runtime, emit, poll, drain: drainTurns,
@@ -1726,13 +1821,13 @@ async function createRunnerHandle(request, defaults, initialSession) {
       if (recoveredTasks.get(id) !== token) return false;
       return recoveredTasks.delete(id);
     },
-    historyRow() {
+    historyRow(snapshot) {
       return { ...taskBindings.view(), id: runnerRef, adapterId, title: state.title ||
         (state.goal ? _title(state.goal) : ''),
         nativeSessionStarted: state.started || taskJournal.nativeHistoryObserved,
         nativeDispatchId: predictedRef === runnerRef ? dispatchId : '',
         usedHarnesses: require('../conversation/used-harnesses').fromSnapshot(state, adapterId),
-        cwd, at: state.updatedAt, count: state.messages.length, state: state.status };
+        cwd, at: state.updatedAt, count: state.messages.length, state: snapshot?.status || (state.pluginGenerationActive && state.status === 'idle' ? 'streaming' : state.status) };
     },
     goalView() {
       return { configured: state.goalVisible, intent: state.goalVisible ? 'goal' : '',
@@ -1791,6 +1886,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
           ...(adapterId === 'codex' ? { reasoningEffort: taskModelOverride && typeof options.reasoningEffort === 'string'
             ? options.reasoningEffort : state.thinking?.level || '' } : {}),
           sentAt: messageTime.epoch(options?.sentAt) || Date.now() } });
+        if (item && Object.hasOwn(item.options, resumedUser)) turnQueue.prioritize(item.id);
         const retryingSkill = skillTurn.resumeRetry(turnQueue, item, skillSelectionFailure);
         // A turn that can start immediately should enter the transcript in the
         // same render pass. Emitting a queued event for every submission makes
@@ -1823,6 +1919,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     },
 
     cancel() {
+      pausedPreparation = null;
       observationCancellation++;
       state.queueImmediate.cancel();
       const active = turnQueue.active();
@@ -1885,16 +1982,22 @@ async function createRunnerHandle(request, defaults, initialSession) {
       return { ok: true, snapshot: _snapshot(state) };
     },
     ...goalControls,
+    ...(goalControls.disableGoal ? { disableGoal() {
+      pausedPreparation = null;
+      if (state.goalVisible) observationCancellation++;
+      return goalControls.disableGoal();
+    } } : {}),
     outputs() { return outputs.list(cwd, outputSince); },
-    outputSnapshot() { return { ...outputs.scan(cwd, outputSince, state.startedAt), fileChanges: state.fileChanges || null }; },
+    outputSnapshot() { return { ...outputs.scan(cwd, outputSince, state.startedAt), fileChanges: state.fileChanges || null, pluginValidation: pluginGeneration.records(handle) }; },
     async outputSnapshotAsync() {
       const since = outputSince, turnSince = state.startedAt, fileChanges = state.fileChanges || null;
       const scanned = await outputs.scanAsync(cwd, since, turnSince);
       if (outputSince !== since || state.startedAt !== turnSince || (state.fileChanges || null) !== fileChanges)
         throw Error('当前轮次的成果已变化，请刷新后重试');
-      return { ...scanned, fileChanges };
+      return { ...scanned, fileChanges, pluginValidation: pluginGeneration.records(handle) };
     },
     close() {
+      pausedPreparation = null;
       if (state.disposed) return;
       state.disposed = true;
       taskJournal.close();

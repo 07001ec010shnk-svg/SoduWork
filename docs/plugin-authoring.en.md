@@ -198,6 +198,10 @@ js:install, js:ci, js:build, js:test, and js:type-check resolve the repository's
 
 Static import validates structure, versions, DAGs, commands, references, capability subsets, and sensitive configuration. Outputs form a version-level result contract.
 
+For drafts generated in Pi or Runner conversations, the host rereads the final on-disk draft and its declared resources before completing the logical turn. Static validation checks those exact bytes, including JSON syntax and workflow input references. A rejected draft may receive at most two hidden repair continuations in the same conversation and original logical turn, using its existing runtime, permissions, and per-turn grants. Each repair is checked again from disk; cancellation or a change of owner or permissions stops repair. Invalid drafts remain unavailable for installation and cannot appear ready or settle the turn successfully. This gate does not execute package scripts or replace real-environment verification. Installation still requires the user's separate confirmation.
+
+When the output list is full, the host also checks nested package candidates in the workspace. Each rejected draft needs its own correction or replacement. Temporary read or worker failures leave validation pending for a later inspection. Runner keeps the original turn's file changes through hidden repairs.
+
 A version may declare at most 20 evaluations, each with instruction, credential-free inputs, criteria, and expectedOutputs. Changing them requires review. Administrators select agents/models/Runner labels and secret references; isolated runs retain immutable cases, actual execution location, sizes, and SHA-256.
 
 Contract checks still require a human acceptance decision. Rerunning a case immediately invalidates its previous conclusion. All declared evaluations must pass before enabling a version. Without evaluations, publishing requires explicit risk acceptance; the catalog distinguishes evaluated from reviewed versions.

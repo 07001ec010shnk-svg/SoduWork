@@ -370,7 +370,11 @@
       const owned = draftPlacement?.target(file, snapshot, messages);
       const old = root.querySelector('[data-plugin-draft-identity="' + escapeSelector(identity) + '"]');
       const revision = String(file.pluginRevision || file.at || 0);
-      const sameRevision = old && (old.dataset.pluginDraftRevision || old.dataset.pluginDraftAt) === revision;
+      const validation = file.pluginValidation || { state: 'pending' };
+      const validationKey = JSON.stringify(validation);
+      const installable = validation.state === 'ready' && file.pluginInstallable !== false;
+      const sameRevision = old && (old.dataset.pluginDraftRevision || old.dataset.pluginDraftAt) === revision &&
+        old.dataset.pluginDraftValidation === validationKey;
       if (owned === false) continue;
       if (owned === null && old && (sameRevision || !file.pluginRevision)) {
         const previousMessage = old.closest('.nmsg.ai');
@@ -397,6 +401,7 @@
       card.dataset.chatNode = 'plugin-draft:' + key(file);
       card.dataset.pluginDraftIdentity = identity; card.dataset.pluginDraftAt = String(file.at || 0);
       card.dataset.pluginDraftRevision = revision;
+      card.dataset.pluginDraftValidation = validationKey;
       card.dataset.pluginDraftHistorical = String(owned === null);
       if (owned) card.dataset.pluginDraftOwner = draftPlacement.ownerIndex(target, snapshot);
       const mark = root.ownerDocument.createElement('span'); mark.className = 'nplugin-draft-icon'; mark.setAttribute('aria-hidden', 'true');
@@ -408,12 +413,21 @@
       if (file.pluginName) label.setAttribute('data-user-content', '');
       const hint = root.ownerDocument.createElement('span'); hint.textContent = file.skillPackage ? '检查内容后，安装到我的技能库'
         : owned === null ? '会话中已生成的插件，可检查并安装' : '检查内容后，安装到我的 SoduWork';
+      if (!installable) hint.textContent = validation.state === 'invalid' ? '\u63d2\u4ef6\u8349\u7a3f\u672a\u901a\u8fc7\u68c0\u67e5\uff0c\u8bf7\u4fee\u590d\u540e\u518d\u5b89\u88c5'
+        : validation.state === 'repairing' ? '\u6b63\u5728\u4fee\u590d\u63d2\u4ef6\u8349\u7a3f' : '\u6b63\u5728\u68c0\u67e5\u63d2\u4ef6\u8349\u7a3f';
       copy.append(label, hint);
       const install = root.ownerDocument.createElement('button'); install.type = 'button';
       install.className = 'btn-mini primary'; install.dataset.installPluginDraft = key(file);
       install.dataset.pluginDraftRef = ref; install.textContent = '检查并安装';
       const error = root.ownerDocument.createElement('p'); error.className = 'nplugin-draft-error'; error.setAttribute('role', 'alert'); error.hidden = true;
-      card.append(mark, copy, install, error); target.appendChild(card);
+      if (validation.diagnostic) {
+        const issue = validation.diagnostic;
+        error.textContent = [issue.file, issue.line ? issue.line + ':' + (issue.column || 1) : '', issue.field, issue.message].filter(Boolean).join(' | ');
+        error.hidden = false;
+      }
+      card.append(mark, copy);
+      if (installable) card.append(install);
+      card.append(error); target.appendChild(card);
     }
   }
   const isImage = file => /\.(?:png|jpe?g|gif|webp|ico)$/i.test(String(file?.name || file?.relative || file?.path || ''));
