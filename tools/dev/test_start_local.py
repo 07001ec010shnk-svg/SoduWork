@@ -175,6 +175,32 @@ class LocalStartupTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.state = Path(self.temp.name) / "service"
 
+    def test_live_verifier_uses_default_caches_without_changing_parent_settings(self):
+        choices = {'npm_config_cache': '/operator/npm', 'PIP_CACHE_DIR': '/operator/pip',
+                   'electron_config_cache': '/operator/electron', 'PIP_NO_CACHE_DIR': '1'}
+        with patch.dict(os.environ, choices), patch.object(verify.subprocess, 'Popen') as popen:
+            before = dict(os.environ)
+            _, output = verify.start(self.state, 18989)
+            output.close()
+            self.assertTrue(dict(os.environ) == before, 'Verifier changed the parent environment')
+            child_keys = {key.lower() for key in popen.call_args.kwargs['env']}
+        self.assertFalse(child_keys & {key.lower() for key in choices})
+
+    def test_live_cache_acceptance_requires_payloads_and_the_temporary_directory(self):
+        for name in ('npm', 'pip'):
+            cache = self.state / 'cache' / name
+            cache.mkdir(parents=True)
+            (cache / 'fixture').write_bytes(b'fixture')
+        with self.assertRaisesRegex(AssertionError, 'temporary directory'):
+            verify.install_cache_sizes(self.state, desktop=False)
+        (self.state / 'cache/tmp').mkdir()
+        self.assertEqual(verify.install_cache_sizes(self.state, desktop=False), {'npm': 7, 'pip': 7})
+        with self.assertRaisesRegex(AssertionError, 'electron install cache'):
+            verify.install_cache_sizes(self.state, desktop=True)
+        (self.state / 'cache/electron').mkdir()
+        (self.state / 'cache/electron/archive.zip').write_bytes(b'fixture')
+        self.assertEqual(verify.install_cache_sizes(self.state, desktop=True), {'npm': 7, 'pip': 7, 'electron': 7})
+
     def test_fresh_source_instance_uses_current_name_but_existing_data_stays(self):
         base = Path(self.temp.name) / "user-data"
         with patch.dict(os.environ, {"LOCALAPPDATA": str(base), "XDG_DATA_HOME": str(base)}):
@@ -760,12 +786,42 @@ class LocalStartupTests(unittest.TestCase):
         marker = root / 'finished'
         command = [sys.executable, '-c',
                    'import time,pathlib,sys; time.sleep(2); pathlib.Path(sys.argv[1]).touch()', str(marker)]
-        with self.assertRaisesRegex(build.StartupError, 'timed out'):
+        with self.assertRaisesRegex(build.StartupError, 'timed out') as failure:
             build.run(command, cwd=root, log=root / 'download.log', label='Download fixture', timeout=.1)
+        self.assertNotIn('network/proxy', str(failure.exception))
         self.assertFalse(marker.exists())
         build.run([sys.executable, '-c', 'import pathlib,sys; pathlib.Path(sys.argv[1]).touch()', str(marker)],
                   cwd=root, log=root / 'download.log', label='Retry fixture', timeout=5)
         self.assertTrue(marker.exists())
+
+    def test_failed_command_reports_disk_full_without_exposing_output(self):
+        self.state.mkdir()
+        log = self.state / 'startup.log'
+        for diagnostic in ('OSError: [Errno 28] No space left on device',
+                           'npm error code ENOSPC',
+                           'OSError: [WinError 112] There is not enough space on the disk'):
+            with self.subTest(diagnostic=diagnostic), redirect_stdout(io.StringIO()) as console:
+                command = [sys.executable, '-c',
+                           'import sys; print(sys.argv[1], file=sys.stderr); sys.exit(1)',
+                           diagnostic + '\nprivate diagnostic fixture']
+                with self.assertRaisesRegex(build.StartupError, 'Disk full') as failure:
+                    build.run(command, cwd=self.state, log=log, label='Install fixture')
+                message = str(failure.exception)
+                self.assertIn(str(log), message)
+                self.assertNotIn('network/proxy', message)
+                self.assertNotIn('private diagnostic fixture', message + console.getvalue())
+
+    def test_failed_command_does_not_reuse_an_old_disk_full_diagnostic(self):
+        self.state.mkdir()
+        log = self.state / 'startup.log'
+        log.write_text('Previous attempt: ENOSPC\n', encoding='utf-8')
+        command = [sys.executable, '-c',
+                   'import sys; print("No matching distribution found for fixture", file=sys.stderr); sys.exit(1)']
+        with self.assertRaises(build.StartupError) as failure, redirect_stdout(io.StringIO()):
+            build.run(command, cwd=self.state, log=log, label='Install fixture')
+        self.assertIn(str(log), str(failure.exception))
+        self.assertNotIn('Disk full', str(failure.exception))
+        self.assertNotIn('network/proxy', str(failure.exception))
 
     def test_busy_port_is_left_running(self):
         with socket.socket() as listener:
@@ -1067,6 +1123,95 @@ class LocalStartupTests(unittest.TestCase):
                 with self.assertRaisesRegex(build.StartupError, 'shell fixture failed'):
                     build.prepare_desktop(self.state, self.state / 'startup.log')
 
+    def test_prepare_keeps_package_caches_inside_the_data_directory(self):
+        state = Path(self.temp.name) / 'cache-state'
+        with patch.object(build.os, 'name', 'nt'), \
+                patch.dict(os.environ, {'PATH': os.environ.get('PATH', '')}, clear=True):
+            environment = build.prepare_environment(state)
+        self.assertEqual(environment['npm_config_cache'], str(state / 'cache/npm'))
+        self.assertEqual(environment['PIP_CACHE_DIR'], str(state / 'cache/pip'))
+        self.assertEqual(environment['electron_config_cache'], str(state / 'cache/electron'))
+        self.assertEqual(environment['PATH'], os.environ['PATH'])
+        for key in ('TEMP', 'TMP', 'TMPDIR'):
+            self.assertEqual(environment[key], str(state / 'cache/tmp'))
+
+    def test_prepare_sets_tmpdir_on_posix(self):
+        state = Path(self.temp.name) / 'cache-state'
+        with patch.object(build.os, 'name', 'posix'), patch.dict(os.environ, {}, clear=True):
+            environment = build.prepare_environment(state)
+        self.assertEqual(environment['TMPDIR'], str(state / 'cache/tmp'))
+        self.assertTrue((state / 'cache/tmp').is_dir())
+
+    def test_prepare_children_really_create_temporary_files_inside_data_directory(self):
+        outside = Path(self.temp.name) / 'user-temp'
+        outside.mkdir()
+        for platform_name in ('nt', 'posix'):
+            with self.subTest(platform=platform_name):
+                state = self.state / platform_name
+                with patch.dict(os.environ, dict.fromkeys(('TEMP', 'TMP', 'TMPDIR'), str(outside))):
+                    before = dict(os.environ)
+                    with patch.object(build.os, 'name', platform_name):
+                        environment = build.prepare_environment(state)
+                    self.assertTrue(dict(os.environ) == before, 'Preparation changed the parent environment')
+                commands = [
+                    [sys.executable, '-c', 'import tempfile; f = tempfile.TemporaryFile(); '
+                     'f.write(b"fixture"); f.close(); print(tempfile.gettempdir())'],
+                    ['node', '-e', 'const fs = require("node:fs"), os = require("node:os"), '
+                     'path = require("node:path"); fs.mkdtempSync(path.join(os.tmpdir(), "fixture-")); '
+                     'console.log(os.tmpdir());'],
+                ]
+                for command in commands:
+                    selected = subprocess.check_output(command, env=environment, text=True).strip()
+                    self.assertEqual(Path(selected).resolve(), (state / 'cache/tmp').resolve())
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_prepare_never_overrides_an_explicit_cache_choice(self):
+        state = Path(self.temp.name) / 'cache-state'
+        chosen = {'NPM_CONFIG_CACHE': '/operator/npm', 'PIP_CACHE_DIR': '/operator/pip',
+                  'electron_config_cache': '/operator/electron'}
+        with patch.dict(os.environ, chosen, clear=True):
+            environment = build.prepare_environment(state)
+        lowered = {key.lower(): value for key, value in environment.items()}
+        for key, value in chosen.items():
+            self.assertEqual(lowered[key.lower()], value)
+
+    def test_empty_cache_settings_do_not_fall_back_to_user_profile(self):
+        with patch.dict(os.environ, {'NPM_CONFIG_CACHE': '', 'PIP_CACHE_DIR': '',
+                                     'electron_config_cache': ''}, clear=True):
+            environment = build.prepare_environment(self.state)
+        lowered = {key.lower(): value for key, value in environment.items()}
+        for key, folder in (('npm_config_cache', 'npm'), ('pip_cache_dir', 'pip'),
+                            ('electron_config_cache', 'electron')):
+            self.assertEqual(lowered[key], str(self.state / 'cache' / folder))
+
+    def test_prepare_passes_isolated_caches_to_every_install_command(self):
+        state = Path(self.temp.name) / 'prepare-state'
+        state.mkdir()
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'source_files', return_value=[]), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value=None), \
+                patch.object(build, 'run') as run:
+            build.prepare(state, state / 'startup.log')
+        installs = run.call_args_list
+        self.assertEqual(len(installs), 5)  # venv, pip, Runner probe, npm ci, build
+        self.assertTrue(any('pip' in call.args[0] for call in installs))
+        for call in installs:
+            self.assertTrue(call.kwargs.get('env') == build.prepare_environment(state),
+                            'Every preparation child must receive the isolated environment')
+
+    def test_cached_runner_disk_full_is_not_retried_as_a_dependency_repair(self):
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value='digest'), \
+                patch.object(build, 'verify_runner_environment', side_effect=build.DiskFullError('Disk full')), \
+                patch.object(build, 'run') as run:
+            with self.assertRaises(build.DiskFullError):
+                build.prepare(self.state, self.state / 'startup.log')
+        self.assertFalse(any('pip' in call.args[0] for call in run.call_args_list))
+
     def test_cached_nonwindows_desktop_does_not_prepare_windows_shell(self):
         with patch.object(sys, 'platform', 'darwin'):
             client = self.cached_desktop()
@@ -1123,9 +1268,32 @@ class LocalStartupTests(unittest.TestCase):
             self.assertEqual(build.prepare_desktop(self.state, self.state / 'startup.log'), client)
             self.assertEqual(dict(build.os.environ), environment)
         self.assertEqual(len(calls), 3)
-        self.assertIsNone(calls[0][1].get('env'))
-        self.assertEqual(calls[1][1]['env'], {**environment, 'ELECTRON_GET_USE_PROXY': '1'})
-        self.assertIsNone(calls[2][1].get('env'))
+        for index, (_, kwargs) in enumerate(calls):
+            child = kwargs.get('env', {})
+            self.assertEqual(child.get('npm_config_cache'), str(self.state / 'cache/npm'))
+            self.assertEqual(child.get('PIP_CACHE_DIR'), str(self.state / 'cache/pip'))
+            self.assertEqual(child.get('electron_config_cache'), str(self.state / 'cache/electron'))
+            self.assertEqual(child.get('TMPDIR'), str(self.state / 'cache/tmp'))
+            self.assertEqual(child.get('ELECTRON_GET_USE_PROXY'), '1' if index == 1 else None)
+            for key, value in environment.items():
+                self.assertEqual(child[key], value)
+
+    def test_desktop_disk_full_does_not_add_network_advice_or_stamp_success(self):
+        client = self.state / 'application/client'
+        client.mkdir(parents=True)
+        (client / 'package-lock.json').write_text('{}')
+        real_run = build.run
+        def fail_download(command, **kwargs):
+            if command[-1] == str(client / 'scripts/install-electron.cjs'):
+                real_run([sys.executable, '-c', 'import sys; print("ENOSPC"); sys.exit(1)'], **kwargs)
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'run', side_effect=fail_download), \
+                patch.dict(os.environ, {'DISPLAY': ':fixture'}), redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(build.StartupError, 'Disk full') as failure:
+                build.prepare_desktop(self.state, self.state / 'startup.log')
+        self.assertNotIn('ELECTRON_MIRROR', str(failure.exception))
+        self.assertNotIn('network', str(failure.exception).lower())
+        self.assertFalse((self.state / 'desktop-dependencies.sha256').exists())
 
     def test_desktop_download_failure_keeps_overrides_and_reports_recovery(self):
         client = self.state / 'application/client'
