@@ -13,7 +13,7 @@ from ..db import get_session
 from ..deps import current_ai_client, authenticated_client, current_client, enforce_client_access, enforce_client_quota
 from ..models import Client, Task, User
 from ..realtime import hub
-from ..schemas import BatchUpdate, TaskCreate, TaskUpdate, task_to_api
+from ..schemas import BatchUpdate, TaskCreate, TaskSyncCreate, TaskUpdate, task_to_api
 from ..services import audit, task_access
 from ..services import task_access as _task_access
 from ..services import tasks as svc
@@ -237,7 +237,7 @@ async def get_delivery_state(
 
 @router.put("/tasks/{tid}")
 async def put_task(
-    tid: str, body: TaskCreate,
+    tid: str, body: TaskSyncCreate,
     client: Client = Depends(current_client), session: AsyncSession = Depends(get_session),
 ):
     """Create tasks idempotently using client-generated IDs so offline replay cannot create

@@ -87,6 +87,22 @@ Codex ACP 协商带版本的 `sessionFailure` 能力，在接受 `end_turn` 前�
 
 可在后端测试环境执行 `python3 -m unittest test_kimi_runtime test_qwen_runtime test_codex_acp_outcome test_acp_error_messages test_local_turn_outcome`。独立夹具 `e2e_kimi_outcome.py`、`e2e_qwen_turn_outcome.py` 和 `e2e_codex_acp_outcome.py` 使用明确指定的已安装底座及隔离本机回环模型，所需路径见各自 `--help`。Codex 验收还检查真实审批的批准、拒绝和命令输出，不调用付费模型服务。
 
+## 任务文本兼容
+
+通过 `POST /api/v1/tasks` 新建任务，以及 `PATCH` 或批量更新中明确提交的字段，
+标题最多 200 个字符、来源最多 120 个字符；超长输入会在写入前返回 422。
+读取历史记录、修改无关字段时保留原有文本。
+
+`PUT /api/v1/tasks/{id}` 是桌面端幂等同步和撤销删除使用的接口。
+升级前尚未同步的任务、删除后恢复的任务都可能没有服务端记录，因此该接口接收完整历史文本，
+有意不套用 POST/PATCH 的文本长度限制；账号所有权和平台管理来源限制继续生效。
+
+迁移 `0092_task_text_storage` 无损扩容 PostgreSQL 的任务文本列，
+也覆盖尚未使用版本化迁移的旧数据库；已有 SQLite 表不需要重建。
+先部署 Hub 并完成迁移，再升级桌面端。桌面端保留完整文本，
+对仅因旧长度校验而阻塞的 PUT 队列记录重试一次；再次被拒绝则保留阻塞，等待明确处理。
+存在超长数据时，降级会拒绝缩窄字段。升级前请备份数据库和匹配版本的程序。
+
 ## 连数据库
 
 领域排序接受 32 位有符号整数及旧客户端使用的十进制整数字符串。非法值、

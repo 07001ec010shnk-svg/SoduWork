@@ -147,6 +147,27 @@ explicitly selected installed runtimes and isolated loopback providers; see thei
 `--help` for required paths. Codex acceptance also checks real permission
 approvals/denials and command output. They do not exercise paid model services.
 
+## Task text compatibility
+
+Task creation with `POST /api/v1/tasks` and fields explicitly supplied to `PATCH`
+or batch updates validate titles up to 200 characters and sources up to 120;
+longer input returns 422 before writes. Reading historical records and updating
+unrelated fields retain their original text.
+
+`PUT /api/v1/tasks/{id}` is the desktop's idempotent synchronization and undo
+contract. It accepts complete historical text because an unsent legacy task and
+a task restored after deletion have no existing server row to identify them.
+This compatibility endpoint intentionally does not enforce the POST/PATCH text
+limits; account ownership and managed-source restrictions still apply.
+
+Migration `0092_task_text_storage` widens PostgreSQL task text columns without
+truncation, including adoption of unversioned databases. Existing SQLite tables
+need no rebuild. Deploy the Hub migration before the updated desktop. The desktop
+preserves full text and retries a queued PUT blocked solely by the old length
+validation once; another rejection remains blocked for explicit review. Downgrade
+refuses to narrow columns while overlong data exists. Back up the database and
+matching application before upgrading.
+
 ## Database configuration
 
 Domain ordering accepts signed 32-bit integers and legacy decimal strings.
