@@ -287,7 +287,8 @@ function _snapshot(state) {
     state.taskExecutions?.find(row => row.taskId === turn.options.taskId);
   const controlledView = require('../pi-session/controlled-execution-snapshot.cjs').project(controlled, turn?.id);
   const validating = Boolean((state.pluginGenerationActive || state.pluginGenerationPreparing) &&
-    !state.goalPaused && !state.cancelRequested && state.status === 'idle');
+    !state.goalPaused && !state.cancelRequested && (state.status === 'idle' ||
+      state.pluginGenerationPreparing && state.status === 'aborted'));
   const executing = state.status === 'streaming' || validating;
   const running = executing || state.status === 'queued' || Boolean(state.pendingPermissions?.length);
   const now = Date.now();
@@ -897,7 +898,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     if (state.polling) return pollFinished;
     const stopOnly = readOnly && state.manualStopRequested && state.stopAwaitingTerminal;
     const unavailable = () => state.disposed || state.cancelRequested && !stopOnly;
-    if (unavailable() || !state.started || state.preparingPlugins || state.turnSubmissionPending || submissionFailed && !state.recoveryRequired ||
+    if (unavailable() || !state.started || state.pluginGenerationPreparing || state.preparingPlugins || state.turnSubmissionPending || submissionFailed && !state.recoveryRequired ||
       (turnQueue.active() && turnQueue.active().options.controlled)) return;
     state.polling = true;
     let finishPoll;
@@ -907,7 +908,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const turnGeneration = submissionGeneration;
     const stalePoll = () => {
       if (cancellation === observationCancellation && turnGeneration === submissionGeneration && accessGeneration === (state.accessChangeGeneration || 0)) return false;
-      if (!state.disposed && !state.cancelRequested && !state.preparingPlugins && !state.turnSubmissionPending && !submissionFailed)
+      if (!state.disposed && !state.cancelRequested && !state.pluginGenerationPreparing && !state.preparingPlugins && !state.turnSubmissionPending && !submissionFailed)
         state.timer = setTimeout(poll, 0);
       return true;
     };
@@ -1391,6 +1392,9 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const cancelled = () => Boolean(state.disposed || state.cancelRequested || state.goalPaused || stopRequested() ||
       (state.nextAccessPolicy || state.accessPolicy)?.revision !== revision);
     state.pluginGenerationPreparing = true;
+    // Baseline scanning yields before native admission. Fence the previous
+    // turn's timers and in-flight observations before that first await.
+    invalidateObservation();
     let gate;
     try {
       gate = await pluginGeneration.begin({ handle, app, identity, cancelled,
