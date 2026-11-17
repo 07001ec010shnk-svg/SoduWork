@@ -62,6 +62,16 @@ Smoke checks live in [`smoke/`](smoke/). To run one directly, use its module fro
 
 ## DeepSeek Harness turn completion
 
+DeepSeek runtime preflight checks the archive-locked sharp, koffi and ripgrep
+packages for Windows, macOS and Linux on x64/arm64. macOS/Linux also require
+libvips; Linux selects the glibc or musl binaries. Missing manifests, mismatched
+versions and missing critical loaders/binaries prevent stage activation and
+invalidate cached readiness. Failed repair leaves the active runtime intact.
+Run `python3 -m smoke.smoke_dsh_runtime` for the offline platform matrix and
+activation/cache regressions. These static checks do not certify arbitrary binary
+corruption or macOS Gatekeeper acceptance; native ACP and tool execution still
+require validation on the target platform.
+
 DeepSeek ACP adapters 0.4.40 and 0.4.41 can return while their child agents are
 still running. SoduWork's host-only preload waits for progressing descendants
 through the native `waitForChildren` service, then rechecks the parent's idle
