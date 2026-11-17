@@ -264,7 +264,8 @@ function candidate(record, rawPath) {
 
 function serve(record, request, response) {
   record.lastUsed = Date.now();
-  if (!['GET', 'HEAD'].includes(String(request.method || 'GET').toUpperCase())) {
+  const method = String(request.method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD'].includes(method)) {
     response.writeHead(405, { Allow: 'GET, HEAD' });
     response.end();
     return;
@@ -276,14 +277,17 @@ function serve(record, request, response) {
   if (!found) { sendError(response, 404, 'Not found'); return; }
   let start = 0, end = Math.max(0, found.stat.size - 1), status = 200;
   const range = String(request.headers.range || '');
-  if (range) {
+  // Range applies to GET only; empty representations use a complete response.
+  if (range && method === 'GET' && found.stat.size > 0) {
     const match = /^bytes=(\d*)-(\d*)$/.exec(range);
-    if (!match || (!match[1] && !match[2]) || found.stat.size <= 0) {
+    if (!match || (!match[1] && !match[2])) {
       response.writeHead(416, { 'Content-Range': 'bytes */' + found.stat.size, 'Accept-Ranges': 'bytes' }); response.end(); return;
     }
-    if (!match[1]) start = Math.max(0, found.stat.size - Math.max(1, Number(match[2]) || 0));
-    else start = Number(match[1]);
-    end = match[2] ? Math.min(found.stat.size - 1, Number(match[2])) : found.stat.size - 1;
+    if (!match[1]) start = Math.max(0, found.stat.size - Number(match[2]));
+    else {
+      start = Number(match[1]);
+      end = match[2] ? Math.min(end, Number(match[2])) : end;
+    }
     if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || start >= found.stat.size) {
       response.writeHead(416, { 'Content-Range': 'bytes */' + found.stat.size, 'Accept-Ranges': 'bytes' }); response.end(); return;
     }
@@ -297,7 +301,7 @@ function serve(record, request, response) {
   };
   if (status === 206) headers['Content-Range'] = 'bytes ' + start + '-' + end + '/' + found.stat.size;
   response.writeHead(status, headers);
-  if (String(request.method).toUpperCase() === 'HEAD') { response.end(); return; }
+  if (method === 'HEAD') { response.end(); return; }
   const stream = fs.createReadStream(found.path, found.stat.size ? { start, end } : undefined);
   response.once('close', () => stream.destroy());
   stream.on('error', () => { if (!response.headersSent) sendError(response, 500, 'Read failed'); else response.destroy(); });
