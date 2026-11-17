@@ -34,6 +34,7 @@
   var passwordEye = null;
   var displayInput = null;
   var statusNode = null;
+  var statusSource = '';
   var submitButton = null;
   var retryButton = null;
   var recoveryNode = null;
@@ -120,7 +121,7 @@
     if (transition) return transition;
     var raw = text(detail.error || detail.message || detail.reason);
     if (!isConnectionFailure(detail)) return raw;
-    return '暂时无法连接 SoduWork 服务。请检查网络后重试。';
+    return '暂时无法连接 SoduWork 服务，请检查网络后重试。';
   }
 
   /*
@@ -263,8 +264,10 @@
   }
 
   function setStatus(message, kind) {
+    if (emailView) { emailView.setStatus(message, kind); return; }
     if (!statusNode) return;
-    statusNode.textContent = text(message);
+    statusSource = text(message);
+    statusNode.textContent = translate(statusSource);
     statusNode.className = 'soduwork-auth-status' + (kind ? ' is-' + kind : '');
   }
 
@@ -969,6 +972,7 @@
     api()?.listenAccountProfileChanges?.();
     global.addEventListener('soduwork-profile-updated', function (event) { updateIdentity(event.detail, null); });
     global.addEventListener('soduwork-locale-change', function () {
+      if (!emailView && statusNode) statusNode.textContent = translate(statusSource);
       mountSettings();
       renderQuotaNotice();
     });
