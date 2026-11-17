@@ -471,6 +471,12 @@
     currentQuota = quota || currentQuota;
     global.SoduWorkQuotaNotice?.update({ user: currentUser, quota: currentQuota });
     renderQuotaNotice();
+    renderIdentity();
+    if (currentUser) mountSettings();
+  }
+
+  // Repaint rebuilt account controls from the cached identity without refreshing auth or quota.
+  function renderIdentity() {
     if (!currentUser) return;
     var name = text(currentUser.displayName).trim() || text(currentUser.username).trim() || '我的';
     ['#wsMine b', '#wsMine .ws-mine-name', '[data-soduwork-user-name]'].forEach(function (selector) {
@@ -479,7 +485,6 @@
     document.querySelectorAll('[data-soduwork-user-initial]').forEach(function (node) {
       renderAccountAvatar(node, name);
     });
-    mountSettings();
   }
 
   function clearQuotaNotice() {
@@ -1010,6 +1015,7 @@
     accountCardHtml: accountCardHtml,
     changePassword: openChangePwd,
     updateIdentity: updateIdentity,
+    renderIdentity: renderIdentity,
     clearQuotaNotice: clearQuotaNotice,
     snapshot: function () { return { user: currentUser, quota: currentQuota, policy: policy }; }
   };
