@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import closing, contextmanager
+import errno
 import getpass
 import hashlib
 import json
@@ -200,8 +201,11 @@ def assert_available(host: str, port: int) -> None:
         try:
             probe.bind((host, port))
         except OSError as exc:
-            raise StartupError(f"Port {port} is already in use. Existing services were left running. "
-                               "Choose another port with --port.") from exc
+            if exc.errno == errno.EADDRINUSE or getattr(exc, 'winerror', None) == 10048:
+                raise StartupError(f"Port {port} is already in use. Existing services were left running. "
+                                   "Choose another port with --port.") from exc
+            raise StartupError(f"Cannot bind to {host}:{port}: {exc}. "
+                               "Check --host and your network configuration.") from exc
 
 
 def runtime_environment(state: Path, config: dict, password: str, host: str, port: int) -> dict:
