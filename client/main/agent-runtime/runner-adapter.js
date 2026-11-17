@@ -17,7 +17,8 @@ const nativeLocale = require('../native-locale.cjs');
 const { CAPABILITIES, RuntimeContractError } = require('./contract');
 const { createEventFactory } = require('./events');
 const runtimeCatalog = require('./runtime-catalog');
-const { createRunnerGoalControls } = require('./runner-goal-control');
+const { createRunnerGoalControls, continuationBlocked } = require('./runner-goal-control');
+const taskGoal = require('./runner-task-goal');
 const protocolGuard = require('./protocol-guard');
 const chatEvents = require('../pi-session/event-stream');
 const pluginTurn = require('../pi-session/plugin-turn');
@@ -296,6 +297,8 @@ function _snapshot(state) {
   );
   const idleMs = executing ? Math.max(0, now - latestProgressAt) : 0;
   const queue = state.turnQueue ? state.turnQueue.view() : [];
+  const goalPhase = state.goalPaused ? (state.taskGoal?.status === 'blocked' ? 'blocked' : 'paused') :
+    ['unreachable', 'aborted'].includes(state.status) && state.taskGoal?.status !== 'disabled' ? 'blocked' : state.taskGoal?.status;
   // Project settled native receipts using the same turn ownership as Pi.
   // Missing provider usage remains unknown for the presentation to estimate.
   const metrics = require('../pi-session/turn-metrics').collector(state, state._turnMetricsCache ||= {}, 0);
@@ -338,6 +341,7 @@ function _snapshot(state) {
     fileChanges: state.fileChanges || null,
     pendingUi: state.pendingPermissions?.length ? { ...state.pendingPermissions[0], method: 'permission' } : null,
     completion: state.completion ? { ...state.completion } : null,
+    ...(state.taskGoal ? { taskGoal: { ...state.taskGoal, objective: state.goal, acceptance: state.acceptance } } : {}),
     running: controlledView ? controlledView.execution.running : running,
     queue,
     queued: queue.length,
@@ -347,12 +351,19 @@ function _snapshot(state) {
       active: running,
       stopped: state.status === 'aborted' && !state.goalPaused,
       running,
-      step: state.step,
-      maxSteps: Number(state.maxSteps || 0),
-      elapsedMs: elapsed,
-      budgetMs: Math.max(0, Number(state.budgetMinutes || 0) * 60000),
+      step: state.taskGoal?.steps ?? state.step,
+      maxSteps: state.taskGoal?.maxSteps ?? Number(state.maxSteps || 0),
+      elapsedMs: state.taskGoal?.elapsedMs ?? elapsed,
+      budgetMs: state.taskGoal?.budgetMs ?? Math.max(0, Number(state.budgetMinutes || 0) * 60000),
       paused: state.goalPaused,
-      limitRequest: state.goalLimit ? { ...state.goalLimit } : null,
+      limitRequest: state.goalLimit ? { ...state.goalLimit,
+        canContinue: state.goalLimit.canContinue !== false && !continuationBlocked(state, state.turnQueue) } : null,
+      canContinue: Boolean(state.goalPaused && state.goalLimit?.canContinue !== false &&
+        !taskGoal.exhausted(state.taskGoal) && !continuationBlocked(state, state.turnQueue)),
+      ...(state.goalVisible && state.taskGoal ? { quality: {
+        phase: goalPhase === 'working' ? 'implementing' : goalPhase,
+        reason: state.taskGoal.reason,
+      } } : {}),
       reason: state.statusText,
       queuePosition: Number(state.queuePosition || 0),
       queueClass: String(state.queueClass || ''),
@@ -384,11 +395,12 @@ function _snapshot(state) {
         schemaVersion: 1,
         runId: state.runnerRef,
         node: state.status === 'queued' ? 'queue' : (executing ? 'execute' : 'deliver'),
-        phase: state.status === 'queued' ? 'queued' :
+        phase: state.goalPaused ? 'paused' : state.goalVisible && state.taskGoal ? state.taskGoal.status : state.status === 'queued' ? 'queued' :
           (executing ? 'working' : (state.status === 'idle' ? 'completed' : 'blocked')),
         state: state.status,
         decision: '', reason: state.statusText,
-        attempts: state.round, iteration: state.step, revision: 0,
+        attempts: state.round, iteration: state.taskGoal?.steps ?? state.step,
+        revision: state.taskGoal?.continuations || 0,
         workKind: state.adapterId, updatedAt: state.updatedAt,
         phases: [], tasks: [], progress: [],
       },
@@ -511,6 +523,8 @@ async function createRunnerHandle(request, defaults, initialSession) {
   const recoveredTasks = new Map();
   const turnQueue = createTurnQueue(undefined, () => handle.captureDelivery?.());
   const preparedContext = contextWindow.resolveContextWindow(prepared.model);
+  const taskGoalSupported = runtimeSpec.goalMode === 'native' && taskGoal.supported(adapterId);
+  const initialTaskGoal = taskGoalSupported ? taskGoal.fromOptions(opts) : null;
   const state = {
     alias, runnerRef, dispatchId, cwd, adapterId, displayName, taskBindings,
     accessPolicy: require('../access-control/policy').normalize(opts.accessPolicy, cwd),
@@ -525,9 +539,10 @@ async function createRunnerHandle(request, defaults, initialSession) {
     thinking: initialThinking,
     lastExecutionReasoningEffort: initialThinking?.level || '',
     title: require('../conversation/automatic-title').resolve(opts.sessionTitle), intent: String(opts.intent || ''), goal: String(opts.goal || ''),
-    acceptance: String(opts.acceptance || ''), maxSteps: Number(opts.maxSteps || 0),
-    budgetMinutes: Number(opts.budgetMinutes || 0),
+    acceptance: String(opts.acceptance || ''), maxSteps: initialTaskGoal?.maxSteps ?? Number(opts.maxSteps || 0),
+    budgetMinutes: initialTaskGoal?.budgetMinutes ?? Number(opts.budgetMinutes || 0),
     goalVisible: String(opts.intent || '') === 'goal', goalPaused: false, goalLimit: null,
+    taskGoalContract: initialTaskGoal, taskGoal: null, pendingTaskGoalControl: '',
     selectedSkills: Array.isArray(opts.skillDirs) ? opts.skillDirs.slice() : [],
     capabilityIds: Array.isArray(opts.capabilityIds) ? opts.capabilityIds.slice() : [],
     status: 'idle', statusText: resumeNative ? '正在接回 ' + displayName + ' 会话…' : '',
@@ -770,16 +785,16 @@ async function createRunnerHandle(request, defaults, initialSession) {
       messageStream.takePreparation(item);
       const current = [...state.tools].reverse().find((tool) => tool.state === 'running' &&
         (!item.callId || tool.callId === String(item.callId)));
-      const accessCancelled = item.state === 'cancelled' && item.cancelReason === 'access-change' && item.isError === false;
-      const isError = !accessCancelled && (typeof item.isError === 'boolean' ? item.isError
+      const cancelled = item.state === 'cancelled' && ['access-change', 'output-limit'].includes(item.cancelReason) && item.isError === false;
+      const isError = !cancelled && (typeof item.isError === 'boolean' ? item.isError
         : /error|stderr|\u9519\u8bef/i.test(String(item.tool || '')));
-      const resultState = accessCancelled ? 'cancelled' : isError ? 'error' : 'done';
+      const resultState = cancelled ? 'cancelled' : isError ? 'error' : 'done';
       const result = isError ? require('../access-control/errors').message(text) : text;
       if (current) {
         current.result = result;
         current.isError = isError;
         current.state = resultState;
-        if (accessCancelled) current.cancelReason = 'access-change';
+        if (cancelled) current.cancelReason = item.cancelReason;
         current.lastProgressAt = eventAt;
         current.endedAt = eventAt;
       } else if (text) {
@@ -787,7 +802,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
           id: 'runner-' + String(item.seq || state.seq + 1),
           name: String(item.tool || (isError ? 'error' : 'output')),
           args: {}, partial: '', result, isError,
-          state: resultState, ...(accessCancelled ? { cancelReason: 'access-change' } : {}),
+          state: resultState, ...(cancelled ? { cancelReason: item.cancelReason } : {}),
           after: Math.max(0, state.messages.length - 1),
           startedAt: eventAt, lastProgressAt: eventAt, endedAt: eventAt,
         });
@@ -805,15 +820,36 @@ async function createRunnerHandle(request, defaults, initialSession) {
     queueMicrotask(drainTurns);
     return true;
   }
-  function requestStop() {
+  function finishGoalStop() {
+    if (!state.goalStopAwaitingTerminal || !state.terminalConfirmed || state.stopPending || state.pendingTaskGoalControl) return false;
+    state.goalStopAwaitingTerminal = false;
+    state.stopAwaitingTerminal = false;
+    state.recoveryRequired = false;
+    submissionFailed = false;
+    state.cancelRequested = Boolean(state.goalPaused);
+    if (!state.goalPaused) queueMicrotask(drainTurns);
+    emit('goal-stop-confirmed');
+    return true;
+  }
+  function requestStop(goalControl) {
+    if (!taskGoalSupported) goalControl = undefined;
+    if (['pause', 'disable'].includes(goalControl)) {
+      if (!state.started && !state.preparingPlugins) return true;
+      state.pendingTaskGoalControl = goalControl;
+      state.goalStopAwaitingTerminal = true;
+      state.stopAwaitingTerminal = true;
+      state.recoveryRequired = true;
+      state.terminalConfirmed = false;
+      if (!state.stopPending) state.stopSent = false;
+    }
     if (state.preparingPlugins || !state.started || !state.dispatchReady || state.stopSent || state.stopPending) return false;
     state.stopSent = true;
     state.stopPending = true;
     if (state.stopAwaitingTerminal) state.recoveryRequired = true;
     state.pendingPermissions = [];
-    const generation = submissionGeneration, stop = {};
+    const generation = submissionGeneration, stop = {}, control = state.pendingTaskGoalControl;
     stopRequest = stop;
-    runtime.rpc('job.stop', { ref: state.runnerRef }, 15000).then((reply) => {
+    runtime.rpc('job.stop', { ref: state.runnerRef, ...(control ? { taskGoalControl: control } : {}) }, 15000).then((reply) => {
       if (state.disposed || generation !== submissionGeneration || stopRequest !== stop) return;
       const data = reply && reply.data || {};
       if (!reply || reply.ok === false || data.ok === false) {
@@ -823,6 +859,29 @@ async function createRunnerHandle(request, defaults, initialSession) {
       }
       state.stopPending = false;
       stopRequest = null;
+      if (state.pendingTaskGoalControl === control) state.pendingTaskGoalControl = '';
+      if (state.pendingTaskGoalControl) {
+        state.stopSent = false;
+        requestStop();
+        return;
+      }
+      if (data.taskGoal) {
+        taskGoal.observe(state, data.taskGoal, true);
+        if (state.goalPaused) state.statusText = state.goalLimit.reason;
+        emit('goal-changed');
+      }
+      if (state.goalStopAwaitingTerminal) {
+        clearTimeout(state.timer);
+        state.timer = setTimeout(() => {
+          // A pre-stop poll must retire before the terminal-only read. Merely
+          // joining it would lose the confirmation when its cancelled result
+          // is discarded, leaving a paused goal permanently fenced.
+          Promise.resolve(state.polling ? pollFinished : undefined).then(() => {
+            if (!state.disposed && generation === submissionGeneration && state.goalStopAwaitingTerminal) void poll(true);
+          });
+        }, 0);
+        return;
+      }
       if (state.stopAwaitingTerminal && state.terminalConfirmed) {
         state.recoveryRequired = false;
         submissionFailed = false;
@@ -833,6 +892,16 @@ async function createRunnerHandle(request, defaults, initialSession) {
       if (state.disposed || generation !== submissionGeneration || stopRequest !== stop) return;
       stopRequest = null;
       state.stopSent = false;
+      if (control) {
+        state.statusText = '目标控制尚未得到执行机确认，请重试';
+        state.goalVisible = true;
+        state.intent = 'goal';
+        state.goalPaused = true;
+        state.goalLimit = { kind: 'task-goal', reason: state.statusText, canContinue: false };
+        if (state.taskGoal) state.taskGoal = { ...state.taskGoal, status: 'paused', reason: state.statusText };
+        emit('goal-control-unconfirmed');
+        scheduleRecovery();
+      }
       if (!state.manualStopRequested || state.disposed) return;
       if (state.stopAwaitingTerminal && state.terminalConfirmed && !state.stopPending) {
         state.recoveryRequired = false;
@@ -888,7 +957,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
   }
   async function poll(readOnly = false) {
     if (state.polling) return pollFinished;
-    const stopOnly = readOnly && state.manualStopRequested && state.stopAwaitingTerminal;
+    const stopOnly = readOnly && state.stopAwaitingTerminal && (state.manualStopRequested || state.goalStopAwaitingTerminal);
     const unavailable = () => state.disposed || state.cancelRequested && !stopOnly;
     if (unavailable() || !state.started || state.preparingPlugins || state.turnSubmissionPending || submissionFailed && !state.recoveryRequired ||
       (turnQueue.active() && turnQueue.active().options.controlled)) return;
@@ -926,11 +995,13 @@ async function createRunnerHandle(request, defaults, initialSession) {
         state.terminalConfirmed = TERMINAL_STATES.has(data.status);
         if (state.terminalConfirmed) {
           historyItems = []; historySince = null;
-          state.status = 'aborted'; state.statusText = '已停止';
+          if (taskGoalSupported) taskGoal.observe(state, data.taskGoal, true);
+          state.status = state.goalPaused ? 'idle' : 'aborted';
+          state.statusText = state.goalLimit?.reason || '已停止';
           // A late same-reference stop can affect a new turn until its own receipt settles.
-          state.recoveryRequired = Boolean(state.stopPending);
-          if (state.stopPending) { emit('changed'); scheduleRecovery(); }
-          else { submissionFailed = false; releaseManualStop(); }
+          state.recoveryRequired = Boolean(state.stopPending || state.pendingTaskGoalControl);
+          if (state.recoveryRequired) { emit('changed'); scheduleRecovery(); }
+          else { submissionFailed = false; finishGoalStop(); releaseManualStop(); }
         } else {
           state.recoveryRequired = true;
           state.statusText = '正在核实本轮停止状态…';
@@ -1052,13 +1123,20 @@ async function createRunnerHandle(request, defaults, initialSession) {
       state.appliedAccessPolicy = data.appliedAccessPolicy || state.appliedAccessPolicy;
       state.pendingPermissions = Array.isArray(data.pendingPermissions) ? data.pendingPermissions : [];
       state.status = state.pendingPermissions.length ? 'waiting-user' : _status(data.status);
+      const observedGoal = taskGoalSupported
+        ? taskGoal.observe(state, data.taskGoal, TERMINAL_STATES.has(data.status)) : null;
       state.queuePosition = Math.max(0, Number(data.queuePosition || 0));
       state.queueClass = String(data.queueClass || state.queueClass || '');
       // local_stream persists the human stop reason in `error` even after a
       // successful job.stop. Its stopped terminal is cancellation, not a
       // model failure; execution-policy violations remain explicitly failed.
       const stopped = state.status === 'aborted' && !data.failureKind;
-      if (data.error && !stopped) {
+      const goalPaused = state.goalPaused && observedGoal && (!data.error || data.failureKind === 'task_goal');
+      if (goalPaused) {
+        state.status = 'idle';
+        state.runtimeError = '';
+        state.statusText = state.goalLimit.reason;
+      } else if (data.error && !stopped) {
         state.runtimeError = _text(redact(require('../access-control/errors').message(data.error)), 1000);
         state.status = 'unreachable';
         state.statusText = state.runtimeError;
@@ -1076,6 +1154,8 @@ async function createRunnerHandle(request, defaults, initialSession) {
       } else if (state.runtimeError && state.status !== 'streaming') {
         state.status = 'unreachable';
         state.statusText = state.runtimeError;
+      } else if (observedGoal?.reason) {
+        state.statusText = observedGoal.reason;
       }
       if (state.accessChangePending && waiters.size && state.status === 'idle') state.status = 'streaming';
       const active = state.accessChangePending || state.status === 'streaming' || state.status === 'queued' || Boolean(state.pendingPermissions.length);
@@ -1168,6 +1248,9 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const generation = beginSubmission();
     const turnPolicy = state.nextAccessPolicy || state.accessPolicy;
     const next = turnOptions || {};
+    const dispatchedGoal = taskGoalSupported && !next.controlled &&
+      (state.taskGoalContract || taskGoal.fromText(text));
+    if (dispatchedGoal) taskGoal.activate(state, dispatchedGoal);
     state.cancelRequested = false;
     state.manualStopRequested = false;
     state.stopSent = false;
@@ -1190,9 +1273,9 @@ async function createRunnerHandle(request, defaults, initialSession) {
     state.title = state.title || _title(text || state.goal, displayName + ' 工作会话');
     emit('started');
     const taskContext = taskJournal.context();
-    const note = [next.promptText || _conversationPrompt(text, { ...opts, accessPolicy: turnPolicy }),
+    const note = [next.promptText || _conversationPrompt(text, { ...opts, intent: state.intent, accessPolicy: turnPolicy }),
       next.materialUnderstandingPrompt,
-      ...(opts.contextPrompts || []), taskContext, _goalBrief(opts), _languageContract()].filter(Boolean).join('\n\n');
+      ...(opts.contextPrompts || []), taskContext, _goalBrief(state), _languageContract()].filter(Boolean).join('\n\n');
     const completion = waitForTurn();
     const dispatchedModelId = executionModelId(state.model);
     const dispatchedEffort = state.agentExecution?.reasoningEffort || '';
@@ -1209,9 +1292,10 @@ async function createRunnerHandle(request, defaults, initialSession) {
         mode: (turnPolicy ? turnPolicy.mode === 'readonly' : opts.readOnly) ? 'plan' : 'work',
         workDir: state.cwd,
         workRoot: state.cwd,
-        brief: _goalBrief(opts),
+        brief: _goalBrief(state),
         deliveryMode: 'files',
         conversationMode: state.intent === 'goal' ? 'goal' : 'adaptive',
+        ...(dispatchedGoal ? { taskGoal: dispatchedGoal } : {}),
         skills: next[TURN_SKILLS] || _skillRows(state.selectedSkills),
         requiredAgentCapabilities: state.capabilityIds,
         conversationUserText: text, conversationSentAt: messageTime.epoch(next.sentAt),
@@ -1285,6 +1369,9 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const generation = beginSubmission();
     const turnPolicy = state.nextAccessPolicy || state.accessPolicy;
     const next = turnOptions || {};
+    const nextGoal = taskGoalSupported && !next.controlled && !next.taskGoalControl &&
+      (!state.goalVisible || state.taskGoal?.status === 'completed') ? taskGoal.fromText(text) : null;
+    if (nextGoal) taskGoal.activate(state, nextGoal);
     state.status = 'streaming';
     state.cancelRequested = false;
     state.manualStopRequested = false;
@@ -1312,11 +1399,13 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const dispatchedEffort = state.agentExecution?.reasoningEffort || '';
     runtime.rpc('job.comment', {
       ref: state.runnerRef, text, turnId,
+      ...(nextGoal ? { taskGoal: nextGoal } : {}),
+      ...(taskGoalSupported && next.taskGoalControl ? { taskGoalControl: next.taskGoalControl } : {}),
       ...(executionModelId(state.model) !== state.lastExecutionModelId || adapterId === 'codex' && dispatchedEffort !== state.lastExecutionReasoningEffort
         ? { executionSelection: { agentId: adapterId, modelName: executionModelId(state.model), reasoningEffort: dispatchedEffort } } : {}),
       sentAt: messageTime.epoch(next.sentAt),
       plugins: publicPluginBadges(next.plugins),
-      promptText: [next.promptText || _conversationPrompt(text, { ...opts, accessPolicy: turnPolicy }),
+      promptText: [next.promptText || _conversationPrompt(text, { ...opts, intent: state.intent, accessPolicy: turnPolicy }),
         next.materialUnderstandingPrompt,
         ...(opts.contextPrompts || []), taskContext, _languageContract()].filter(Boolean).join('\n\n'),
       cfg: { ..._runnerConfig(state.model, adapterId, state.capabilityIds), skillSelection: next[TURN_SKILLS] || _skillRows(state.selectedSkills),
@@ -1442,6 +1531,15 @@ async function createRunnerHandle(request, defaults, initialSession) {
         ok: false, reason: String(error && error.message || error),
       }),
     ).finally(() => {
+      // Preparation can fail before the explicit resume reaches Runner. Its
+      // last authoritative paused receipt still owns the goal, so a later
+      // user retry must carry the continue control again.
+      if (taskGoalSupported && next.options.taskGoalControl === 'continue' &&
+          ['paused', 'blocked'].includes(state.taskGoal?.status) && !turnQueue.active() &&
+          !state.recoveryRequired && !state.turnSubmissionPending && !state.stopPending &&
+          !state.cancelRequested && !['streaming', 'queued'].includes(state.status)) {
+        taskGoal.observe(state, state.taskGoal, true);
+      }
       if (state.manualStopRequested && !state.started && !state.preparingPlugins) releaseManualStop();
       emit('queue-changed');
       if (state.status !== 'streaming' && state.status !== 'queued') queueMicrotask(drainTurns);
@@ -1455,7 +1553,9 @@ async function createRunnerHandle(request, defaults, initialSession) {
     requestStop,
     emit,
     settle,
-    continueTurn,
+    drainTurns,
+    continueTurn: (text, attachments, options) => state.started
+      ? continueTurn(text, attachments, options) : dispatch(text, attachments, options),
   }) : {};
   state.queueImmediate = require('./runner-queue-immediate').create({
     state, queue: turnQueue, runtime, emit, poll, drain: drainTurns,
@@ -1488,8 +1588,8 @@ async function createRunnerHandle(request, defaults, initialSession) {
     },
     cwd,
     model: prepared.model.id,
-    intent: state.intent,
-    goal: state.goal,
+    get intent() { return state.intent; },
+    get goal() { return state.goal; },
     ui: {},
     detached: false,
     attachedWindow: null,
@@ -1635,7 +1735,8 @@ async function createRunnerHandle(request, defaults, initialSession) {
         cwd, at: state.updatedAt, count: state.messages.length, state: state.status };
     },
     goalView() {
-      return { configured: state.goalVisible, goal: state.goal,
+      return { configured: state.goalVisible, intent: state.goalVisible ? 'goal' : '',
+        mode: state.goalVisible ? 'goal' : 'chat', goal: state.goal,
         acceptance: state.acceptance, maxSteps: state.maxSteps,
         budgetMinutes: state.budgetMinutes, paused: state.goalPaused };
     },
@@ -1664,6 +1765,13 @@ async function createRunnerHandle(request, defaults, initialSession) {
       if (!value.trim()) return { accepted: false, result: { ok: false, reason: '请输入内容' } };
       if (value.length > 50000) return { accepted: false, result: { ok: false,
         reason: '本次输入最多 50000 个字符，请缩短后重试；内容未截断。' } };
+      const resumingGoal = taskGoalSupported && state.goalPaused && !options?.controlled && !options?.taskId;
+      if (resumingGoal && (continuationBlocked(state, turnQueue) || state.goalLimit?.canContinue === false)) {
+        return { accepted: false, result: { ok: false, reason: state.goalLimit?.canContinue === false
+          ? state.goalLimit.reason : '正在确认当前任务的停止状态，请稍后继续' } };
+      }
+      if (resumingGoal && turnQueue.find(turnQueue.view()[0]?.id)?.options.controlled)
+        return { accepted: false, result: { ok: false, reason: '请先关闭当前目标，再执行排队任务' } };
       // Do not carry an automatic pause from an already-settled turn into a
       // new prompt. Goal pauses, permission waits, recovery and explicit
       // control pauses are protected by these admission checks (and by the
@@ -1688,7 +1796,8 @@ async function createRunnerHandle(request, defaults, initialSession) {
         // same render pass. Emitting a queued event for every submission makes
         // the composer flash a queue row before the matching user message.
         if (busy && !retryingSkill) emit('turn-queued', { queueId: item.id });
-        drainTurns();
+        if (resumingGoal) goalControls.continueGoal();
+        else drainTurns();
         return { accepted: true, queued: Boolean(busy && !retryingSkill), queueId: item.id,
           position: turnQueue.size(), completion: item.completion };
       }

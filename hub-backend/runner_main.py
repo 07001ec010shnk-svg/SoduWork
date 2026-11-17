@@ -800,7 +800,9 @@ class Runner:
             if item.state != "running":
                 continue
             state = states.get(item.ref)
-            if state == "running":
+            if state == "running" or (state == "recovering" and
+                    (ai_local._RUNS.get(item.ref) or {}).get("goalContract") and
+                    (ai_local._RUNS.get(item.ref) or {}).get("cli") != "pi"):
                 continue
             if state == "done":
                 self._admission.finish(item.key, "completed")
@@ -922,6 +924,16 @@ class Runner:
                 if isinstance(packet, dict) and packet.get("transfer")
             }
             await self._drop_message_transfers(message, keep)
+        if operation == "comment" and reason != "duplicate":
+            from app.services import local_base, local_task_goal
+            with local_base._LOCK:
+                run = local_base._RUNS.get(ref)
+                if run and local_task_goal.active(run):
+                    # The admission queue has not delivered this human turn yet.
+                    # Yield at the next native boundary instead of racing it with
+                    # a controller-generated review/continuation.
+                    run["goalUserPending"] = key
+                    local_base._save_meta(ref)
         self._ensure_admission_loop()
         self._admission_wake.set()
         # Let an idle scheduler claim the item, but never wait for preflight or launch.
@@ -1756,9 +1768,15 @@ class Runner:
             if item is not None:
                 self._admission_wake.set()
                 if mode == "cancelled" or mode == "starting":
-                    return {"ok": True, "data": runner_admission.status_data(
-                        item, self._admission.position(item.key))}
-            stopped = await asyncio.to_thread(local_stream.stop_sync, {}, ref)
+                    from app.services import local_base
+                    with local_base._LOCK:
+                        current = local_base._RUNS.get(ref) or {}
+                        goal_owned = bool(current.get("goalContract")) and current.get("cli") != "pi"
+                    if not goal_owned:
+                        return {"ok": True, "data": runner_admission.status_data(
+                            item, self._admission.position(item.key))}
+            stopped = await asyncio.to_thread(local_stream.stop_sync,
+                {"taskGoalControl": m.get("taskGoalControl")}, ref)
             if item is not None and stopped.get("ok"):
                 self._admission.finish(item.key, "cancelled")
             return {"ok": True, "data": stopped}

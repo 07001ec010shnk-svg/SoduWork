@@ -93,13 +93,39 @@ class AgentSetupStateTests(unittest.TestCase):
                 self.assertTrue(item["runtimeIssue"])
 
     def test_metadata_warning_does_not_make_working_npm_cli_broken(self):
-        item = self.detect("qwen")
+        with patch.object(agent_setup, "_runtime_issue", return_value=""):
+            item = self.detect("codex")
         self.assertTrue(item["installed"])
         self.assertTrue(item["present"])
         self.assertEqual(item["setupState"], "ready")
         self.assertEqual(item["runtimeIssue"], "")
         self.assertTrue(item["warnNow"])
         self.assertEqual(item["verFrom"], "cli")
+
+    def test_source_verified_adapters_require_the_reviewed_package_version(self):
+        for key in ("kimi", "qwen", "dsh"):
+            for version in ("", "99.0.0"):
+                with self.subTest(key=key, version=version):
+                    self.pkg.return_value = version
+                    item = self.detect(key)
+                    self.assertTrue(item["present"])
+                    self.assertFalse(item["installed"])
+                    self.assertEqual(item["setupState"], "broken")
+                    self.assertIn(agent_setup._SPECS[key]["version"], item["runtimeIssue"])
+                    self.assertIn("已验证版本", item["why"])
+
+    def test_reviewed_metadata_cannot_make_an_unreviewed_selected_cli_ready(self):
+        for key in ("kimi", "qwen", "dsh"):
+            for reported in ("0.1.0", agent_setup._SPECS[key]["version"]):
+                with self.subTest(key=key, reported=reported), \
+                        patch.object(agent_setup, "_acp_runtime_issue", return_value=""):
+                    self.pkg.return_value = agent_setup._SPECS[key]["version"]
+                    self.version.return_value = reported
+                    item = self.detect(key)
+                    self.assertEqual(item["installed"], reported != "0.1.0")
+                    if reported == "0.1.0":
+                        self.assertEqual(item["setupState"], "broken")
+                        self.assertIn("选中的执行程序版本为 0.1.0", item["runtimeIssue"])
 
 
     def test_incomplete_execution_dependency_is_broken_and_not_dispatchable(self):

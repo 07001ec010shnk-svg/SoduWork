@@ -490,6 +490,7 @@ _PERSIST_KEYS += ("stream", "terminal", "contextSegments", "compacted", "context
 _PERSIST_KEYS += ("executionStartedAt",)
 _PERSIST_KEYS += ("accessPolicy", "nextAccessPolicy", "appliedAccessPolicy", "skillSelection")
 _PERSIST_KEYS += ("conversationMode", "turnStartSeq", "admissionKey", "reasoningEffort", "codexTransport")
+_PERSIST_KEYS += ("goalContract", "goalState", "goalUserPending", "goalTurnOwned")
 _PERSIST_KEYS += ("turnEndIdentity", "admissionStartSeq")
 _PERSIST_KEYS += ("usageReceipts", "modelLocalOnly", "activeUsageOwner")
 

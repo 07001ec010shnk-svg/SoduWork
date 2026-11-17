@@ -14,6 +14,7 @@ import tempfile
 import time
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 sys.path.insert(0, ".")
 
@@ -205,6 +206,46 @@ def main() -> int:
         assert env["DSH_PATH"] == root and env["DSH_TELEMETRY_DISABLED"] == "1"
         checks += 1
 
+        loader_root = Path(data_root) / "loader fixtures"
+        loader_root.mkdir()
+        loader = loader_root / "dsh_acp_settlement.mjs"
+        storage = loader_root / "dsh_session_storage.mjs"
+        for resource in (loader, storage):
+            resource.write_text("// Fixture", encoding="utf-8")
+        loader, storage = loader.resolve(), storage.resolve()
+        for platform_name, os_name in (("darwin", "posix"), ("linux", "posix"), ("win32", "nt")):
+            platform_os = SimpleNamespace(name=os_name, path=os.path)
+            options = ["--import=" + loader.as_uri()]
+            if os_name == "nt":
+                options.insert(0, "--import=" + storage.as_uri())
+            platform_env = {"NODE_OPTIONS": "--require missing-inherited.cjs --invalid-option"}
+            with patch.object(dsh_runtime, "os", platform_os), \
+                    patch.object(dsh_runtime.sys, "platform", platform_name), \
+                    patch.object(dsh_runtime, "__file__", str(loader_root / "dsh_runtime.py")):
+                dsh_runtime.apply_env(platform_env, data_root)
+                assert platform_env["NODE_OPTIONS"].split() == options
+                assert platform_env["SODUWORK_DSH_ACP_SETTLEMENT"] == "1"
+                assert platform_env["DSH_PATH"] == root
+                if os_name == "nt":
+                    assert platform_env["SODUWORK_DSH_STORAGE_RUNTIME"] == root
+                else:
+                    assert "SODUWORK_DSH_STORAGE_RUNTIME" not in platform_env
+                first = dict(platform_env)
+                dsh_runtime.apply_env(platform_env, data_root)
+                assert platform_env == first, "Repeated environment setup must keep one copy of each loader"
+            checks += 1
+
+        missing_loader_root = Path(data_root) / "missing-settlement-resource"
+        missing_loader_root.mkdir()
+        missing_loader_root.joinpath("dsh_session_storage.mjs").write_text("// Fixture", encoding="utf-8")
+        with patch.object(dsh_runtime, "__file__", str(missing_loader_root / "dsh_runtime.py")):
+            try:
+                dsh_runtime.apply_env({}, data_root)
+                raise AssertionError("A missing child-settlement loader must prevent execution")
+            except RuntimeError as exc:
+                assert "子代理等待组件缺失" in str(exc)
+        checks += 1
+
         workspace = os.path.join(data_root, "workspace")
         os.makedirs(workspace, exist_ok=True)
         original_data_root = local_base._data_root
@@ -352,6 +393,7 @@ def main() -> int:
         original_popen = dsh_runtime.subprocess.Popen
         original_kill = dsh_runtime._kill_tree
         spawned = []
+        launches = []
 
         def fake_kill(proc) -> None:
             proc.killed = True
@@ -360,7 +402,10 @@ def main() -> int:
 
         def use_process(proc):
             spawned.append(proc)
-            dsh_runtime.subprocess.Popen = lambda *args, **kwargs: proc
+            def fake_popen(*args, **kwargs):
+                launches.append((args, kwargs))
+                return proc
+            dsh_runtime.subprocess.Popen = fake_popen
 
         try:
             dsh_runtime._kill_tree = fake_kill
@@ -381,6 +426,40 @@ def main() -> int:
             assert request["params"]["protocolVersion"] == 1
             assert request["params"]["clientInfo"]["name"] == "soduwork-runtime-probe"
             checks += 4
+
+            staged_root = os.path.join(data_root, "staged host")
+            os.makedirs(staged_root)
+            for platform_name, os_name in (("darwin", "posix"), ("linux", "posix"), ("win32", "nt")):
+                platform_os = SimpleNamespace(**vars(os))
+                platform_os.name = os_name
+                platform_os.environ = {
+                    "NODE_OPTIONS": "--require missing-inherited.cjs --invalid-option",
+                    "ELECTRON_RUN_AS_NODE": "1", "DSH_PATH": root,
+                }
+                options = ["--import=" + loader.as_uri()]
+                if os_name == "nt":
+                    options.insert(0, "--import=" + storage.as_uri())
+                use_process(_FakeProcess(stdout=response))
+                probe_root = os.path.join(data_root, "probe-" + platform_name)
+                with patch.object(dsh_runtime, "os", platform_os), \
+                        patch.object(dsh_runtime.sys, "platform", platform_name), \
+                        patch.object(dsh_runtime, "__file__", str(loader_root / "dsh_runtime.py")):
+                    assert dsh_runtime._probe_runtime("fake-dsh", staged_root, probe_root, 0.3) == ""
+                args, kwargs = launches[-1]
+                assert args == (["fake-dsh"],)
+                probe_env = kwargs["env"]
+                assert probe_env["NODE_OPTIONS"].split() == options
+                assert probe_env["SODUWORK_DSH_ACP_SETTLEMENT"] == "1"
+                assert probe_env["DSH_PATH"] == kwargs["cwd"] == staged_root
+                assert os.path.dirname(probe_env["DSH_HOME"]) == probe_root
+                assert "ELECTRON_RUN_AS_NODE" not in probe_env
+                if os_name == "nt":
+                    assert probe_env["SODUWORK_DSH_STORAGE_RUNTIME"] == staged_root
+                    assert "creationflags" in kwargs and "start_new_session" not in kwargs
+                else:
+                    assert "SODUWORK_DSH_STORAGE_RUNTIME" not in probe_env
+                    assert kwargs["start_new_session"] is True
+                checks += 1
 
             early = _FakeProcess(
                 stderr="plugin tree failed to load: Cannot find module sharp\n",

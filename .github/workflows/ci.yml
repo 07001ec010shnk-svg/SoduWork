@@ -154,6 +154,12 @@ jobs:
       - name: Verify Agent probe replies and persisted outcomes
         run: python -m unittest -v test_private_agent_probe.ProbeMarkerTests test_private_agent_probe.ProbePersistenceTests
         working-directory: hub-backend
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+          package-manager-cache: false
+      - name: Verify DeepSeek parent and child settlement
+        run: node --test client/tests/dsh-acp-settlement.test.cjs client/tests/dsh-session-storage.test.cjs
       - name: Verify frozen Runner network components over real HTTPS
         run: python e2e_runner_tls.py --output ../runner-tls-evidence
         working-directory: hub-backend
