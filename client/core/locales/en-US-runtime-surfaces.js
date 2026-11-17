@@ -1,5 +1,8 @@
 (function (global) {
   const messages = {
+    "原设备凭据无法验证": "The original device credentials could not be verified.",
+    "原设备凭据无法验证，已保留原记录": "The original device credentials could not be verified. The original record has been preserved.",
+    "原设备凭据尚未迁移，请重试连接": "The original device credentials have not been migrated yet. Please retry the connection.",
     "待整理的需求；“待补充”表示仍需完善背景或完成标准": "Issues to organize; “More information needed” means the background or acceptance criteria still need to be completed",
     "全部可见": "All visible",
     "我提出、负责或执行的需求，以及待我确认或我作为仓库成员参与的需求。": "Issues I created, own, or execute, plus issues awaiting my confirmation or involving me as a repository member.",
@@ -129,6 +132,8 @@
     "model.detail.当前上下文超过模型容量，历史和本轮输入已保留": "The context exceeds the model's capacity. Your history and current input are saved.",
     "model.detail.当前模型不接受图片输入，请切换支持图片的模型或启用视觉适配": "This model does not accept images. Choose an image-capable model or enable vision adaptation.",
     "model.detail.模型服务拒绝了当前凭据或模型权限": "The model service rejected these credentials or model permissions.",
+    "model.detail.模型请求被拒绝": "The model request was rejected.",
+    "model.detail.工具已完成，请求模型继续生成时被拒绝": "The tool completed, but the request to continue generating was rejected.",
     "model.detail.模型服务地址或模型不存在": "The model service URL or model does not exist.",
     "model.detail.模型服务当前繁忙或额度受限": "The model service is busy or its allowance is limited.",
     "model.detail.模型服务暂时不可用": "The model service is temporarily unavailable.",

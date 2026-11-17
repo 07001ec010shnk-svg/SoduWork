@@ -215,6 +215,32 @@ for (const oldHub of ['http://localhost:18989', '']) test('fixed product isolate
   assert.ok(f.api.taskStorageKey('ops').includes(encodeURIComponent(production)));
 });
 
+test('offline migration deletes only the exact legacy credential acknowledged by native storage', async () => {
+  const key = 'soduwork_work_device_secret', origin = 'soduwork_work_legacy_auth_hub_v1';
+  for (const scenario of ['stored', 'wrong-origin', 'wrong-device', 'changed-key', 'changed-origin', 'failed', 'unknown','dev-without-address']) {
+    const unknown = ['unknown','dev-without-address'].includes(scenario);
+    const sourceHub = unknown ? '' : legacy;
+    let migrations = 0;
+    const f = fixture({ soduwork_work_hub_url:sourceHub, soduwork_work_hub_environment_v1:scenario === 'dev-without-address' ? 'development' : '', [key]:'old-key' }, {
+      getHubConnection: async () => ({hub:production}),
+      deviceAuthMigrateLegacy: async raw => {
+        migrations++;
+        assert.deepEqual({...raw}, {hub:legacy, clientId:'legacy-user', legacySecret:'old-key'});
+        if (scenario === 'failed') throw Error('store unavailable');
+        if (scenario === 'changed-key') f.values.set(key, 'replacement');
+        if (scenario === 'changed-origin') f.values.set(origin, 'https://other.invalid');
+        return {stored:true, hub:scenario === 'wrong-origin' ? production : legacy,
+          clientId:scenario === 'wrong-device' ? 'other-id' : raw.clientId};
+      },
+    }, undefined, false);
+    await f.api.clientAuthPolicy();
+    assert.equal(migrations, unknown ? 0 : 1, scenario);
+    assert.equal(f.values.get(key), scenario === 'stored' ? undefined : scenario === 'changed-key' ? 'replacement' : 'old-key', scenario);
+    assert.equal(f.api.hubBase(), production);
+    assert.ok(f.requests.every(row => !JSON.stringify(row).includes('old-key')));
+  }
+});
+
 test('only an explicit main-process internal loopback connection overrides the product endpoint', async () => {
   for (const connection of [ { hub: 'http://127.0.0.1:54321', internalTest: false },
     { hub: 'https://other.example.com', internalTest: true } ]) {

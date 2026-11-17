@@ -51,7 +51,7 @@ function statusOf(source, payload, error) {
   return Number(match && match.slice(1).find(Boolean) || LEGACY_CAPACITY_STATUS.get(source) || 0);
 }
 
-function describe(value) {
+function describe(value, afterToolResult = false) {
   const raw = textOf(value).trim();
   const payload = value && typeof value === 'object' ? value : payloadOf(raw);
   const error = payload && payload.error && typeof payload.error === 'object'
@@ -85,7 +85,9 @@ function describe(value) {
       publicText = '当前上下文超过模型容量，历史和本轮输入已保留';
     } else if (IMAGE_REJECTION_RE.test(combined)) {
       publicText = '当前模型不接受图片输入，请切换支持图片的模型或启用视觉适配';
-    } else if (status === 401 || status === 403) {
+    } else if (status === 403) {
+      publicText = afterToolResult ? '工具已完成，请求模型继续生成时被拒绝' : '模型请求被拒绝';
+    } else if (status === 401) {
       publicText = '模型服务拒绝了当前凭据或模型权限';
     } else if (status === 404) {
       publicText = '模型服务地址或模型不存在';
@@ -102,8 +104,8 @@ function describe(value) {
     ...(billing ? { code: 'upstream_billing_error', providerCode } : {}) };
 }
 
-function forDisplay(value, limit = 200) {
-  const info = describe(value);
+function forDisplay(value, limit = 200, afterToolResult = false) {
+  const info = describe(value, afterToolResult);
   if (!info.raw) return '';
   if (info.publicText) return info.publicText;
   return info.raw.replace(/\s+/g, ' ').trim().slice(0, Math.max(40, Number(limit) || 200));

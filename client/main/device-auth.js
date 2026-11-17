@@ -76,16 +76,17 @@ function _newDeviceId() { return 'soduwork-' + crypto.randomBytes(12).toString('
 function _available() {
   return !!_credentials?.available();
 }
-function _readDoc(app) {
+function _readDoc(app, strict = false) {
   const file = _file(app);
   let unreadable = false;
   for (const candidate of [file, file + '.bak']) {
     try {
       const data = JSON.parse(fs.readFileSync(candidate, 'utf8'));
       if (data && data.v === 1 && data.profiles &&
-          (_credentials?.platform !== 'linux' || typeof data.profiles === 'object' && !Array.isArray(data.profiles))) return data;
+          (!strict && _credentials?.platform !== 'linux' || typeof data.profiles === 'object' && !Array.isArray(data.profiles))) return data;
       unreadable = true;
     } catch (error) { if (error.code !== 'ENOENT') unreadable = true; /* try the recovery copy */ }
+    if (strict && unreadable) throw new Error('原设备凭据无法验证');
   }
   if (unreadable && _credentials?.platform === 'linux')
     throw new Error('设备凭据文件暂时无法读取，原文件已保留，请检查文件权限或恢复备份');
@@ -111,9 +112,9 @@ function _replaceFile(next, file, backup) {
   fs.rmSync(next, { force: true });
   if (backup) { try { fs.rmSync(backup, { force: true }); } catch (_) {} }
 }
-function _writeDoc(app, doc, suffix = '') {
+function _writeDoc(app, doc, suffix = '', atomic = false) {
   const file = _file(app) + suffix, next = file + '.next', backup = file + '.bak';
-  if (_credentials?.platform === 'linux') {
+  if (atomic || _credentials?.platform === 'linux') {
     // Never overwrite a readable identity in-place when Linux persistence fails.
     const temporary = file + '.next-' + crypto.randomUUID();
     fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -166,6 +167,29 @@ function _writeDoc(app, doc, suffix = '') {
 function _decrypt(app, row) {
   return _credentials.decrypt(_file(app), row);
 }
+
+function migrateLegacy(app, raw) {
+  try {
+    const hub = _origin(raw.hub), {clientId, legacySecret} = raw;
+    if (!_available() || hub === 'https://unassigned-legacy-hub.invalid' ||
+        typeof clientId !== 'string' || !DEVICE_ID.test(clientId) || clientId === 'u-unknown' ||
+        typeof legacySecret !== 'string' || !legacySecret || legacySecret.length > 4096 || legacySecret.trim() !== legacySecret)
+      return {stored:false};
+    const doc = _readDoc(app, true), slot = _slot(hub), existing = doc.profiles[slot];
+    if (Object.hasOwn(doc.profiles, slot)) {
+      if (existing?.hub !== hub || existing.clientId !== clientId || _decrypt(app, existing) !== legacySecret) return {stored:false};
+    } else {
+      doc.profiles[slot] = credentialRow(hub, clientId, legacySecret);
+      _writeDoc(app, doc, '', true);
+    }
+    return {stored:true, hub, clientId};
+  } catch (_) { return {stored:false}; }
+}
+
+function credentialRow(hub, clientId, secret) {
+  return { hub, clientId, cipher: _credentials.encrypt(secret).toString('base64'),
+    createdAt: new Date().toISOString(), ...(_credentials.platform === 'linux' ? { storage: 'electron-safe-storage' } : {}) };
+}
 function _recoverRow(app, hub) {
   /*
    * Restore same-environment backup records only when current safeStorage keys can decrypt
@@ -204,7 +228,8 @@ function _ensure(app, raw, allowLegacy = false) {
   if (!require('./hub-endpoint.cjs').accepts(app, hub)) throw new Error('此客户端使用固定的 SoduWork 服务');
   const requestedId = String(raw && raw.clientId || '').trim();
   if (requestedId && !DEVICE_ID.test(requestedId)) throw new Error(TEXT.badDevice);
-  const doc = _readDoc(app), key = _slot(hub);
+  const preserveLegacy = !!(raw?.legacySecret || raw?.preserveLegacyIdentity);
+  const doc = _readDoc(app, preserveLegacy), key = _slot(hub);
   let row = doc.profiles[key] || null;
   let changed = false;
   let clientId = row && String(row.clientId || '').trim();
@@ -220,6 +245,8 @@ function _ensure(app, raw, allowLegacy = false) {
     return { hub, clientId, secret: legacyKey, pendingMigration: row.cipher };
   }
   let secret = row ? _decrypt(app, row) : '';
+  if (preserveLegacy && Object.hasOwn(doc.profiles, key) &&
+      (row?.hub !== hub || !DEVICE_ID.test(clientId) || !secret)) throw new Error('原设备凭据无法验证，已保留原记录');
   if (row && !DEVICE_ID.test(clientId) && process.platform === 'darwin')
     throw new Error('设备凭据记录无效，已保留原记录，请联系支持人员检查');
   if (row && (!DEVICE_ID.test(clientId) || !secret)) {
@@ -242,6 +269,7 @@ function _ensure(app, raw, allowLegacy = false) {
     changed = true;
   }
   if (!row) {
+    if (raw?.preserveLegacyIdentity && !raw?.legacySecret) throw new Error('原设备凭据尚未迁移，请重试连接');
     const legacy = String(raw && raw.legacySecret || '').trim() ||
       (requestedId ? _legacyRunner(app, hub, requestedId) : '');
     /*
@@ -251,8 +279,7 @@ function _ensure(app, raw, allowLegacy = false) {
     clientId = legacy ? requestedId : _newDeviceId();
     if (!DEVICE_ID.test(clientId)) throw new Error(TEXT.badDevice);
     secret = legacy || crypto.randomBytes(32).toString('base64url');
-    row = { hub, clientId, cipher: _credentials.encrypt(secret).toString('base64'),
-      createdAt: new Date().toISOString(), ...(_credentials.platform === 'linux' ? { storage: 'electron-safe-storage' } : {}) };
+    row = credentialRow(hub, clientId, secret);
     doc.profiles[key] = row;
     changed = true;
   }
@@ -745,6 +772,8 @@ function install({ app, ipcMain, safeStorage }) {
   });
   ipcMain.handle('device-auth-select-hub', (_event, hub) => selectHub(app, hub));
   ipcMain.handle('device-auth-bootstrap', (_event, raw) => enroll(app, raw || {}));
+  ipcMain.handle('device-auth-migrate-legacy', (event, raw) => require('./access-control/preferences').isTrusted(event)
+    ? migrateLegacy(app, raw) : {stored:false});
   ipcMain.handle('device-auth-login', async (event, raw) => { const result = await login(app, raw || {}); notifySessionChanged(app, event?.sender, result); return result; });
   ipcMain.handle('device-account-action', async (event, raw) => { const result = await accountAction(app, raw || {}); if (!['emailChallenge', 'emailChallengeStatus'].includes(raw?.action)) notifySessionChanged(app, event?.sender, result); return result; });
   ipcMain.handle('account-profile-refresh', () => refreshProfile(app));

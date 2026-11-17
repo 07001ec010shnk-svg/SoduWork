@@ -22,6 +22,47 @@ function windowsFixture(t) {
   return fixture();
 }
 
+test('offline legacy import preserves Hub selection and other identities and rejects conflicts', async t => {
+  const f = accountTransitionFixture(t);
+  const good = {hub:'https://former.invalid', clientId:'former-device', legacySecret:'fixture-former-key'};
+  const file = path.join(f.root, 'device-auth.json');
+  const calls = [];
+  t.mock.method(global, 'fetch', async (url, options) => {
+    calls.push({url, options});
+    return f.enrolled();
+  });
+  const active = await f.invoke('bootstrap');
+  const before = JSON.parse(fs.readFileSync(file));
+  const frame = {}, sender = {mainFrame:frame, isDestroyed:()=>false,
+    getURL:()=>require('node:url').pathToFileURL(path.resolve(__dirname, '../desk.html')).href};
+  const handler = f.handlers.get('device-auth-migrate-legacy');
+  assert.deepEqual(handler({}, good), {stored:false});
+  const migrate = input => handler({sender, senderFrame:frame}, input);
+  for (let n = 0; n < 2; n++) assert.deepEqual(migrate(good), {stored:true, hub:good.hub, clientId:good.clientId});
+  assert.equal(migrate({...good, legacySecret:'different-key'}).stored, false);
+  assert.equal(migrate({...good, clientId:'another-device'}).stored, false);
+  const after = JSON.parse(fs.readFileSync(file));
+  assert.equal(before.activeHub, after.activeHub);
+  for (const [id, row] of Object.entries(before.profiles)) assert.deepEqual(after.profiles[id], row);
+  assert.equal(f.deviceAuth.identity(f.app).clientId, active.clientId);
+  assert.equal(calls.length, 1);
+  assert.ok(!JSON.stringify(after).includes(good.legacySecret));
+  await f.deviceAuth.enroll(f.app, {hub:good.hub});
+  assert.equal(calls.at(-1).options.headers['X-Device-Key'], good.legacySecret);
+  assert.equal(JSON.parse(calls.at(-1).options.body).device, good.clientId);
+  await f.invoke('bootstrap');
+  assert.equal(f.deviceAuth.identity(f.app).clientId, active.clientId);
+  fs.writeFileSync(file, 'interrupted credential document');
+  assert.equal(migrate({...good, hub:'https://third.invalid'}).stored, false);
+  assert.equal((await f.deviceAuth.enroll(f.app, good)).stored, false);
+  assert.equal(fs.readFileSync(file, 'utf8'), 'interrupted credential document');
+  fs.unlinkSync(file);
+  fs.writeFileSync(file + '.bak', 'unreadable backup');
+  assert.equal(migrate(good).stored, false);
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readFileSync(file + '.bak', 'utf8'), 'unreadable backup');
+});
+
 function accountTransitionFixture(t) {
   const f = fixture();
   t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));

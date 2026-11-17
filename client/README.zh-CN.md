@@ -58,6 +58,8 @@
 
 `npm test` 运行客户端的单元和契约检查。`npm run check:layout` 检查源码与生成目录的边界。`e2e/` 脚本应按文件声明选择隔离夹具或真实服务：隔离界面通过不等于真实模型、用户账号或线上交付验证通过。
 
+Windows 上运行 `npm run test:e2e:user:isolated`，使用全新的 Electron 配置目录、注册的测试账号、本地 Hub 和模拟模型服务验证桌面用户旅程。在 `hub-backend/.venv` 安装 `hub-backend/requirements-test.txt`，或将 `SODUWORK_TEST_PYTHON` 指向已安装这些依赖的解释器。结果写入 `outputs/isolated-user-journeys/report.json`，可通过 `SODUWORK_JOURNEY_OUTPUT` 指定其他证据目录。单独验证工作窗恢复时运行 `npm run test:e2e:user:isolated -- --only=UJ-09`，脚本也会执行恢复所需的任务创建和分派。
+
 Windows 执行服务在工具初始化前加入原生 Job Object。专用 Windows PowerShell 辅助进程持有该对象，退出时确认其中的进程全部结束，包括中间 Windows 父进程已经退出的 Git Bash 后代进程。这是生命周期清理机制，不是安全沙箱；Linux 和 macOS 继续使用现有的进程树清理。
 
 验收摘要的隔离验证命令为 `node e2e/acceptance-summary-export.cjs /absolute/evidence/directory /path/to/test/python`。Python 环境需要后端测试依赖。该脚本验证真实原生 IPC、设备认证与保存字节，保存框选择由测试注入，不使用真实模型或生产账号。

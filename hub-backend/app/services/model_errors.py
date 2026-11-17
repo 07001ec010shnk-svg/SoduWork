@@ -71,7 +71,9 @@ def public_failure(value) -> str:
     suffix = f"（HTTP {status}）" if status else ""
     if status == 404:
         return "模型服务地址或模型不存在" + suffix + "；请切换可用模型，或联系管理员核对服务地址与模型名称。"
-    if status in {401, 403}:
+    if status == 403:
+        return "模型请求被拒绝" + suffix
+    if status == 401:
         return "模型服务拒绝了当前凭据或模型权限" + suffix + "；请检查模型授权或切换有权限的模型。"
     if status == 429:
         return "模型服务当前繁忙或额度受限" + suffix + "；请稍后重试或检查模型额度。"
