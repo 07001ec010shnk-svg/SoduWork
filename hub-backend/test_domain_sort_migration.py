@@ -15,7 +15,7 @@ import sqlalchemy as sa
 
 from app.models import AuditLog, Domain, User
 from app.config import get_settings
-from app.schema_migrations import _config
+from app.schema_migrations import _config, _head_revision
 
 
 migration = importlib.import_module("migrations.versions.0091_domain_sort_validation")
@@ -157,7 +157,7 @@ class DomainSortMigrationTests(unittest.TestCase):
                     finally:
                         get_settings.cache_clear()
                 with engine.connect() as connection:
-                    self.assertEqual(connection.scalar(sa.text("SELECT version_num FROM alembic_version")), migration.revision)
+                    self.assertEqual(connection.scalar(sa.text("SELECT version_num FROM alembic_version")), _head_revision())
                     self.assertEqual(dict(connection.execute(sa.text("SELECT id, sort FROM domain")).all()),
                                      {"valid": 9, "legacy": 10})
                     self.assertEqual(len(self.audits(connection)), 1)

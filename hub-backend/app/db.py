@@ -294,12 +294,16 @@ _LEGACY_DROP = {
 
 
 def _ensure_columns(conn) -> None:
+    from importlib import import_module
     from sqlalchemy import inspect, text
     is_pg = conn.dialect.name == "postgresql"
     ts = "TIMESTAMP WITH TIME ZONE" if is_pg else "DATETIME"
     json_t = "JSONB" if is_pg else "TEXT"
     now = "CURRENT_TIMESTAMP" if is_pg else "'1970-01-01 00:00:00'"
     insp = inspect(conn)
+    # Legacy adoption stamps the latest head instead of replaying its revisions.
+    # create_all leaves existing VARCHAR columns unchanged on PostgreSQL.
+    import_module("migrations.versions.0092_task_text_storage").migrate_schema(conn)
     for table, cols in _WANT_COLUMNS.items():
         try:
             existing = {c["name"] for c in insp.get_columns(table)}
