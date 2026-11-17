@@ -174,15 +174,6 @@
       "source": "https://www.npmjs.com/package/@moonshot-ai/kimi-code/v/2.6.2",
       "path": "third-party/licenses/kimi-code-LICENSE.txt",
       "sha256": "23cc68e17992e0b512ae2e80afc5787d7d8e0fbfbdb4fff54ec0245508fa400e"
-    },
-    {
-      "id": "resvg-py-rust",
-      "name": "resvg_py and locked Rust dependencies",
-      "version": "0.5.0",
-      "license": "MIT AND BSD-2-Clause AND BSD-3-Clause AND Zlib AND Unicode-3.0 AND Apache-2.0 AND (Apache-2.0 WITH LLVM-exception)",
-      "source": "https://files.pythonhosted.org/packages/2a/64/a24f8f29d8bf158e01f6ccad68a1366afd922dc0f0977cbd0c0aaa7a22f2/resvg_py-0.5.0.tar.gz",
-      "path": "third-party/licenses/resvg_py-0.5.0-NOTICES.txt",
-      "sha256": "9b39dab342fbd4d3e5c77029bd50f203d95e67835ec9f0f86339b4ad07de6f36"
     }
   ],
   "piVersion": "1.4.0",
@@ -1505,11 +1496,6 @@
       "name": "dnspython",
       "version": "2.9.0",
       "notice": "dnspython"
-    },
-    {
-      "name": "resvg_py",
-      "version": "0.5.0",
-      "notice": "resvg-py-rust"
     }
   ],
   "lockLicenseReviews": [

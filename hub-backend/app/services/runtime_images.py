@@ -20,7 +20,6 @@ CFG_KEY = "_inputImages"
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TOTAL_BYTES = 20 * 1024 * 1024
 MAX_IMAGES = 20
-_SVG_AGENTS = {"codex", "codex-harness", "opencode", "dsh", "kimi", "qwen"}
 # Hints for formats missing from some hosts' MIME databases, not an allowlist.
 # Any declared image/* type can travel through the same handoff.
 _IMAGE_TYPES = {
@@ -125,7 +124,7 @@ def _read(path: str, root: str) -> bytes:
     return data
 
 
-def prepare(cfg: dict | None, staged: list[dict], root: str, *, agent: str = "") -> dict:
+def prepare(cfg: dict | None, staged: list[dict], root: str) -> dict:
     """Called after trusted staging, for both first and follow-up turns."""
     fresh = dict(cfg or {})
     root = os.path.realpath(root)
@@ -139,20 +138,10 @@ def prepare(cfg: dict | None, staged: list[dict], root: str, *, agent: str = "")
         data = _read(path, root)
         path = os.path.realpath(path)
         mime = _mime(data, filename, content_type)
-        source = None
-        if mime == "image/svg+xml" and agent in _SVG_AGENTS:
-            from . import svg_image
-            source = {"path": path, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
-            try:
-                path, data = svg_image.derived_png(data, root)
-            except svg_image.SvgImageError as exc:
-                raise ImageInputError(str(exc)) from exc
-            mime = "image/png"
         total += len(data)
         if total > MAX_TOTAL_BYTES or len(images) >= MAX_IMAGES:
             raise ImageInputError("本轮图片合计不能超过 20 MB 或 20 张，请分次发送")
-        images.append({"path": path, "mimeType": mime, "size": len(data), "sha256": hashlib.sha256(data).hexdigest(),
-                       **({"source": source} if source else {})})
+        images.append({"path": path, "mimeType": mime, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()})
     fresh[CFG_KEY] = images
     # Native Codex already owns its --image= argument implementation.
     fresh["images"] = [item["path"] for item in images]
@@ -185,13 +174,6 @@ def _blocks(value: dict, *, encode: bool = True) -> list[dict]:
             raise ImageInputError("本轮图片合计不能超过 20 MB，请分次发送")
         if item.get("size") != len(data) or item.get("sha256") != hashlib.sha256(data).hexdigest() or item.get("mimeType") != mime:
             raise ImageInputError("图片附件已变化，请重新上传后重试")
-        if "source" in item:
-            source = item["source"]
-            if not isinstance(source, dict):
-                raise ImageInputError("图片附件清单无效，请重新上传")
-            original = _read(str(source.get("path") or ""), root)
-            if source.get("size") != len(original) or source.get("sha256") != hashlib.sha256(original).hexdigest():
-                raise ImageInputError("SVG 原附件已变化，请重新上传后重试")
         if encode:
             blocks.append({"type": "image", "mimeType": mime, "data": base64.b64encode(data).decode("ascii")})
     return blocks

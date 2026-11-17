@@ -77,7 +77,6 @@ hidden = [
     "app.services.acp_agents",
     "app.services.acp_bridge",
     "app.services.runtime_images",
-    "app.services.svg_image", "resvg_py", "PIL.Image",
     "app.services.ai_local",
     "app.services.local_base",
     "app.services.agent_setup",

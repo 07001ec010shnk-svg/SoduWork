@@ -2246,10 +2246,6 @@ def _release(handle) -> None:
 
 
 def main() -> None:
-    if len(sys.argv) == 2 and sys.argv[1] == "--soduwork-svg-raster-worker":
-        from app.services import svg_image
-        raise SystemExit(svg_image.worker_main())
-
     if len(sys.argv) > 2 and sys.argv[1] == '--soduwork-spool-worker':
         from app.services import local_spool_worker
         raise SystemExit(local_spool_worker.main(sys.argv[2]))

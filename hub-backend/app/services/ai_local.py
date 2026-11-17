@@ -694,7 +694,7 @@ def _dispatch_sync_once(cfg: dict, t, files: list | None = None,
     staged = _stage_inputs(sid, files)
     from . import runtime_images
     try:
-        cfg = runtime_images.prepare(cfg, staged, os.path.join(_store_dir(sid), "inputs"), agent=key)
+        cfg = runtime_images.prepare(cfg, staged, os.path.join(_store_dir(sid), "inputs"))
     except (runtime_images.ImageInputError, OSError) as exc:
         return {"ok": False, "error": str(exc)}
     if staged:
