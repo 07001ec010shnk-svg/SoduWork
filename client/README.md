@@ -24,11 +24,23 @@ The desktop uses Electron and native HTML/CSS/JavaScript. The React management U
 
 Conversations and task execution share the same session path: `panels-chat` → `conversationSession` → main-process IPC → `agent-runtime` → Pi or Runner. AI team assignments open the corresponding conversation. Requirement drawers expand task traces; legacy detail links resolve the same requirement rather than creating duplicate records.
 
+When the requirement creator and executor are the same person, execution continues in the original conversation. An explicitly selected runtime or model is applied through the normal native selection transaction while retaining the conversation ID and history. Acceptance also reuses the original execution conversation. These rules apply to Pi and every other runtime; only an authoritative missing-archive result permits a new conversation. Temporary read failures, denied access, and unconfirmed runtime switches preserve the original conversation and stop submission.
+
 The desktop rail opens the requirement pool directly. The old task board, detail chat box, and separate AI workstation conversation are retired. The [release scope](../docs/release-scope.en.md) describes the shared structure, assignment rules, and compatibility boundaries.
 
 HTML script order defines dependencies. When splitting scripts, verify resource references, shared state, loading order, and actual Electron behavior.
 
+Desktop Markdown keeps single tildes literal, so ranges such as `3~5` and `7~14` in one paragraph retain their separators. Use `~~text~~` for strikethrough. The shared `core/markdown.js` configuration applies to conversation history, streamed replies, read-aloud text extraction and Markdown previews; saved source text is unchanged.
+
+Conversation automation drafts accept relative delays such as `五分钟后` (in five minutes). The execution instant is anchored to the message submission time and retained when later messages only refine the work. Missing, invalid or ambiguous times require clarification instead of defaulting to daily 18:00. Incomplete task descriptions remain drafts. Users can cancel creation, continue refining the same card, or return to ordinary chat. After creation, explicit edit requests prepare changes for confirmation and update the original schedule ID; cancelling an edit keeps the saved configuration. Disabling stops future automatic runs, while closing the card only dismisses its view. Run `node e2e/automation-sheet-layout.cjs /absolute/evidence/directory` for isolated Electron form and conversation-routing checks using synthetic parser and schedule APIs.
+
+Unconfirmed drafts support repeated time changes. Explicit time-only messages using `后`, `之后`, `以后` or `过后`, such as `修改为10分钟以后`, update the same draft locally, even when model extraction is unavailable. Each delay uses that message's submission time, captured before asynchronous access checks, and synchronizes scheduling annotations in the title, instructions and acceptance criteria without changing unrelated business durations. Restoring the card retains the latest instant; nothing is created until confirmation.
+
+Local draft extraction honors the model's detected output-token parameter. Provider failures retain a safe HTTP status with separate guidance for credentials, access, endpoint/model selection, incompatible parameters, throttling and service outages; raw provider responses remain private and calls are not automatically retried. Failed refinements retain this diagnostic and the original draft. Runner readiness only checks execution prerequisites and does not confirm successful model extraction.
+
 Native history and downloaded conversation replicas retain their account and Hub boundaries when listed, read, restored, or changed, including offline use. Unknown-owner archives require explicit import as separate read-only copies. Cached content does not grant permission to execute a requirement or cloud conversation; resolving a verified native source must preserve its original runtime, model, and permissions.
+
+Work-form conversations show their saved runtime selection in the sidebar before execution, labelled “Selected runtime”. Selection changes and reopening preserve this icon independently of actual execution provenance. Legacy drafts without a saved selection do not infer it from their archive format. Run `node e2e/workspace-runtime-label.cjs /absolute/evidence/directory` to check draft updates, history restoration and narrow sidebar layouts in isolated Electron.
 
 Remote notice history and receipt markers use account-scoped IndexedDB transactions and Web Locks when both browser capabilities are available. Local reminders remain in the existing localStorage cache. Migration retires a legacy snapshot only after a successful durable commit, and a failed write preserves that snapshot for retry. Environments without these capabilities keep the existing cache behavior.
 
@@ -36,7 +48,17 @@ The requirement delivery section can export one acceptance summary as Markdown t
 
 The same section has a collapsed dispatch-instructions history. New desktop dispatches retain the explicitly entered supplementary note and selected/effective submission policy for each admitted conversation turn, including failed attempts. Native, Runner and workflow execution share this receipt path. Retrying the same turn cannot replace its note; later turns retain separate records. Only existing execution viewers can read this history. Old clients and historical entries without an explicit snapshot show missing fields as unrecorded; chat text, truncated legacy context and current routing are never used to reconstruct them.
 
+Conversation analysis and automatic acceptance include the saved requirement, dispatch supplements and review rejection notes. Conflicting business requirements follow the latest recorded time; unrelated requirements remain effective. Unknown or identical timestamps require explicit clarification rather than an invented priority. Generated drafts retain the original timestamps when resent. New reviewer notes are carried separately, and changed history invalidates a prepared review. The fixed delivery version, criterion identifiers and approval permissions remain authoritative. Client and Hub must both be updated to load this history; older services explicitly report missing history. Oversized history is rejected rather than silently truncated.
+
 ## Run and verify
+
+Ordinary new chats use a fresh private working directory; the previous chat's
+directory and the recent folder picker location are not inherited. Explicitly
+selected project folders remain shared. Personal memory excludes automatic
+runtime identity and knowledge-cutoff summaries and filters such historical
+claims from injected local context. My Memory shows rendered Markdown by default,
+with source editing available under Edit Markdown. Existing conversations retain
+their history and working directory.
 
 For a first local session, run `sh start.sh --desktop` from the repository root. For independent development, keep Hub running and execute:
 
@@ -73,5 +95,15 @@ Frozen input directories contain at most 64 files to avoid repeated compiler sca
 OpenCode is optional and is neither bundled nor downloaded during packaging. There is one lightweight build recipe. Agent identifiers, display metadata, model scope, and permissions come from the shared `../hub-backend/app/agent_catalog.json`, copied into release resources. Avoid a second renderer-owned catalog.
 
 Agent management still detects installed OpenCode and offers explicit installation. `build-light` is retired; the normal build uses the lightweight recipe.
+
+Organization-managed model services are read-only in My Models. Their addresses, credentials, models and capability checks are maintained through the Hub administration UI. Only personal services and device-owned services can be edited or tested from the client. Deploy both Hub and client changes for this boundary. Legacy personal overrides attached to an organization service remain stored but no longer affect its address, credentials or model catalog; organization models use the existing platform quota rules. To use personal credentials, explicitly add a separate personal service.
+
+Device-owned models can be paired with any local managed runtime, including Pi, Qwen, OpenCode, DeepSeek Harness, Kimi and Codex Harness. The Codex account runtime keeps its own model catalog. Local Agent defaults are encrypted and scoped to the current Hub, device and account; conversations, requirement execution and local automations use these selections. New conversations, conversation composers, requirement dispatch and automation forms use the first available model when no model is selected or the selected model has been deleted. Local models precede Hub models, and valid selections remain unchanged. Existing conversation history is retained when the next turn switches to the replacement model. Local model calls do not consume Hub model allowance, but normal account and execution permissions still apply.
+
+In Agent management, a managed runtime with no saved model, or with a deleted model, displays and tests the first available model. The list places local models before Hub models, and valid saved choices remain selected. This fallback does not rewrite the encrypted preference. An empty catalog remains unavailable; a failed secure-store read is reported rather than treated as deletion. Run `node e2e/agent-single-model-default.cjs /absolute/evidence/directory` to verify selection, deletion fallback and probe routing with real Electron UI, encrypted storage and private IPC. Hub and Runner responses in this test are synthetic; it does not call real model services.
+
+Unattended local automations resolve the same fallback before opening their conversation, after verifying ownership of any device model mapping. They retain the saved schedule preference and use the replacement only for execution. Deploy both client and Hub changes for schedules whose saved Hub model has been removed: the Hub must allow the owning desktop to resolve that missing selection. Remote targets and account runtimes retain their existing admission rules. An unreadable or incomplete catalog is not evidence of model deletion; offline local access does not authorize replacing an unverified Hub selection.
+
+Cloud conversations, remote dispatch and Hub-controlled workflows do not accept device-owned model references. Local Agent tests execute through the desktop's private Runner pipe and do not publish model configuration or test logs to Hub. Pi can generate images directly with a local OpenAI-compatible image model; output stays in the local workspace and accepts base64 image data or same-origin result URLs. Local video generation is not provided. Legacy automation model mappings without verifiable account ownership are retained in encrypted storage and require explicit model reselection. The local-model admission E2E exercises default selection, deletion, account isolation and quota behavior with real Electron processes and synthetic loopback services.
 
 See [release scope](../docs/release-scope.en.md), [plugin authoring](../docs/plugin-authoring.en.md), and the [H5 SDK](sdk/README.md).

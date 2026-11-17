@@ -56,23 +56,94 @@ python3 quality_gate.py --profile extended --scope all
 
 The manifest in `quality_manifest.py` registers checks and their profiles. Unregistered checks block the gate. `live` checks connect to real Hubs, Runners, providers, or business data; they are not part of default offline acceptance.
 
+Permission-controlled turns confirm that their execution host has exited before settlement or a replacement turn. A reliable Agent exit receipt allows up to 30 seconds for normal host cleanup, such as a frozen executable removing its extraction directory; cancellation and permission changes retain the shorter stop deadline. If termination cannot be confirmed, the original process remains tracked and blocks replacement. An answer or a successful kill request alone does not establish successful completion. Run `python3 -m unittest test_local_process_cleanup` to verify delayed shutdown and failed-termination behavior with isolated subprocesses.
+
 Smoke checks live in [`smoke/`](smoke/). To run one directly, use its module from the `hub-backend/` directory, for example `python3 -m smoke.smoke_capabilities`. The quality gate selects the appropriate registered modules. Unit tests and `tests/` integration helpers keep their existing locations.
 
-## Harness² planning recovery
+## DeepSeek Harness turn completion
 
-Harness² completes seven tool-free planning stages before native execution. If a
-complete provider response explicitly reaches its output-token limit, the whole
-turn permits one retry of that same stage with up to 16,384 output tokens, capped
-by the configured model output limit, instead of doubling the small initial
-planning allowance. Both attempts
-retain their reported usage and share the existing turn deadline and token budget.
-The client receives a retry progress message. Successful recovery headroom is reused
-for all later planning stages within the configured cap, without more retries.
-Increasing the model's maximum output gives recovery more room up to 16,384 tokens;
-it does not increase the seven-stage count, turn deadline, or total token budget.
-Partial plans are discarded; broken
-streams, HTTP failures and native execution are not retried by this recovery path.
-Persistent truncation or a lower configured cap still fails before execution.
+DeepSeek runtime preflight checks the archive-locked sharp, koffi and ripgrep
+packages for Windows, macOS and Linux on x64/arm64. macOS/Linux also require
+libvips; Linux selects the glibc or musl binaries. Missing manifests, mismatched
+versions and missing critical loaders/binaries prevent stage activation and
+invalidate cached readiness. Failed repair leaves the active runtime intact.
+Run `python3 -m smoke.smoke_dsh_runtime` for the offline platform matrix and
+activation/cache regressions. These static checks do not certify arbitrary binary
+corruption or macOS Gatekeeper acceptance; native ACP and tool execution still
+require validation on the target platform.
+
+DeepSeek ACP adapters 0.4.40 and 0.4.41 can return while their child agents are
+still running. SoduWork's host-only preload waits for progressing descendants
+through the native `waitForChildren` service, then rechecks the parent's idle
+state and session sequence. Child results can wake another parent turn; its
+latest output limit or error is preserved. Cancellation stops waiting, while
+idle resident children do not keep a completed prompt open.
+
+The preload applies an in-memory compatibility fix to the adapter's reviewed
+prompt and tool-preview blocks on macOS, Linux and Windows. Installed packages and native session
+files are not rewritten. Unknown adapter versions or changed reviewed blocks fail
+with an update instruction instead of silently using the affected behavior.
+The loader is included in source and frozen Runner packages.
+
+Run `node --test client/tests/dsh-acp-settlement.test.cjs` from the root for
+offline lifecycle and loader regressions. From `hub-backend`, run
+`python3 e2e_dsh_subagent_settlement.py --adapter-entry /absolute/npm/root/@openma/deepseek-harness-acp/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`
+for isolated acceptance against an explicitly selected installed adapter and a
+synthetic loopback model. This does not exercise a production model or desktop UI.
+
+On `max_tokens`, the reviewed adapter marks only native pending tool previews as
+not executed before clearing them. DSH discards these calls before execution;
+started tools remain unsettled until their real result arrives. The host preserves
+this distinction through live and archived tool cards, including a later failure.
+
+Once tool activity has settled, DeepSeek Harness can continue within the same
+native session from saved results using smaller calls. Recovery is bounded to
+one continuation, plus one more only after successful native compaction. If the
+limit persists, the turn is reported as incomplete with retained progress instead
+of a protocol error. Successful continuation clears the earlier truncation;
+protocol and host-cleanup failures retain priority.
+
+## Other harness terminal outcomes
+
+Managed installs and updates use reviewed versions: DeepSeek ACP 0.4.41,
+Kimi Code 2.6.2 and Qwen Code 0.27.4. Version checks refer to those targets,
+including when the locally installed package is newer. SoduWork updates the
+pins after compatibility validation; discovery does not replace installed software.
+
+Kimi Code 2.6.2 and Qwen Code 0.27.4 can also translate a native output limit
+into a successful ACP response. Host-only preloads preserve their native final
+outcome, verify the complete reviewed source hashes, and reject unknown versions
+with an update instruction. The preloads never change installed packages or tool
+execution. They are packaged for macOS, Linux and Windows; Qwen now requires
+Node 22.15 or later for the host loader, even if an older package declares a lower
+engine requirement.
+
+Kimi preserves the final provider stop reason across tool validation and rejects
+native failed turns. Qwen retains its own bounded output recovery and propagates
+recovery errors; its separate session-input budget is not relabeled as an output
+limit. SoduWork's invocation-local Qwen settings select native
+`model.loopProtection = "stop"`, so a detected repeated failure stops instead of
+only warning. This overrides `warn`/`off` for the managed invocation without
+changing operator files or lowering the general task budget. Neither harness
+receives an additional host retry for exhausted output recovery.
+
+Codex ACP negotiates its versioned `sessionFailure` capability and reads the
+current prompt's typed failure before accepting `end_turn`; error prose alone is
+not completion evidence. Invalid typed failures also stop settlement. The v1
+capability also changes tool reports: omitted approval fields are restored only
+from the same live tool call, and bounded terminal deltas and result snapshots
+remain available in completed tool cards. Native subagent-session capabilities
+are not enabled by this negotiation. Pi,
+OpenCode, DeepSeek, Kimi and Qwen preserve a real later error over an earlier
+truncation, while successful recovery clears the old truncation state.
+
+Run `python3 -m unittest test_kimi_runtime test_qwen_runtime test_codex_acp_outcome
+test_acp_error_messages test_local_turn_outcome` in the backend test environment.
+The standalone `e2e_kimi_outcome.py`, `e2e_qwen_turn_outcome.py` and
+`e2e_codex_acp_outcome.py` fixtures use
+explicitly selected installed runtimes and isolated loopback providers; see their
+`--help` for required paths. Codex acceptance also checks real permission
+approvals/denials and command output. They do not exercise paid model services.
 
 ## Database configuration
 
@@ -98,6 +169,32 @@ independent. See the [skill loading guide](../skills/README.md).
 
 Native and ACP OpenCode executions preserve the current turn's provider finish reason. An output-token limit is reported as incomplete even when partial text exists and the native process exits successfully; existing progress and the session remain available for manual continuation. The ACP adapter observes only native session/turn identifiers and stop reasons through an invocation-local plugin, and rejects missing completion evidence without retrying tools or changing permissions. Run `python3 e2e_opencode_turn_outcome.py --binary /path/to/opencode` for isolated loopback-provider acceptance using an explicitly selected installed binary.
 
+## OpenCode installation and network diagnostics
+
+Runner archive downloads, model-gateway reachability checks and the macOS Runner's secure control connection share a strict TLS trust configuration. By default, they retain Python/OpenSSL system roots and add the packaged `certifi` public CA bundle, including in frozen executables whose build-time OpenSSL certificate paths do not exist on the user's machine. Certificate chains and hostnames remain verified. This does not change external native harnesses' own HTTPS configuration.
+
+Nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR` values explicitly replace that default trust selection; a missing or invalid path fails without falling back to public roots. Supply the complete required trust set when configuring a private CA. Empty values do not select an exclusive override; default path discovery still follows Python/OpenSSL environment semantics. Trust is loaded only for HTTPS requests, including redirects from HTTP; plain HTTP does not depend on certificate configuration. Existing download proxy selection and direct model-gateway routing are unchanged.
+
+The managed installer tries an explicitly configured mirror, the connected Hub, then the official release. On macOS, archive downloads through the Python installer merge system HTTP/HTTPS proxy settings with environment overrides by scheme on every attempt. An explicitly empty proxy variable disables that scheme's system proxy. System-sourced proxies retain their system bypass rules alongside `NO_PROXY`; an empty `NO_PROXY` does not cancel the system exceptions. Explicit proxy overrides retain standard environment bypass behavior, and requests to the exact connected Hub origin stay direct. TLS certificate verification and pinned SHA-256 verification remain enabled. These download rules do not change npm dependency installation or model-gateway routing.
+
+Prepare the Hub mirror using the same code revision and pinned OpenCode version expected by the clients. Running `fetch_opencode_assets.py` without arguments prepares only Windows assets. To serve Apple Silicon and Intel Macs, run from that Hub checkout's `hub-backend/` directory:
+
+```sh
+python3 fetch_opencode_assets.py darwin-arm64 darwin-x64 darwin-x64-baseline
+```
+
+The script verifies the pinned SHA-256 before publishing files under `downloads/opencode/`. After deploying those files, inspect `GET /api/v1/download/opencode/info` for the expected version, platform and `filename`, then download `/api/v1/download/opencode/{filename}` using that exact filename. `available: true` only proves a file exists; verify the downloaded bytes against the pinned digest. The Runner independently verifies that digest before extraction. Preparing files in a checkout does not establish that a remote Hub serves them.
+
+For failed attempts, inspect the local Runner's `runner.log` for structured network diagnostics and the failed stage. A successful metadata request, partial download, checksum check or `--version` probe alone is not a completed installation: download, integrity check, extraction, executable version check, execution-dependency preparation and activation must all succeed. Model execution needs its own subsequent verification. Keep credentials and raw proxy configuration out of shared diagnostics; repair trusted certificate configuration rather than disabling TLS checks.
+
+Verify the production network modules with real loopback HTTPS and a frozen PyInstaller probe in a dedicated environment containing `requirements-runner-build.txt` dependencies:
+
+```sh
+python3 e2e_runner_tls.py --output /absolute/evidence/directory
+```
+
+The check verifies the packaged CA resource, missing default roots, strict explicit overrides, and rejection of untrusted or mismatched certificates. `--source-only` exercises the same paths without freezing. These fixtures do not replace full desktop, production model or other operating-system verification.
+
 ## API and trust boundaries
 
 - Devices enroll with `POST /api/v1/clients/enroll`, then use a short-lived device session. Device long-term keys remain in the Electron main process; Hub stores only their digest.
@@ -105,6 +202,8 @@ Native and ACP OpenCode executions preserve the current turn's provider finish r
 - Tasks use `/api/v1/tasks`, task-specific operations, batch updates, completed-task clearing, and agent run/retry/takeover routes. Configuration uses `/api/v1/config`.
 - Administrators sign in at `/api/v1/admin/login` and use bearer tokens for administrator APIs, including clients, tasks, and dispatch.
 - Long-term device keys must not enter renderers, logs, or URLs. Server state is authoritative; offline client caches must not overwrite it.
+
+Disabling an account invalidates its existing device sessions and AI/tool tickets, returns devices to pending sign-in, and closes their event, terminal and Runner channels. Device keys, configuration and historical ownership are retained. Another active account can sign in on the same device; re-enabling the original account requires a new sign-in and never restores old sessions. Explicit administrator device bans remain revoked and block every account. Devices already revoked by older account-disable behavior require an administrator to review and activate them; account re-enablement does not automatically lift device bans.
 
 Account conversation directory and source projections include `contentLocation`: `hub` for legacy Hub content, `source` for content retained by the original endpoint, `replica` for a valid migrated copy at the current source revision, or `unknown` when the reference cannot be established. The field does not expose private replica identifiers or grant access; clients must retain existing account, Hub, and execution checks. An unknown location must not be used to discard a potentially independent local copy.
 
@@ -131,6 +230,20 @@ The second command creates and tears down an isolated local PostgreSQL instance.
 
 See [release scope](../docs/release-scope.en.md) for distribution boundaries.
 
+## Non-Pi task continuation
+
+Codex, Codex Harness, OpenCode, DeepSeek Harness, Kimi and Qwen use a Runner-owned task controller when goal mode is selected or a desktop message explicitly requests continuous completion. Pi's existing controller is unchanged. Ordinary questions and instructions without this request keep their existing turn behavior.
+
+Output truncation, context recovery and task completion remain separate decisions. Only typed output-limit receipts can trigger output recovery; authentication, transport, permission and unknown tool outcomes cannot. Goal-owned DeepSeek turns disable the bridge's inner output retry loop so a new process cannot multiply retries. The task record retains at most two output recoveries, with new successful tool progress required for the second. Context recovery retains its own counters and may compact or relay the native session while retaining the SoduWork conversation and workspace.
+
+After a successful work turn, a separate review turn checks actual artifacts and verification results. A fresh structured receipt, successful tool evidence from that review and any declared output checks are required before completion. The receipt is a model-assisted review, not a proof of arbitrary business requirements. Missing, malformed or unsupported evidence pauses the task. Two turns without new successful tool progress also pause it. Original permissions and approval requirements still apply.
+
+The default goal budget is 240 minutes and 1,000 tool steps. Elapsed active time, tool steps, review state and recovery counters persist through internal continuations and Runner restart. Pausing does not consume active time; resuming does not replenish budgets. User messages take precedence at native turn boundaries. Stop and disable controls prevent automatic restart, including while the host is settling. Closing goal mode preserves the files and permits ordinary conversation.
+
+Run `python3 -m unittest test_local_task_goal test_local_task_goal_integration test_context_recovery test_acp_error_messages` for the controller and boundary regressions. These checks use synthetic receipts and isolated processes; they do not establish completion quality for every real model.
+
+With an existing compatible DeepSeek installation, run `python3 e2e_task_goal_dsh.py --adapter-entry /absolute/adapter/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`. This runs the installed adapter, runtime, real file tools and production stream/controller/resume code. A loopback model and a process-scheduling callback are test substitutes. It requires truncation recovery followed by file verification in the same native session, unchanged existing files and no repeated write. It neither installs dependencies nor uses production credentials.
+
 ## OpenCode model selection on resume
 
 Managed native OpenCode turns pass the current model explicitly. ACP turns select the exact advertised model before prompting, using the existing session ID and history. Updating the injected default alone does not change the model retained by a native session. Missing routes or an unconfirmed model change stop the turn; the adapter does not restore old credentials, rename models, or create a replacement session.
@@ -150,3 +263,27 @@ Repeating the same creation request for the same account and device returns its 
 Codex Harness, Qwen, Kimi and DeepSeek Harness use private state directories under the Runner data root. If a directory cannot be created because of permissions, a conflicting file or storage failure, preparation rejects the turn before launching an executor. The client receives an actionable diagnostic without personal paths or filesystem exception contents. Inherited personal state remains untouched; repairing the directory allows a new dispatch through the normal admission checks.
 
 `python3 -m unittest test_acp_home_isolation` checks real file collisions, injected permission failures, and Runner admission through a real subprocess/ACP bridge with a synthetic vendor. It verifies that failed preparation launches no executor and that a repaired directory permits execution. This does not establish real-provider or native-platform acceptance.
+
+## ACP file and Kimi question contracts
+
+ACP `fs/read_text_file` returns the complete UTF-8 file when `limit` is omitted, preserving line endings. Explicit positive `line`/`limit` values select a range. Files over the 4 MB host limit fail explicitly; the bridge never returns a silently truncated file that a native edit could write back.
+
+Kimi's `AskUserQuestion` permission fallback is presented as answer choices. The selected `optionId` travels through the desktop and Runner unchanged; full access still waits for a human answer, and cancelling does not grant or deny subsequent tool operations. This fallback retains Kimi's first-question, single-choice behavior; the client does not advertise elicitation forms. A managed Kimi model explicitly marked `localOnly: true` may omit its API key: the launch environment receives a fixed non-secret placeholder required by Kimi, without changing saved credentials or remote-model validation.
+
+Offline regressions run with `python3 -m smoke.smoke_acp_runtime`, `python3 -m smoke.smoke_access_policy`, and `python3 -m unittest tests.test_cli_runtime_compatibility`. They cover whole-file edit/append, question selection/cancellation and local model environment construction. Real Kimi Code 2.6.2 was also checked against a loopback model fixture; this verifies the native ACP behavior, not acceptance by an external model provider.
+
+## Private DeepSeek Harness probe
+
+Private model tests isolate writable DSH state and temporary files while resolving `DSH_PATH` from the Runner's installed runtime directory. Relocating test state must not relocate installed code. The private job and its raw provider output remain unavailable through Hub job APIs.
+
+With backend test dependencies and an existing compatible DSH installation, run:
+
+```sh
+python3 e2e_dsh_private_probe.py \
+  --adapter-entry /absolute/npm/root/@openma/deepseek-harness-acp/dist/bin.js \
+  --runtime-root /absolute/runner/data/agent-runtimes/dsh-host \
+  --node /absolute/path/to/node \
+  --output /absolute/evidence/directory
+```
+
+This explicit check uses the production private-probe job and ACP bridge, the installed adapter and host, and a synthetic loopback model. It first reproduces the old incorrect installation path, then requires a real model request and the expected Agent response with the corrected path. It uses disposable home, state and temporary directories, blocks non-loopback Node connections and cleans up its subprocesses. It does not install or update dependencies, use real credentials, or verify desktop UI, production Hub or provider behavior. Run it separately from the offline quality gate because it requires an existing native installation.

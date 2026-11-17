@@ -2,10 +2,9 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
-const http = require('node:http');
-const https = require('node:https');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { downloadFile, downloadLabel, errorLabel } = require('./runtime-download.cjs');
 
 const RELEASE = Object.freeze({
   x64: Object.freeze({
@@ -21,7 +20,6 @@ const RELEASE = Object.freeze({
 });
 
 const clientRoot = path.resolve(__dirname, '..');
-const runtimeRoot = path.join(clientRoot, '.runtime', 'git');
 const cacheRoot = path.join(clientRoot, '.runtime-cache');
 
 // Retain the shell utilities, Git core, and HTTPS transport used by automation.
@@ -75,60 +73,69 @@ function hash(file) {
   return digest.digest('hex');
 }
 
-function download(url, target, redirects = 0) {
-  if (redirects > 8) return Promise.reject(new Error('too many redirects'));
-  const transport = url.startsWith('https:') ? https : http;
-  return new Promise((resolve, reject) => {
-    const part = target + '.part';
-    const offset = fs.existsSync(part) ? fs.statSync(part).size : 0;
-    const headers = { 'User-Agent': 'SoduWork-build' };
-    if (offset) headers.Range = 'bytes=' + offset + '-';
-    const request = transport.get(url, { headers }, (response) => {
-      if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-        response.resume();
-        const next = new URL(response.headers.location, url).toString();
-        download(next, target, redirects + 1).then(resolve, reject);
-        return;
+function selectRelease(arch, environment = process.env) {
+  const item = RELEASE[arch];
+  if (!item) fail('unsupported architecture: ' + arch);
+  const official = new URL(item.url), file = path.basename(official.pathname);
+  const mirror = environment.SODUWORK_PORTABLE_GIT_MIRROR || '';
+  let mirrored;
+  if (mirror) {
+    let parsed;
+    try { parsed = new URL(mirror); } catch { fail('PortableGit mirror must be a valid HTTPS URL'); }
+    if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.search || parsed.hash) {
+      fail('PortableGit mirror must use HTTPS without URL credentials, query or fragment');
+    }
+    const tag = official.pathname.split('/').at(-2);
+    mirrored = `${mirror.replace(/\/+$/, '')}/${tag}/${file}`;
+  }
+  return { ...item, file, urls: [...(mirrored ? [mirrored] : []),
+    ...(environment.SODUWORK_RUNTIME_MIRROR_ONLY === '1' ? [] : [item.url])] };
+}
+
+async function prepareArchive(release, { cache = cacheRoot, environment = process.env,
+  download = downloadFile, log = console.log } = {}) {
+  const explicit = environment.SODUWORK_PORTABLE_GIT_ARCHIVE;
+  if (explicit) {
+    if (!fs.existsSync(explicit) || !fs.statSync(explicit).isFile() || hash(explicit) !== release.sha256) {
+      fail('Configured PortableGit archive is missing or has a SHA-256 mismatch; the file was not changed');
+    }
+    return explicit;
+  }
+  fs.mkdirSync(cache, { recursive: true });
+  const archive = path.join(cache, release.file), partial = archive + '.part', marker = partial + '.source';
+  if (fs.existsSync(archive)) {
+    if (hash(archive) === release.sha256) return archive;
+    fs.rmSync(archive, { force: true });
+  }
+  if (!release.urls.length) fail('Mirror-only PortableGit download requires SODUWORK_PORTABLE_GIT_MIRROR or a verified local archive');
+  let lastError = '';
+  for (let index = 0; index < release.urls.length; index++) {
+    const url = release.urls[index];
+    const source = crypto.createHash('sha256').update(url).digest('hex');
+    let previous = '';
+    try { previous = fs.readFileSync(marker, 'utf8'); } catch { /* Legacy official partials have no marker. */ }
+    if (previous !== source && !(previous === '' && url === release.url)) fs.rmSync(partial, { force: true });
+    fs.writeFileSync(marker, source);
+    log('[SoduWork shell runtime] downloading ' + downloadLabel(url));
+    try {
+      await download(url, archive, { environment, resume: true, log });
+      if (hash(archive) !== release.sha256) {
+        fs.rmSync(archive, { force: true });
+        fs.rmSync(partial, { force: true });
+        fs.rmSync(marker, { force: true });
+        lastError = 'SHA-256 mismatch';
+      } else {
+        fs.rmSync(marker, { force: true });
+        return archive;
       }
-      if (response.statusCode === 416 && offset) {
-        const totalMatch = String(response.headers['content-range'] || '').match(/\*\/(\d+)$/);
-        response.resume();
-        if (totalMatch && Number(totalMatch[1]) === offset) {
-          fs.renameSync(part, target);
-          resolve();
-        } else {
-          fs.rmSync(part, { force: true });
-          download(url, target, redirects).then(resolve, reject);
-        }
-        return;
-      }
-      if (response.statusCode !== 200 && response.statusCode !== 206) {
-        response.resume();
-        reject(new Error('download failed: HTTP ' + response.statusCode));
-        return;
-      }
-      const rangeMatch = String(response.headers['content-range'] || '').match(/^bytes (\d+)-/);
-      if (response.statusCode === 206 && offset > 0 &&
-          (!rangeMatch || Number(rangeMatch[1]) !== offset)) {
-        response.resume();
-        fs.rmSync(part, { force: true });
-        download(url, target, redirects).then(resolve, reject);
-        return;
-      }
-      const append = response.statusCode === 206 && offset > 0;
-      const stream = fs.createWriteStream(part, { flags: append ? 'a' : 'w' });
-      response.pipe(stream);
-      stream.on('finish', () => {
-        stream.close(() => {
-          fs.renameSync(part, target);
-          resolve();
-        });
-      });
-      stream.on('error', reject);
-    });
-    request.setTimeout(10 * 60 * 1000, () => request.destroy(new Error('download timed out')));
-    request.on('error', reject);
-  });
+    } catch (error) { lastError = errorLabel(error); }
+    log('[SoduWork shell runtime] ' + downloadLabel(url) + ' failed: ' + lastError);
+    if (index + 1 < release.urls.length) {
+      fs.rmSync(partial, { force: true });
+      fs.rmSync(marker, { force: true });
+    }
+  }
+  fail('PortableGit download failed: ' + lastError + '. Check HTTP_PROXY/HTTPS_PROXY, configure SODUWORK_PORTABLE_GIT_MIRROR, or use SODUWORK_PORTABLE_GIT_ARCHIVE');
 }
 
 function selfTest(root) {
@@ -159,47 +166,38 @@ function selfTest(root) {
   }
 }
 
-async function main() {
-  if (process.platform !== 'win32') {
+async function prepare({ platform = process.platform, environment = process.env,
+  arch = String(environment.npm_config_arch || process.arch).toLowerCase(), root = clientRoot,
+  download = downloadFile, run = spawnSync, test = selfTest, archiveOf = prepareArchive, log = console.log } = {}) {
+  if (platform !== 'win32') {
     // Git for Windows only ships bash.exe; on macOS/Linux the Runner resolves
     // the system bash/git itself (_bundledShell stays null) and jobs rely on
     // the OS toolchain. Keep this a no-op so mac packaging can reuse prebuild.
     console.log('[SoduWork shell runtime] skipped: bundled Git for Windows is only used on Windows builds');
     return;
   }
-  const arch = String(process.env.npm_config_arch || process.arch).toLowerCase();
+  const runtimeRoot = path.join(root, '.runtime', 'git'), cache = path.join(root, '.runtime-cache');
   const item = RELEASE[arch];
   if (!item) fail('unsupported architecture: ' + arch);
-  fs.mkdirSync(cacheRoot, { recursive: true });
-  const archive = process.env.SODUWORK_PORTABLE_GIT_ARCHIVE ||
-    path.join(cacheRoot, path.basename(new URL(item.url).pathname));
   const manifestFile = path.join(runtimeRoot, '.soduwork-shell-runtime.json');
   if (fs.existsSync(manifestFile)) {
     try {
       const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
       if (manifest.version === item.version && manifest.arch === arch &&
           manifest.sha256 === item.sha256 && manifest.prune === PRUNE_REV) {
-        selfTest(runtimeRoot);
+        test(runtimeRoot);
         console.log('[SoduWork shell runtime] ready: Git for Windows ' + item.version + ' (' + arch + ')');
         return;
       }
     } catch (error) { /* rebuild below */ }
   }
-  if (fs.existsSync(archive) && hash(archive) !== item.sha256) {
-    fs.rmSync(archive, { force: true });
-  }
-  if (!fs.existsSync(archive)) {
-    console.log('[SoduWork shell runtime] downloading ' + item.url);
-    await download(item.url, archive);
-  }
-  const actual = hash(archive);
-  if (actual !== item.sha256) fail('SHA-256 mismatch: expected ' + item.sha256 + ', got ' + actual);
+  const archive = await archiveOf(selectRelease(arch, environment), { cache, environment, download, log });
 
-  ensureInside(runtimeRoot, clientRoot);
+  ensureInside(runtimeRoot, root);
   fs.rmSync(runtimeRoot, { recursive: true, force: true });
   fs.mkdirSync(runtimeRoot, { recursive: true });
-  const extracted = spawnSync(archive, ['-y', '-o' + runtimeRoot], {
-    cwd: clientRoot, encoding: 'utf8', timeout: 10 * 60 * 1000, windowsHide: true,
+  const extracted = run(archive, ['-y', '-o' + runtimeRoot], {
+    cwd: root, encoding: 'utf8', timeout: 10 * 60 * 1000, windowsHide: true,
   });
   if (extracted.status !== 0) {
     fail('PortableGit extraction failed (' + extracted.status + '): ' +
@@ -209,7 +207,7 @@ async function main() {
   if (fs.existsSync(postInstall)) {
     // Pass paths as independent cmd arguments and let Node quote them.
     // Hand-built call quoting can break paths containing spaces.
-    const installed = spawnSync('cmd.exe', ['/d', '/c', postInstall], {
+    const installed = run('cmd.exe', ['/d', '/c', postInstall], {
       cwd: runtimeRoot, encoding: 'utf8', timeout: 5 * 60 * 1000, windowsHide: true,
     });
     // The post-install script deletes itself on success, which may leave cmd returning 1.
@@ -220,7 +218,7 @@ async function main() {
     }
   }
   prune(runtimeRoot);
-  selfTest(runtimeRoot);
+  test(runtimeRoot);
   fs.writeFileSync(manifestFile, JSON.stringify({
     product: 'Git for Windows PortableGit', version: item.version, arch,
     sha256: item.sha256, source: item.url, prune: PRUNE_REV,
@@ -229,7 +227,8 @@ async function main() {
   console.log('[SoduWork shell runtime] prepared: Git for Windows ' + item.version + ' (' + arch + ')');
 }
 
-main().catch((error) => {
+if (require.main === module) prepare().catch((error) => {
   console.error(String((error && error.stack) || error));
   process.exitCode = 1;
 });
+module.exports = { RELEASE, selectRelease, prepareArchive, prepare, selfTest };

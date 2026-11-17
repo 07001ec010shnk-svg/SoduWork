@@ -611,8 +611,10 @@ class Runner:
                                     "X-SoduWork-Runner-Key": self.key})
                 if self.token:
                     headers["X-SoduWork-Runner-Token"] = self.token
+                from app.services.runner_tls import websocket_options
                 async with websockets.connect(self.url, max_size=8 * 1024 * 1024,
-                                              additional_headers=headers, proxy=None) as ws:
+                                              additional_headers=headers, proxy=None,
+                                              **websocket_options(self.url)) as ws:
                     self.ws = ws
                     prefetched = await self._hello()
                     # Open the control channel before scanning local CLIs/Skills. A large
@@ -712,6 +714,10 @@ class Runner:
             store = await self._conversation_content_store(message.get("realm"))
             return await asyncio.to_thread(store.handle, {**message, "op": "content.read"})
         op = str(message.get("op") or "")
+        if op in {"agent.probe", "agent.job"}:
+            if op == "agent.probe" and dict(message.get("llm") or {}).get("localOnly") is not True:
+                return {"ok": False, "error": "本机测试通道只接受本地模型配置"}
+            return await self._agent({**message, "_localParent": True})
         if op == "desktop.capability.reply":
             bridge = getattr(self, "_desktop_capabilities", None)
             return bridge.reply(message) if bridge else {"ok": False}
@@ -794,7 +800,9 @@ class Runner:
             if item.state != "running":
                 continue
             state = states.get(item.ref)
-            if state == "running":
+            if state == "running" or (state == "recovering" and
+                    (ai_local._RUNS.get(item.ref) or {}).get("goalContract") and
+                    (ai_local._RUNS.get(item.ref) or {}).get("cli") != "pi"):
                 continue
             if state == "done":
                 self._admission.finish(item.key, "completed")
@@ -916,6 +924,16 @@ class Runner:
                 if isinstance(packet, dict) and packet.get("transfer")
             }
             await self._drop_message_transfers(message, keep)
+        if operation == "comment" and reason != "duplicate":
+            from app.services import local_base, local_task_goal
+            with local_base._LOCK:
+                run = local_base._RUNS.get(ref)
+                if run and local_task_goal.active(run):
+                    # The admission queue has not delivered this human turn yet.
+                    # Yield at the next native boundary instead of racing it with
+                    # a controller-generated review/continuation.
+                    run["goalUserPending"] = key
+                    local_base._save_meta(ref)
         self._ensure_admission_loop()
         self._admission_wake.set()
         # Let an idle scheduler claim the item, but never wait for preflight or launch.
@@ -1154,7 +1172,7 @@ class Runner:
         sessions fairly. Return proposed cursors without advancing them; reliable
         delivery commits each cursor atomically with its disk packet.
         """
-        from app.services import ai_local
+        from app.services import ai_local, local_base, runner_usage_receipts
 
         runs = list((ai_local.console_list_sync({}, None) or {}).get("runs") or [])
         agents = {str(item.get("key") or ""): item for item in self._agent_inventory}
@@ -1184,6 +1202,11 @@ class Runner:
             if seq <= last_seq and state_mark == last_state:
                 continue
             live = ai_local.session_sync({}, ref, last_seq, 300)
+            with local_base._LOCK:
+                owned_run = dict(local_base._RUNS.get(ref) or {})
+            private_model = runner_usage_receipts.private_model(owned_run)
+            public_usage = runner_usage_receipts.public_usage(owned_run)
+            live = runner_usage_receipts.public_snapshot(live, owned_run)
             state = str(live.get("status") or live.get("state") or state)
             seq = int(live.get("seq") or seq)
             items = []
@@ -1238,15 +1261,16 @@ class Runner:
                 "admissionKey": live.get("admissionKey") or "", "admissionStartSeq": live.get("admissionStartSeq"),
                 "turnCorrelationVersion": 1,
                 "detached": bool(run.get("detached")),
-                "tokens": dict(run.get("tokens") or {}), "ctxPct": run.get("ctxPct") or 0,
-                # Include cumulative usage, first-start time, and selected model.
-                # Model identity is required for model-specific usage and cost attribution.
-                "usage": dict(run.get("usage") or {}),
+                "tokens": {} if private_model else dict(run.get("tokens") or {}),
+                "ctxPct": 0 if private_model else run.get("ctxPct") or 0,
+                # Device-funded calls and their model identities remain on the Runner.
+                "usage": public_usage,
                 "firstStarted": run.get("firstStarted") or run.get("started") or 0,
-                "model": run.get("model") or "",
-                "reasoningEffort": (live.get("activeExecutionSelection") or {}).get("reasoningEffort", ""),
-                "ctxWindow": run.get("ctxWindow") or 0,
-                "ctxWindowKnown": bool(run.get("ctxWindowKnown")), "error": run.get("error") or "",
+                "model": "" if private_model else run.get("model") or "",
+                "reasoningEffort": "" if private_model else (live.get("activeExecutionSelection") or {}).get("reasoningEffort", ""),
+                "ctxWindow": 0 if private_model else run.get("ctxWindow") or 0,
+                "ctxWindowKnown": not private_model and bool(run.get("ctxWindowKnown")),
+                "error": live.get("error") or "",
                 "failureKind": run.get("failureKind") or "",
                 "failurePath": run.get("failurePath") or "",
             })
@@ -1375,6 +1399,12 @@ class Runner:
         preserving streaming, persistence, watchdog, compaction, and output behavior.
         """
         op = str(m.get("op") or "")
+        if not m.get("_localParent") and op in {"job.dispatch", "job.comment"}:
+            from app.services.model_reference_privacy import is_local_model_reference
+            llm = dict(dict(m.get("cfg") or {}).get("llm") or {})
+            if llm.get("localOnly") is True or is_local_model_reference(llm.get("model")):
+                return {"ok": False, "code": "LOCAL_MODEL_REMOTE_FORBIDDEN",
+                        "error": "本地模型只能通过本机 SoduWork 执行"}
         if op in {"git.probe", "git.inspect", "git.merge"}:
             blocked = _capability_gate(
                 self.work_root, ["repository", "terminal"], self.capability_grants)
@@ -1387,7 +1417,21 @@ class Runner:
             result = await asyncio.to_thread(func, dict(m.get("payload") or {}))
             return {"ok": bool(result.get("ok")), "data": result,
                     "error": str(result.get("error") or "")}
-        from app.services import ai_local
+        from app.services import ai_local, runner_usage_receipts
+
+        def remote_snapshot(data, ref):
+            if m.get("_localParent"):
+                return data
+            with ai_local._LOCK:
+                run = dict(ai_local._RUNS.get(ref) or {})
+            return runner_usage_receipts.public_snapshot(data, run)
+
+        if not m.get("_localParent") and op == "job.comment":
+            with ai_local._LOCK:
+                run = dict(ai_local._RUNS.get(str(m.get("ref") or "")) or {})
+            if runner_usage_receipts.device_owned(run):
+                return {"ok": False, "code": "LOCAL_MODEL_REMOTE_FORBIDDEN",
+                        "error": "本地模型会话只能通过本机 SoduWork 继续执行"}
 
         if op == "job.dispatch":
             t = _Task(m.get("task") or {})
@@ -1598,7 +1642,7 @@ class Runner:
             from app.services import access_broker
             result = access_broker.respond(
                 str(m.get("ref") or ""), str(m.get("requestId") or ""),
-                str(m.get("decision") or ""), m.get("policyRevision"))
+                str(m.get("decision") or ""), m.get("policyRevision"), m.get("optionId"))
             return {"ok": bool(result.get("ok")), "data": result,
                     "error": result.get("error", ""), "code": result.get("code", "")}
         if op == "job.status":
@@ -1609,8 +1653,8 @@ class Runner:
             if runner_admission.owns_status(item, local_exists):
                 return {"ok": True, "data": runner_admission.status_data(
                     item, self._admission.position(item.key))}
-            return {"ok": True, "data": await asyncio.to_thread(
-                ai_local.status_sync, {}, ref)}
+            data = await asyncio.to_thread(ai_local.status_sync, {}, ref)
+            return {"ok": True, "data": remote_snapshot(data, ref)}
         if op == "job.info":
             ref = str(m.get("ref") or "")
             item = self._admission.latest_for_ref(ref, include_terminal=True)
@@ -1619,8 +1663,8 @@ class Runner:
             if runner_admission.owns_status(item, local_exists):
                 return {"ok": True, "data": runner_admission.info_data(
                     item, self._admission.position(item.key))}
-            return {"ok": True, "data": await asyncio.to_thread(
-                ai_local.runner_info_sync, {}, ref)}
+            data = await asyncio.to_thread(ai_local.runner_info_sync, {}, ref)
+            return {"ok": True, "data": remote_snapshot(data, ref)}
         if op == "job.authorize":
             # Model credentials may be refreshed only by this desktop's private
             # parent/child control pipe.  The Hub websocket must never become a
@@ -1647,7 +1691,7 @@ class Runner:
                     native = await asyncio.to_thread(ai_local.session_sync, {}, ref,
                         max(0, int(m.get("since") or 0)), min(1000, max(1, int(m.get("limit") or 400))))
                     queued = runner_admission.with_native_history(queued, native)
-                return {"ok": True, "data": queued}
+                return {"ok": True, "data": remote_snapshot(queued, ref)}
             data = await asyncio.to_thread(
                 ai_local.session_sync, {}, ref,
                 max(0, int(m.get("since") or 0)),
@@ -1655,7 +1699,11 @@ class Runner:
             from app.services import local_stream
             data["authorizationRequired"] = await asyncio.to_thread(
                 local_stream.authorization_required_sync, ref)
-            return {"ok": True, "data": data}
+            if m.get("_localParent"):
+                from app.services import runner_usage_receipts
+                with ai_local._LOCK:
+                    data["usageReceipts"] = runner_usage_receipts.private_snapshot(ai_local._RUNS.get(ref) or {})
+            return {"ok": True, "data": remote_snapshot(data, ref)}
         if op == "job.open_dir":
             ref = str(m.get("ref") or "")
             info = await asyncio.to_thread(ai_local.runner_info_sync, {}, ref)
@@ -1720,9 +1768,15 @@ class Runner:
             if item is not None:
                 self._admission_wake.set()
                 if mode == "cancelled" or mode == "starting":
-                    return {"ok": True, "data": runner_admission.status_data(
-                        item, self._admission.position(item.key))}
-            stopped = await asyncio.to_thread(local_stream.stop_sync, {}, ref)
+                    from app.services import local_base
+                    with local_base._LOCK:
+                        current = local_base._RUNS.get(ref) or {}
+                        goal_owned = bool(current.get("goalContract")) and current.get("cli") != "pi"
+                    if not goal_owned:
+                        return {"ok": True, "data": runner_admission.status_data(
+                            item, self._admission.position(item.key))}
+            stopped = await asyncio.to_thread(local_stream.stop_sync,
+                {"taskGoalControl": m.get("taskGoalControl")}, ref)
             if item is not None and stopped.get("ok"):
                 self._admission.finish(item.key, "cancelled")
             return {"ok": True, "data": stopped}
@@ -1803,7 +1857,11 @@ class Runner:
             }}
         if op == "agent.job":
             job_id = str(m.get("jobId") or "")
-            job = agent_setup.job(job_id, owner_id=str(m.get("ownerId") or ""))
+            private = bool(m.get("_localParent"))
+            job = agent_setup.job(job_id, owner_id=str(m.get("ownerId") or ""),
+                                  **({"include_private": True} if private else {}))
+            if job is not None and job.get("private"):
+                return {"ok": True, "data": job}
             if (job is not None and job.get("state") == "done"
                     and job_id not in self._refreshed_agent_jobs):
                 self._refreshed_agent_jobs.add(job_id)
@@ -1813,6 +1871,13 @@ class Runner:
                     else {"ok": False, "error": "没有这个作业（runner 可能重启过）"})
         if key not in agent_setup._SPECS:
             return {"ok": False, "error": "没有这个 AI 助手"}
+        llm = dict(m.get("llm") or {})
+        if op in {"agent.probe", "agent.configure"}:
+            from app.services.model_reference_privacy import is_local_model_reference
+            local = llm.get("localOnly") is True or is_local_model_reference(llm.get("model"))
+            if local and not m.get("_localParent"):
+                return {"ok": False, "code": "LOCAL_MODEL_REMOTE_FORBIDDEN",
+                        "error": "本地模型只能通过本机私有通道测试"}
         if op == "agent.install":
             action = str(m.get("action") or "install")
             if action not in ("install", "update", "uninstall", "check", "login", "login-isolated", "login-cancel") or (action.startswith("login") and key != "codex"):
@@ -1832,7 +1897,12 @@ class Runner:
                    if action.startswith("login") else agent_setup.start_install(key, action))
             return {"ok": True, "data": {"jobId": jid}}
         if op == "agent.probe":
-            return {"ok": True, "data": {"jobId": agent_setup.start_probe(key, dict(m.get("llm") or {}))}}
+            private = bool(m.get("_localParent") and llm.get("localOnly") is True)
+            try:
+                jid = agent_setup.start_probe(key, llm, **({"private": True} if private else {}))
+            except ValueError as exc:
+                return {"ok": False, "error": str(exc)}
+            return {"ok": True, "data": {"jobId": jid, **({"private": True} if private else {})}}
         if op == "agent.configure":
             return {"ok": True, "data": agent_setup.configure(key, dict(m.get("llm") or {}))}
         return {"ok": False, "error": "不认识的助手操作: " + op}
@@ -1995,6 +2065,11 @@ class Runner:
             return
         if op.startswith("job.") or op.startswith("git."):
             res = await self._job(m)
+            from app.services import ai_local, runner_usage_receipts
+            ref = str(m.get("ref") or (res.get("data") or {}).get("ref") or "")
+            with ai_local._LOCK:
+                run = dict(ai_local._RUNS.get(ref) or {})
+            res = runner_usage_receipts.public_snapshot(res, run)
             payload = (res.get("data") or {}).pop("__bytes__", None) if isinstance(
                 res.get("data"), dict) else None
             if payload is not None and self.bin:
@@ -2180,14 +2255,7 @@ def main() -> None:
         from app.services import acp_bridge
         raise SystemExit(acp_bridge.main())
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--harness2-native":
-        from app.services import harness2_native
-        raise SystemExit(harness2_native.main())
 
-    if len(sys.argv) > 1 and sys.argv[1] == "--harness2-bridge":
-        sys.argv = [sys.argv[0], *sys.argv[2:]]
-        from app.services import harness2_bridge
-        raise SystemExit(harness2_bridge.main())
 
     ap = argparse.ArgumentParser(description="SoduWork 执行机")
     ap.add_argument("--doctor", action="store_true", help="检查 CLI、真终端和内置技能后退出")

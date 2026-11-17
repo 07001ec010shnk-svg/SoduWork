@@ -37,7 +37,8 @@
   function hasSurface() { return Boolean(state.layer); }
   function showLoading(body, text) {
     global.ForwardSelect?.destroy(body);
-    body.innerHTML = '<div class="waz-loading"><i></i><i></i><i></i><span>' + esc(text) + '</span></div>';
+    body.innerHTML = '<div class="waz-loading"><i></i><i></i><i></i><span>' + esc(text) + '</span></div>' +
+      '<button type="button" class="waz-button" data-waz-cancel>' + esc(tx(state.card?.snapshot.editBase ? '取消修改' : '取消')) + '</button>';
   }
   function capture() {
     if (!state.card) return null;
@@ -51,6 +52,7 @@
     const snapshot = cards().capture(state.card), body = state.layer.querySelector('#wazBody');
     state.proposal = snapshot.proposal; state.saved = snapshot.phase === 'succeeded';
     state.saving = snapshot.phase === 'submitting'; state.createdId = snapshot.createdId || '';
+    if (snapshot.phase === 'cancelled') { body.textContent = tx('已取消创建自动化'); return; }
     if (state.saved) return renderSaved(snapshot.receipt || snapshot.proposal);
     if (snapshot.phase === 'loading') { showLoading(body, '正在整理自动化，请稍候…'); return; }
     if (!snapshot.proposal) {
@@ -61,7 +63,7 @@
     if (state.saving) state.layer.querySelectorAll('button,input,textarea,select').forEach(node => { node.disabled = true; });
     if (state.saving || snapshot.uncertain) {
       const button = state.layer.querySelector('[data-waz-save]'); button.disabled = true;
-      button.textContent = state.saving ? '正在创建…' : '请先确认创建结果';
+      button.textContent = state.saving ? '正在保存…' : '请先确认保存结果';
     }
     if (snapshot.uncertain) body.insertAdjacentHTML('beforeend', '<button class="waz-button" data-waz-open>查看自动化</button>');
   }
@@ -112,11 +114,17 @@
     // The editable instructions remain the source of truth for detailed requests.
     // A short parser summary cannot replace long or conversation-derived source.
     const preserveSource = !prior.note && (Array.from(original).length > 1500 || context.seed.conversationContext?.text);
-    const rhythm = global.ScheduleTiming.infer(global.WorkAutomationBindings.directiveText(fallback), prior);
+    const rhythm = global.ScheduleTiming.infer(global.WorkAutomationBindings.directiveText(fallback), prior,
+      context.requestedAt ?? context.seed.requestedAt ?? Date.now());
     const acceptance = checks(parsed.acceptanceCriteria || parsed.checklist || prior.acceptance);
+    const note = preserveSource ? original : fullText(parsed.note || parsed.description || prior.note || original);
+    const taskAdded = note !== prior.note && !global.WorkAutomationBindings.taskNeedsDetail(note) &&
+      !global.WorkAutomationBindings.taskNeedsDetail(fallback) && !/待明确|待补充/.test(parsed.title || '');
     const next = Object.assign({}, prior, rhythm, {
       title: cut(parsed.title || prior.title || fallback, 60),
-      note: preserveSource ? original : fullText(parsed.note || parsed.description || prior.note || original),
+      note,
+      needsTask: (!prior.note && Boolean(fallback) && (global.WorkAutomationBindings.taskNeedsDetail(fallback) || /待明确|待补充/.test(parsed.title || ''))) ||
+        (prior.needsTask === true && !taskAdded),
       acceptance,
       timeZone: rhythm.timeZone || prior.timeZone || timeZone(),
       assigneeId: prior.assigneeId || (((context.agents.find(item => item.available !== false)) || context.agents[0] || {}).id || ''),
@@ -124,7 +132,8 @@
       flow: Boolean(prior.flow),
       personalPluginKey: prior.personalPluginKey || '',
       pluginInputs: Object.assign({}, prior.pluginInputs || {}),
-      modelName: cut(parsed.modelName || prior.modelName || context.defaultModel || '', 300),
+      modelName: cut(String(parsed.modelName || prior.modelName || '').startsWith('unavailable:')
+        ? '' : parsed.modelName || prior.modelName || '', 300),
       requiredCapabilities: [...new Set(prior.requiredCapabilities || [])],
       retryLimit: Number.isFinite(Number(prior.retryLimit)) ? Number(prior.retryLimit) : 2,
       retryDelayMinutes: Number(prior.retryDelayMinutes || 5),
@@ -132,7 +141,9 @@
       ...(sourceRequirement ? { sourceRequirement: { id: sourceRequirement.id, title: sourceRequirement.title,
         requirementVersion: sourceRequirement.requirementVersion } } : {}),
     });
-    return global.WorkAutomationBindings.resolve(parsed, fallback, next, context);
+    const resolved = global.WorkAutomationBindings.resolve(parsed, fallback, next, context);
+    resolved.modelName = global.WorkAutomationCardState.defaultModelFor(context, resolved.assigneeId, resolved.modelName);
+    return resolved;
   }
 
   const loadExecutionOptions = seed => global.WorkAutomationCardState.loadOptions(seed);
@@ -186,7 +197,7 @@
     }
     close(true);
     resetRefineQueue();
-    const s = seed || {};
+    const s = { ...seed, requestedAt: seed?.requestedAt ?? Date.now() };
     const seq = ++state.seq;
     state.seed = s;
     state.saved = false;
@@ -205,10 +216,18 @@
     const execution = loadExecutionOptions(s);
     const methods = typeof _schmLoad === 'function'
       ? Promise.resolve(_schmLoad()).catch(() => []) : Promise.resolve([]);
-    const got = await Promise.all([execution, methods]);
+    let got;
+    try { got = await Promise.all([execution, methods]); }
+    catch (error) {
+      if (ticket) cards().finish(ticket, {phase:'error', error:errorText(error)});
+      ready = true; if (visible()) paintCard(); return false;
+    }
     if (!cards().current(record)) return false;
+    if (ticket && !cards().valid(ticket)) return false;
     const context = { seed: s, agents: got[0]?.agents || [], repos: got[0]?.repos || [], methods: got[1] || [],
-      modelOptions: got[0]?.modelOptions || [], defaultModel: got[0]?.defaultModel || '' };
+      modelOptions: got[0]?.modelOptions || [], defaultModel: got[0]?.defaultModel || '',
+      hubDefaultModel: got[0]?.hubDefaultModel, defaultModels: got[0]?.defaultModels || {},
+      defaultModelErrors: got[0]?.defaultModelErrors || {}, modelCatalogError: got[0]?.modelCatalogError === true };
     if (visible()) Object.assign(state, context, { agentReason: got[0]?.reason || '' });
     ready = true;
     // Restoration refreshes candidates only; preserve the original date and manual settings without invoking the model again.
@@ -254,19 +273,45 @@
     return state.agents.find(item => String(item.id) === String(id || '')) || null;
   }
 
-  function modelEntries(current, agentId) {
-    const agent = agentById(agentId);
-    const selected = String(current || '').trim();
-    if (agent && agent.modelPick === false && agent.nativeModelPick !== true) {
-      return [{ name: '', label: tx('由底座自身管理模型') }];
-    }
+  function localModelAgent(agent) {
+    if (!agent) return false;
+    const runtime = String(agent.cli || agent.id || '').replace(/^local:/, '').replace(/^runner:[^:]+:/, '');
+    if (!runtime || ['codex'].includes(runtime)) return false;
+    if (!String(agent.id || '').startsWith('local:') && !String(agent.id || '').startsWith('runner:')) return false;
+    return agent.mode !== 'remote' && agent.locationMode !== 'remote';
+  }
+
+  function modelSource(agent) {
     const source = agent?.nativeModelPick ? agent.modelOptions : state.modelOptions;
     const rows = Array.isArray(source) ? source.slice() : [];
+    return localModelAgent(agent) ? rows.sort((a, b) =>
+      Number(b?.localOnly === true || String(b?.name || '').startsWith('local:')) -
+      Number(a?.localOnly === true || String(a?.name || '').startsWith('local:')))
+      : rows.filter(item => item?.localOnly !== true && !String(item?.name || '').startsWith('local:'));
+  }
+
+  function canPickModel(agent) {
+    if (!agent) return true;
+    if (agent.modelPick !== false || agent.nativeModelPick === true) return true;
+    // Some local Pi runtimes own their default model (modelPick=false) while
+    // still exposing this desktop's encrypted local catalog as an explicit
+    // override. Keep that local choice available without enabling it remotely.
+    return localModelAgent(agent);
+  }
+
+  function modelEntries(current, agentId) {
+    const agent = agentById(agentId);
+    const selected = global.WorkAutomationCardState.defaultModelFor(state, agentId, current);
+    if (!canPickModel(agent)) {
+      return [{ name: '', label: tx('由底座自身管理模型') }];
+    }
+    const rows = modelSource(agent);
     const normalized = rows.map(raw => ({ name: String(raw?.name || raw?.id || raw || '').trim(),
       label: String(raw?.label || raw?.displayName || raw?.name || raw?.id || raw || '').trim() }))
       .filter(item => item.name);
     if (selected && !normalized.some(item => item.name === selected)) {
-      normalized.unshift({ name: selected, label: selected + tx('（已保存，当前不可用）'), stale: true });
+      normalized.unshift({ name: selected, label: ['local:unavailable', 'unavailable:default'].includes(selected)
+        ? tx('原模型或默认模型不可用，请重新选择') : selected + tx('（已保存，当前不可用）'), stale: true });
     }
     if (!normalized.length) return [{ name: '', label: tx('当前没有可用模型') }];
     if (!selected) normalized.unshift({ name: '', label: tx('请选择模型'), placeholder: true });
@@ -274,7 +319,7 @@
   }
 
   function modelRows(current, agentId) {
-    const selected = String(current || '').trim();
+    const selected = global.WorkAutomationCardState.defaultModelFor(state, agentId, current);
     return modelEntries(current, agentId).map(item => '<option value="' + esc(item.name) + '"' +
       (item.name === selected ? ' selected' : '') + (item.stale || item.placeholder ? ' disabled' : '') + '>' +
       esc(item.label || item.name) + '</option>').join('');
@@ -282,13 +327,11 @@
 
   function modelField(current, agentId) {
     const agent = agentById(agentId);
-    const managed = agent && agent.modelPick === false && agent.nativeModelPick !== true;
-    const options = agent?.nativeModelPick ? agent.modelOptions : state.modelOptions;
+    const managed = !canPickModel(agent);
+    const options = modelSource(agent);
     const disabled = Boolean(managed || ((!Array.isArray(options) || !options.length) && !current));
-    const localOnly = String(agent?.id || '').startsWith('local:') && !(Array.isArray(options) && options.length);
-    const hint = managed ? tx('当前底座自行管理模型') : localOnly
-      ? tx('本机模型仅支持本机对话；后台自动化需要 Hub 托管模型')
-      : tx('模型与执行底座独立保存，每次自动化运行使用这里的选择');
+    const hint = managed ? tx('当前底座自行管理模型') :
+      tx('模型与执行底座独立保存，每次自动化运行使用这里的选择');
     return '<label class="waz-field"><span>' + esc(tx('模型')) + ' <small>' + esc(tx('可独立选择')) + '</small></span>' +
       '<select name="modelName" aria-describedby="wazModelHint"' + (disabled ? ' disabled' : '') + '>' +
       modelRows(current, agentId) + '</select><small id="wazModelHint" class="waz-field-hint">' + esc(hint) + '</small></label>';
@@ -299,15 +342,16 @@
     const select = form?.elements.modelName;
     const agent = form?.elements.assigneeId;
     if (!select || !agent) return;
-    const current = preferred !== undefined ? String(preferred || '').trim() : String(select.value || '').trim();
+    const current = global.WorkAutomationCardState.defaultModelFor(state, agent.value,
+      preferred !== undefined ? preferred : select.value);
     select.replaceChildren(...modelEntries(current, agent.value).map(item => {
       const option = document.createElement('option'); option.value = item.name;
       option.textContent = item.label || item.name; option.selected = item.name === current;
       option.disabled = Boolean(item.stale || item.placeholder); return option;
     }));
     const info = agentById(agent.value);
-    const options = info?.nativeModelPick ? info.modelOptions : state.modelOptions;
-    select.disabled = Boolean(info && info.modelPick === false && info.nativeModelPick !== true) ||
+    const options = modelSource(info);
+    select.disabled = !canPickModel(info) ||
       ((!Array.isArray(options) || !options.length) && !current);
     select.value = current;
   }
@@ -358,10 +402,15 @@
     const restoreView = global.WorkAutomationView.rememberView(body);
     global.ForwardSelect?.destroy(body);
     const p = state.proposal || proposalOf({}, '');
+    const heading = state.layer.querySelector('#wazTitle');
+    if (heading) heading.textContent = tx(state.createdId ? '修改自动化' : '创建自动化');
     const method = methodByKey(p.personalPluginKey);
     const activeCaps = new Set((p.requiredCapabilities || []).concat(methodCaps(method)));
     body.innerHTML =
       '<form class="waz-form" id="wazForm"><div class="waz-fields">' +
+        '<div class="waz-chat-hint" role="status">' + (state.card?.snapshot.chatEditing === false
+          ? '已返回普通对话，可点击继续补充来修改自动化。<button type="button" class="waz-button" data-waz-chat-resume>继续补充</button>'
+          : '正在完善此自动化，可继续发送消息补充任务或修改时间。<button type="button" class="waz-button" data-waz-chat-exit>返回普通对话</button>') + '</div>' +
         '<section class="waz-section"><div class="waz-section-title"><span>01</span><div>' +
           '<h3>每次要完成什么</h3><p>说明目标、输入来源、输出格式和完成标准</p></div></div>' +
           '<label class="waz-field waz-title"><span>自动化名称 <b>*</b></span>' +
@@ -383,7 +432,7 @@
                 (item[0] === p.every ? ' selected' : '') + '>' + esc(tx(item[1])) + '</option>').join('') +
             '</select></label>' +
             '<label class="waz-field" data-waz-once><span>' + esc(tx('执行日期时间')) + ' <b>*</b></span>' +
-              '<input name="runAt" type="datetime-local" step="60" value="' +
+              '<input name="runAt" type="datetime-local" step="0.001" value="' +
               esc(global.ScheduleTiming.localInput(p.runAt,p.timeZone || timeZone())) + '"></label>' +
             '<div class="waz-field" data-waz-clock><span>' + esc(tx('执行时刻')) + '</span><div class="waz-clock-selects" data-waz-time-selects>' +
               '<select name="clockHour" data-forward-select="compact-time" aria-label="' + esc(tx('小时')) + '">' + global.ScheduleTiming.clockOptions(24, p.atHour) + '</select>' +
@@ -446,10 +495,11 @@
           ? '<div class="waz-enable"><span><b>保存为未启用草稿</b><small>原需求保持不变；可在自动化管理中启用</small>' +
             '<small data-user-content>' + esc(p.sourceRequirement.title || '') + ' · v' + esc(p.sourceRequirement.requirementVersion) + '</small></span></div>'
           : '<label class="waz-enable"><input type="checkbox" name="enabled"' +
-            (p.enabled !== false ? ' checked' : '') + '><span><b>创建后启用</b>' +
+            (p.enabled !== false ? ' checked' : '') + '><span><b>' + (state.createdId ? '启用自动化' : '创建后启用') + '</b>' +
             '<small>关闭时只保存，不会自动运行</small></span></label>') +
-          '<button type="button" class="waz-button primary" data-waz-save' +
-          ((state.agents.length || p.assigneeId) ? '' : ' disabled') + '>' + (p.sourceRequirement?.id ? '保存草稿' : '创建自动化') + '</button></footer>' +
+          '<div class="waz-foot-buttons"><button type="button" class="waz-button" data-waz-cancel>' +
+          (state.card?.snapshot.editBase ? '取消修改' : '取消') + '</button><button type="button" class="waz-button primary" data-waz-save' +
+          ((state.agents.length || p.assigneeId) ? '' : ' disabled') + '>' + (state.card?.snapshot.editBase ? '保存修改' : p.sourceRequirement?.id ? '保存草稿' : '创建自动化') + '</button></div></footer>' +
       '</div></form>';
     paintRhythm();
     if (global.ForwardSelect) body.querySelectorAll('[data-waz-time-selects], [data-waz-minute]').forEach(root =>
@@ -493,6 +543,10 @@
     const modelName = submittedModel == null
       ? (state.proposal && state.proposal.modelName) : submittedModel;
     return {
+      timingIssue: state.proposal?.timingIssue || '',
+      relativeTiming: every === 'once' && dateInput === global.ScheduleTiming.localInput(priorDate,zone)
+        ? state.proposal?.relativeTiming || null : null,
+      needsTask: state.proposal?.needsTask === true,
       bindingIssues: (state.proposal?.bindingIssues || []).slice(),
       title: cut(data.get('title'), 60),
       note: fullText(data.get('note')),
@@ -529,8 +583,18 @@
   }
 
   function bodyOf(value, catalogs = state) {
+    value = { ...value, modelName: global.WorkAutomationCardState.defaultModelFor(catalogs, value.assigneeId, value.modelName) };
     const bindingError = global.WorkAutomationBindings.validate(value, catalogs);
     if (bindingError) throw new Error(bindingError);
+    const selectedAgent = (catalogs.agents || []).find(item => String(item.id) === String(value.assigneeId || ''));
+    if (catalogs.modelCatalogError && localModelAgent(selectedAgent)) {
+      throw new Error('本地模型配置暂时无法读取，请刷新后重试');
+    }
+    const availableModels = selectedAgent?.nativeModelPick ? selectedAgent.modelOptions || [] : (catalogs.modelOptions || []).filter(item =>
+      localModelAgent(selectedAgent) || item?.localOnly !== true && !String(item?.name || '').startsWith('local:'));
+    if (value.modelName && !availableModels.some(item => String(item.name || item.id || '') === value.modelName)) {
+      throw new Error('原模型或默认模型已不可用，请主动选择可用模型');
+    }
     const method = methodByKey(value.personalPluginKey, catalogs);
     const criteria = checks(value.acceptance);
     const note = value.note + (criteria.length
@@ -553,6 +617,8 @@
       ...(value.every === 'custom' ? { customRule: fullText(value.customRule).trim() } : {}),
       timeZone: value.timeZone || timeZone(),
       assigneeId: value.assigneeId,
+      assigneeMode: String(selectedAgent?.mode || selectedAgent?.locationMode || ''),
+      assigneeClientId: String(selectedAgent?.clientId || ''),
       assigneeType: 'agent',
       modelName: value.modelName || '',
       repoId: value.repoId || '',
@@ -592,7 +658,7 @@
     if (once) once.hidden = every !== 'once';
     const hint = form.querySelector('#wazNextRun');
     const currentTiming = valueFromForm();
-    const timingError = global.ScheduleTiming.validate(currentTiming);
+    const timingError = global.ScheduleTiming.validate(currentTiming, state.card?.snapshot.editBase?.receipt);
     const zone = form.querySelector('[data-waz-zone]');
     if (zone) zone.textContent = every === 'custom'
       ? global.ScheduleTiming.customTimeZone(currentTiming.customRule, currentTiming.timeZone) : currentTiming.timeZone;
@@ -605,6 +671,20 @@
       flow.disabled = !form.elements.repoId.value;
       if (flow.disabled) flow.checked = false;
     }
+  }
+
+  // Compare editable fields, not a newly validated copy of the old catalog.
+  // This allows removing a deleted plugin/model without rewriting untouched
+  // settings that may have changed in automation management meanwhile.
+  function changesBody(value, original, body) {
+    const groups = {
+      note:['note','acceptance'], runAt:['runAt','every'], startDate:['startDate','every'], endDate:['endDate','every'],
+      assigneeMode:['assigneeId'], assigneeClientId:['assigneeId'], assigneeType:['assigneeId'],
+      personalPluginVersionPolicy:['personalPluginKey'], personalPluginVersion:['personalPluginKey'],
+      personalPluginChecksum:['personalPluginKey'], requiredCapabilities:['requiredCapabilities','personalPluginKey'],
+    };
+    return Object.fromEntries(Object.entries(body).filter(([key]) =>
+      (groups[key] || [key]).some(field => JSON.stringify(value[field]) !== JSON.stringify(original[field]))));
   }
 
   function setProbe(kind, title, detail, remedy) {
@@ -634,11 +714,14 @@
     const seq = ++probeSeq;
     const value = valueFromForm();
     state.proposal = value;
+    const saveButton = state.layer?.querySelector('[data-waz-save]');
+    if (saveButton) saveButton.disabled = Boolean(state.saving || state.card?.pending || state.card?.snapshot.uncertain || validate(value));
     if (!state.card?.pending && !state.card?.snapshot.uncertain) updateCard({ proposal: value });
     const bindingError = global.WorkAutomationBindings.validate(value, state);
     if (bindingError) { setProbe('blocked', '指定内容需要确认', bindingError); return; }
-    const timingError = global.ScheduleTiming.validate(value);
+    const timingError = global.ScheduleTiming.validate(value, state.card?.snapshot.editBase?.receipt);
     if (timingError) { setProbe('blocked', '执行时间需要确认', timingError); return; }
+    if (value.needsTask) { setProbe('blocked', '任务内容需要补充', '请说明具体要完成什么，可以继续发送消息补充'); return; }
     if (!value.assigneeId) {
       setProbe('blocked', '还没有可用的执行 Agent', '先在 Agent 管理中安装并探测一个可运行底座');
       return;
@@ -673,12 +756,14 @@
   }
 
   function validate(value, catalogs = state) {
+    value = { ...value, modelName: global.WorkAutomationCardState.defaultModelFor(catalogs, value.assigneeId, value.modelName) };
     const bindingError = global.WorkAutomationBindings.validate(value, catalogs);
     if (bindingError) return bindingError;
-    const timingError = global.ScheduleTiming.validate(value);
+    const timingError = global.ScheduleTiming.validate(value, state.card?.snapshot.editBase?.receipt);
     if (timingError) return timingError;
     if (!value.title) return '先给自动化起一个能看懂的名字';
     if (!String(value.note || '').trim()) return '请写清楚每次触发后要完成什么';
+    if (value.needsTask) return '请说明具体要完成什么，可以继续发送消息补充';
     if (!value.assigneeId) return '还没有可用的执行 Agent';
     const method = methodByKey(value.personalPluginKey, catalogs);
     if (method) {
@@ -690,10 +775,12 @@
     return '';
   }
 
-  async function save() {
-    if (!state.layer || state.saved || state.saving || state.card?.pending || state.card?.snapshot.uncertain) return;
-    const value = valueFromForm();
-    const invalid = validate(value);
+  async function save(pause = false) {
+    if (!state.layer || (state.saved && !pause) || state.saving || state.card?.pending || state.card?.snapshot.uncertain || state.card?.snapshot.phase === 'cancelled') return;
+    const editing = Boolean(state.createdId), base = state.card?.snapshot.editBase || (editing
+      ? {proposal:state.card.snapshot.proposal, receipt:state.card.snapshot.receipt} : null);
+    const value = pause ? {...state.proposal, enabled:false} : valueFromForm();
+    const invalid = pause ? '' : validate(value);
     if (invalid) {
       updateCard({ phase: 'error', proposal: value, error: invalid });
       showError(invalid);
@@ -702,10 +789,10 @@
       }
       return;
     }
-    const button = state.layer.querySelector('[data-waz-save]');
+    const button = state.layer.querySelector(pause ? '[data-waz-pause]' : '[data-waz-save]');
     const layer = state.layer, seq = state.seq, epoch = identityEpoch, seed = state.seed, record = state.card;
     const current = () => state.layer === layer && state.seq === seq && identityEpoch === epoch && layer.isConnected;
-    const ticket = record ? cards().begin(record, 'submitting', { proposal: value }) : null;
+    const ticket = record ? cards().begin(record, 'submitting', { proposal: value, ...(editing ? {editBase:base} : {}) }) : null;
     const owned = () => epoch === identityEpoch && (!ticket || cards().valid(ticket));
     // Capture form values before disabling controls; FormData omits disabled fields when a conversation switch persists the sheet.
     state.proposal = value;
@@ -718,8 +805,8 @@
     showError('');
     let creating = false;
     try {
-      const body = bodyOf(value);
-      if (SoduWorkAPI.preflightSchedule) {
+      const body = pause ? {enabled:false} : bodyOf(value);
+      if (!pause && SoduWorkAPI.preflightSchedule) {
         const preflight = await SoduWorkAPI.preflightSchedule(body, { force: true });
         if (!owned()) return;
         if (current() && preflight) setProbe(preflight.state || 'waiting', preflight.message || '执行条件待确认',
@@ -731,21 +818,27 @@
       // Persist the submitting state in the original conversation before sending to prevent an in-flight request from being resent as a draft.
       await seed.onBeforeSubmit?.(record ? cards().capture(record) : null);
       if (!owned()) return;
-      button.textContent = '正在创建…';
+      button.textContent = editing ? '正在保存修改…' : '正在创建…';
+      const patch = editing && !pause ? changesBody(value, base.proposal, body) : body;
       creating = true;
-      const saved = await SoduWorkAPI.createSchedule(body);
+      const saved = editing ? await SoduWorkAPI.updateSchedule(record.snapshot.createdId, patch) : await SoduWorkAPI.createSchedule(body);
       if (!owned()) return;
-      if (ticket) cards().finish(ticket, { phase: 'succeeded', proposal: value, receipt: saved || body, createdId: String(saved?.id || '') });
+      if (!saved?.id) throw new Error('服务端未返回自动化编号，请到自动化管理中确认保存结果');
+      const receipt = {...(record?.snapshot.receipt || body), ...saved};
+      const stored = {...value, ...saved, note:saved.note === body.note ? value.note : saved.note ?? value.note,
+        acceptance:saved.note && saved.note !== body.note ? [] : value.acceptance,
+        requiredCapabilities:value.requiredCapabilities};
+      if (ticket) cards().finish(ticket, { phase: 'succeeded', proposal: stored, receipt, createdId: String(saved.id), editBase:null, chatEditing:false });
       // Update persistent cards through their receipt without invoking callbacks for departed views. Standalone entry retains its delivery notification.
-      if ((!seed.cardId || current()) && typeof seed.onCreated === 'function') seed.onCreated(saved || body);
+      if (!editing && (!seed.cardId || current()) && typeof seed.onCreated === 'function') seed.onCreated(receipt);
       if (current()) {
-        state.saved = true; state.createdId = String(saved?.id || ''); state.proposal = value;
-        renderSaved(saved || body); global.petSay?.(value.sourceRequirement?.id ? '自动化草稿已保存，尚未启用，原需求保持不变' :
+        state.saved = true; state.createdId = String(saved?.id || ''); state.proposal = stored;
+        renderSaved(receipt); global.petSay?.(editing ? (pause ? '自动化已停用' : '自动化修改已保存') : value.sourceRequirement?.id ? '自动化草稿已保存，尚未启用，原需求保持不变' :
           '自动化已创建，到点会自己交给 AI 执行');
       }
     } catch (error) {
-      if (ticket && owned()) cards().finish(ticket, { phase: 'error', proposal: value, uncertain: creating && !value.sourceRequirement?.id,
-        error: errorText(error) + (creating ? (value.sourceRequirement?.id
+      if (ticket && owned()) cards().finish(ticket, { phase: 'error', proposal: value, uncertain: creating && (editing || !value.sourceRequirement?.id),
+        error: errorText(error) + (creating ? (editing ? '；保存结果尚未确认，请先到自动化管理中查询。' : value.sourceRequirement?.id
           ? '；可按原内容重试保存，同一次请求不会重复创建。'
           : '；创建结果尚未确认，请先到自动化管理中查询，避免重复创建。') : '') });
       if (!current()) return;
@@ -759,7 +852,7 @@
   }
 
   function renderSaved(saved) {
-    const body = state.layer?.querySelector('#wazBody'), value = state.proposal || saved;
+    const body = state.layer?.querySelector('#wazBody'), value = {...state.proposal, ...saved};
     if (body) {
       global.ForwardSelect?.destroy(body);
       body.innerHTML = global.WorkAutomationCardState.savedHtml(value,
@@ -769,6 +862,12 @@
 
   function onClick(event) {
     if (state.saving) return;
+    if (event.target.closest('[data-waz-cancel]')) { cancel(); return; }
+    if (event.target.closest('[data-waz-edit]')) { startEdit(); return; }
+    if (event.target.closest('[data-waz-pause]')) { void save(true); return; }
+    if (event.target.closest('[data-waz-chat-exit],[data-waz-chat-resume]')) {
+      updateCard({chatEditing:Boolean(event.target.closest('[data-waz-chat-resume]'))}); render(); return;
+    }
     if (event.target.closest('[data-waz-reparse]')) { void open({ ...state.seed, cardState: null }); return; }
     const reload = event.target.closest('[data-waz-reload-agents]');
     if (reload) { void refreshAgents(reload); return; }
@@ -784,17 +883,23 @@
 
   async function refreshAgents(button) {
     const layer = state.layer, seq = state.seq;
+    const catalogSeq = state.catalogSeq = (state.catalogSeq || 0) + 1;
     button.disabled = true;
     try {
       const result = await loadExecutionOptions({ text: valueFromForm().note });
-      if (layer !== state.layer || seq !== state.seq || state.saved || state.saving) return;
+      if (layer !== state.layer || seq !== state.seq || catalogSeq !== state.catalogSeq || state.saved || state.saving) return;
       state.proposal = valueFromForm();
       state.agents = result.agents;
       state.modelOptions = result.modelOptions || [];
       state.defaultModel = result.defaultModel || '';
+      state.hubDefaultModel = result.hubDefaultModel;
+      state.defaultModels = result.defaultModels || {};
+      state.defaultModelErrors = result.defaultModelErrors || {};
+      state.modelCatalogError = result.modelCatalogError === true;
       state.agentReason = result.reason;
       if (!state.proposal.assigneeId) state.proposal.assigneeId =
         (state.agents.find(item => item.available !== false) || state.agents[0] || {}).id || '';
+      state.proposal.modelName = global.WorkAutomationCardState.defaultModelFor(state, state.proposal.assigneeId, state.proposal.modelName);
       render();
     } finally { button.disabled = false; }
   }
@@ -807,6 +912,10 @@
     // change confirms a previously unresolved method selection.
     if (event.target.name === 'personalPluginKey' && event.type !== 'change') return;
     showError('');
+    if (['every','runAt','clock','clockHour','clockMinute','minute','customRule'].includes(event.target.name)) {
+      state.proposal.timingIssue = ''; state.proposal.relativeTiming = null;
+    }
+    if (event.target.name === 'note') state.proposal.needsTask = global.WorkAutomationBindings.taskNeedsDetail(event.target.value);
     if (!state.card?.snapshot.uncertain) updateCard({ phase: 'draft', error: '' });
     if (event.type === 'change' && ['personalPluginKey', 'repoId', 'assigneeId', 'every'].includes(event.target.name)) {
       state.proposal.bindingIssues = (state.proposal.bindingIssues || []).filter(item => item.field !== event.target.name);
@@ -820,24 +929,61 @@
     }
     if (event.target.name === 'assigneeId' && event.type === 'change') {
       const value = valueFromForm();
-      refreshModelField('');
-      state.proposal = { ...value, modelName: '' };
+      const target = agentById(value.assigneeId);
+      const modelName = global.WorkAutomationCardState.defaultModelFor(state, value.assigneeId,
+        target?.nativeModelPick || !canPickModel(target) ? '' : value.modelName);
+      refreshModelField(modelName);
+      state.proposal = { ...value, modelName };
     }
     paintRhythm();
     scheduleProbe();
   }
 
   function active() {
-    if (!state.layer || !state.layer.isConnected || state.saved || state.saving) return null;
+    if (!state.layer || !state.layer.isConnected || state.saved || state.saving || state.card?.snapshot.uncertain || state.card?.snapshot.phase === 'cancelled') return null;
     return { mode: 'automation', actionId: 'work.automation.create' };
   }
 
+  function acceptsFollowup(text) {
+    if (!state.layer?.isConnected || state.saving || state.card?.snapshot.uncertain || state.card?.snapshot.phase === 'cancelled') return false;
+    if (!state.saved) return state.card?.snapshot.chatEditing !== false;
+    return Boolean(state.createdId) && !/^(?:如果|假如|是否|不要修改|if\b|what if\b)/i.test(text.trim()) &&
+      /^(?:请|please\s+)?(?:修改|调整|改为|改成|改到|补充|增加|添加|把.+改|将.+改|(?:任务内容|执行时间|时间|标题|名称).{0,8}改|(?:停用|暂停|取消)(?:这个|这条|该)?(?:自动化|任务|计划)|(?:edit|update|change|reschedule)\b)/i.test(text.trim());
+  }
+
+  function startEdit() {
+    const snapshot = state.card && cards().capture(state.card);
+    if (!state.saved || state.saving || state.card?.pending || !snapshot?.createdId || snapshot.uncertain) return false;
+    const editBase = {proposal:snapshot.proposal, receipt:snapshot.receipt};
+    state.proposal = {...snapshot.proposal}; state.saved = false;
+    updateCard({phase:'draft', proposal:state.proposal, editBase, chatEditing:true, error:''});
+    render();
+    return true;
+  }
+
+  function cancel() {
+    if (!state.card || state.saving || state.card.snapshot.uncertain) return false;
+    const base = state.card.snapshot.editBase;
+    if (!cards().cancel(state.card)) return false;
+    resetRefineQueue(); ++probeSeq; clearTimeout(probeTimer);
+    if (base) {
+      updateCard({phase:'succeeded', ...base, editBase:null, chatEditing:false});
+      paintCard();
+    } else close();
+    return true;
+  }
+
   async function refineNow(change, options) {
+    if (state.saved && !startEdit()) return false;
     if (!active() || !change.trim()) return false;
     const layer = state.layer, seq = state.seq;
     const before = valueFromForm();
+    if (/^(?:请)?(?:停用|暂停|取消)(?:这个|这条|该)?(?:自动化|任务|计划)[。！!\s]*$/.test(change.trim())) {
+      state.proposal = {...before, enabled:false};
+      updateCard({phase:'draft', proposal:state.proposal}); render(); return true;
+    }
     const seed = state.seed, record = state.card;
-    const context = { seed, agents: state.agents.slice(), repos: state.repos.slice(), methods: state.methods.slice() };
+    const context = { seed, requestedAt:options?.requestedAt ?? Date.now(), agents: state.agents.slice(), repos: state.repos.slice(), methods: state.methods.slice() };
     const ticket = record ? cards().begin(record, 'loading', { proposal: before }) : null;
     if (record && !ticket) return false;
     if (global.PluginUIHost && typeof PluginUIHost.checkpointCurrent === 'function') {
@@ -855,26 +1001,34 @@
     }
     const configuredModel = source.model != null ? source.model : state.seed.model;
     const model = typeof configuredModel === 'function' ? configuredModel() : (configuredModel || '');
+    // Time-only edits are deterministic and must not be lost when extraction
+    // fails, returns old text, or waits behind another refinement.
+    const timingEdit = !source.attachmentContext?.length && !source.conversationContext?.text
+      ? global.ScheduleTiming.relativeEdit(directive, before, context.requestedAt) : null;
     let parsed = {};
-    if (global.SoduWorkAPI && SoduWorkAPI.parseTaskText) {
+    if (!timingEdit && global.SoduWorkAPI && SoduWorkAPI.parseTaskText) {
       parsed = await SoduWorkAPI.parseTaskText(
         global.WorkAutomationBindings.refinePrompt(before, change), model, state.seed.attachmentContext || [],
         global.WorkAutomationBindings.candidates(state, directive)).catch(() => ({}));
     }
     const current = () => state.layer === layer && seq === state.seq && !state.saved && !state.saving;
     if (ticket ? !cards().valid(ticket) : !current()) return false;
-    if (!parsed || !Object.keys(parsed).length || parsed._parseError) {
+    if (!timingEdit && (!parsed || !Object.keys(parsed).length || parsed._parseError)) {
       seed.attachmentContext = previousAttachments;
-      const error = (parsed?._parseError ? errorText(parsed._parseError) + '；' : '') + '这次没有解析成功，补充内容已保留，请重试或直接修改表单。';
+      // parseTaskText already returns a safe user-facing diagnostic. The generic
+      // error normalizer would replace it with an unrelated creation failure.
+      const error = (typeof parsed?._parseError === 'string' ? parsed._parseError + '；' : '') + '这次没有解析成功，补充内容已保留，请重试或直接修改表单。';
       if (ticket) cards().finish(ticket, { phase: 'error', proposal: before, error });
       else { state.proposal = before; render(error); }
       return false;
     }
-    const merged = proposalOf(parsed, directive, before, change, context);
-    if (Array.from(fullText(before.note)).length > 1500 || Array.from(change).length > 1500 ||
-        source.conversationContext?.text || seed.conversationContext?.text) {
+    let merged = timingEdit || proposalOf(parsed, directive, before, change, context);
+    if (!timingEdit && (Array.from(fullText(before.note)).length > 1500 || Array.from(change).length > 1500 ||
+        source.conversationContext?.text || seed.conversationContext?.text)) {
       merged.note = [fullText(before.note), '补充要求：\n' + change].filter(Boolean).join('\n\n');
     }
+    if (merged.relativeTiming && merged.relativeTiming.requestedAt === context.requestedAt)
+      merged = global.WorkAutomationBindings.syncRelativeTiming(merged);
     if (ticket) cards().finish(ticket, { phase: 'draft', proposal: merged });
     else { state.proposal = merged; render(); }
     if (current() && typeof seed.onRefined === 'function') seed.onRefined(merged);
@@ -883,11 +1037,17 @@
 
   function refine(text, options) {
     const change = fullText(text);
-    if (!active() || !change.trim()) return Promise.resolve(false);
+    if (!change.trim() || (!active() && !acceptsFollowup(change))) return Promise.resolve(false);
+    if (/^(?:请)?(?:取消|取消创建|取消修改|不用创建了|不要创建了|不创建了|不要了)[。！!\s]*$/.test(change.trim()) ||
+        (!state.createdId && /^(?:请)?取消(?:这个|这条|该)?(?:自动化|任务|计划)[。！!\s]*$/.test(change.trim()))) return Promise.resolve(cancel());
+    updateCard({chatEditing:true});
+    const source = {...options, requestedAt:options?.requestedAt ?? Date.now()};
     const scope = refineScope;
-    const run = refineTail.then(() => {
+    const record = state.card;
+    const run = refineTail.then(async () => {
+      if (record) await cards().idle(record);
       if (scope !== refineScope) return false;
-      return refineNow(change, options || {});
+      return refineNow(change, source);
     }).catch(() => false);
     refineTail = run;
     return run;
@@ -924,6 +1084,7 @@
   if (global.WorkAutomationSheet) Object.assign(global.WorkAutomationSheet, {
     draft: (parsed, text, prior, catalogs) => proposalOf(parsed, text, prior, text, catalogs), validate, bodyOf });
   if (global.WorkAutomationSheet) Object.assign(global.WorkAutomationSheet, { capture, hasSurface });
+  if (global.WorkAutomationSheet) Object.assign(global.WorkAutomationSheet, { acceptsFollowup, startEdit, cancel });
   global.addEventListener?.('soduwork-data-scope-changed', () => { identityEpoch++; cardController?.reset(); close(true); });
 
   if (global.PluginUIHost) {

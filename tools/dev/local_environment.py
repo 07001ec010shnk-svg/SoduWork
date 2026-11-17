@@ -121,8 +121,13 @@ def check_dependencies() -> tuple[str, str]:
 
 
 def check_desktop_session() -> None:
-    if sys.platform.startswith('linux') and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+    if not sys.platform.startswith('linux'):
+        return
+    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
         raise StartupError("Desktop startup requires a graphical Linux session. Use start.py without --desktop on a server.")
+    if os.geteuid() == 0:
+        raise StartupError("Linux desktop startup cannot run as root. Run as the ordinary user logged into a graphical session, "
+                           "or use start.py without --desktop for a headless service.")
 
 
 def dependency_report(*, desktop: bool = False) -> None:
@@ -299,6 +304,23 @@ def electron_binary(client: Path) -> Path:
     return client / 'node_modules/electron/dist' / relative
 
 
+def electron_install_environment() -> dict[str, str]:
+    """Enable the locked downloader's proxy only in its installation process."""
+    env = dict(os.environ)
+    switch = env.get('ELECTRON_GET_USE_PROXY')
+    if switch is None:
+        # Match EnvHttpProxyAgent: lowercase, including an empty value, wins.
+        proxy = any(env.get(name.lower(), env.get(name, '')).strip()
+                    for name in ('HTTP_PROXY', 'HTTPS_PROXY'))
+        if proxy:
+            env['ELECTRON_GET_USE_PROXY'] = '1'
+    else:
+        # @electron/get treats every nonempty string (even "false") as true.
+        env['ELECTRON_GET_USE_PROXY'] = ('' if switch.strip().lower() in
+                                        {'', '0', 'false', 'no', 'off'} else '1')
+    return env
+
+
 def prepare_desktop(state: Path, log: Path) -> Path:
     """Install only in the launcher's generated copy, leaving the checkout untouched."""
     node, npm = check_dependencies()
@@ -315,8 +337,9 @@ def prepare_desktop(state: Path, log: Path) -> Path:
             print("桌面运行环境下载最多等待 10 分钟 / Electron download allows up to 10 minutes. "
                   "If GitHub is unreachable, configure ELECTRON_MIRROR or your proxy and retry.", flush=True)
             try:
-                run([node, str(client / 'node_modules/electron/install.js')], cwd=client, log=log,
+                run([node, str(client / 'scripts/install-electron.cjs')], cwd=client, log=log,
                     label='[Desktop] 下载桌面运行环境 / Downloading the Electron runtime',
+                    env=electron_install_environment(),
                     timeout=ELECTRON_DOWNLOAD_TIMEOUT)
             except StartupError as exc:
                 raise StartupError(

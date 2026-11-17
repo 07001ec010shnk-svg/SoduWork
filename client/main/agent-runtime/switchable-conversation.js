@@ -146,7 +146,8 @@ function create({ raw: initial, options, restored, openNative, disposeNative, pr
       if (policy && (!support?.supported || !support.modes?.includes(policy.mode)))
         throw Error('目标 Agent 不支持当前权限模式，请先选择兼容的权限');
       let modelName = typeof selection.modelName === 'string' ? selection.modelName :
-        catalog.runtime(agentId).modelMode === catalog.runtime(raw.adapterId)?.modelMode ? before.modelSelection?.name || '' : '';
+        catalog.runtime(agentId).modelMode !== 'account' &&
+          catalog.runtime(agentId).modelMode === catalog.runtime(raw.adapterId)?.modelMode ? before.modelSelection?.name || '' : '';
       // Entering Codex uses the same first available native model as a new chat.
       if (agentId === 'codex' && !modelName)
         modelName = require('./native-model-catalog').list('codex').models?.[0]?.id || '';
@@ -154,6 +155,8 @@ function create({ raw: initial, options, restored, openNative, disposeNative, pr
         sessionTitle: segments.title(record) || raw.historyRow?.()?.title || '',
         modelName, reasoningEffort: '', resumePath: '', resumeCwd: '', runtimeConversationId: '',
         nativeDispatchId: '', nativeSessionStarted: undefined, verifyLegacySegment: false,
+        // A fresh native segment does not replay the original archive's failure receipt.
+        retainedHistoryId: '', retainedExecutionFailure: false,
         intent: '', mode: '', goal: '', acceptance: '', accessPolicy: policy,
         activePluginIds: before.activePlugins || [],
         contextPrompts: [...(options.contextPrompts || []), segments.brief(before)] };

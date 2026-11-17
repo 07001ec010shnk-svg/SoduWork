@@ -133,10 +133,6 @@ def _real_bin(cands: list[str], names: list[str]) -> str | None:
     return None
 
 
-def _claude_bin() -> str | None:
-    # Native install, account probing and ACP execution resolve the same file.
-    from .agent_native_install import active_binary
-    return active_binary(_data_root()) or None
 
 
 def _opencode_bin() -> str | None:
@@ -371,26 +367,6 @@ _NATIVE_PROFILES = {
         "session_flag": ["--session"],
         "compact": lambda run: _compact_opencode(run),
     },
-    "claude": {
-        "name": "Claude Code",
-        "bin": _claude_bin,
-        "needs_llm": False,
-        "own_session": True,        # SoduWork assigns this runtime's session ID before execution.
-        "start": lambda sid, mode, ws, cfg=None: [
-            "-p", "--session-id", sid, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-            # Planning uses the CLI's native plan mode.
-            # Working mode uses acceptEdits rather than bypassPermissions.
-            "--permission-mode", "plan" if mode == "plan" else "acceptEdits",
-        ],
-        "resume": lambda sid, mode, ws, cfg=None: [
-            "-p", "--resume", sid, "--output-format", "stream-json", "--verbose", "--include-partial-messages",
-            "--permission-mode", "plan" if mode == "plan" else "acceptEdits",
-        ],
-        # Claude resumes the same session with --resume; omitting -p opens its interactive interface.
-        "session_flag": ["--resume"],
-        # Let Claude manage its own context compaction.
-        "compact": None,
-    },
 
 
 
@@ -451,9 +427,6 @@ _NATIVE_PROFILES = {
 from ..agent_catalog import AGENTS as _AGENT_CATALOG
 from . import acp_agents as _acp_agents
 from . import codex_account_acp as _account_acp
-from . import harness2_runtime as _harness2_runtime
-
-_NATIVE_PROFILES["harness2"] = _harness2_runtime.profile()
 
 _PROFILES = {
     key: (_acp_agents.profile(key) if row["runner"]["adapter"] == "acp" else {
@@ -517,7 +490,9 @@ _PERSIST_KEYS += ("stream", "terminal", "contextSegments", "compacted", "context
 _PERSIST_KEYS += ("executionStartedAt",)
 _PERSIST_KEYS += ("accessPolicy", "nextAccessPolicy", "appliedAccessPolicy", "skillSelection")
 _PERSIST_KEYS += ("conversationMode", "turnStartSeq", "admissionKey", "reasoningEffort", "codexTransport")
+_PERSIST_KEYS += ("goalContract", "goalState", "goalUserPending", "goalTurnOwned")
 _PERSIST_KEYS += ("turnEndIdentity", "admissionStartSeq")
+_PERSIST_KEYS += ("usageReceipts", "modelLocalOnly", "activeUsageOwner")
 
 
 def _save_meta(ref: str) -> None:
@@ -526,6 +501,9 @@ def _save_meta(ref: str) -> None:
         run = _RUNS.get(ref)
         if not run:
             return
+        from . import runner_usage_receipts
+        if run.get("error"):
+            run["error"] = runner_usage_receipts.redact_metadata(run, run["error"], diagnostic=True)
         _record_terminal(ref, run)
         if run.get("cli") == "codex":
             run["codexTransport"] = (run.get("cfg") or {}).get(_account_acp.TRANSPORT_KEY, run.get("codexTransport") or "")
@@ -910,7 +888,8 @@ def _prepare_codex_home(env: dict) -> None:
     _codex_runtime_home.clean_skills(env)
 
 
-def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: bool = True) -> dict:
+def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: bool = True,
+             runtime_root: str | None = None) -> dict:
     """Build the child environment; native recovery terminals may omit model admission.
 
     That internal exception does not obtain credentials or authorize a managed turn.
@@ -921,7 +900,7 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
     if cfg.get(runtime_images.CFG_KEY):
         if not runtime_ref:
             raise runtime_images.ImageInputError("图片附件缺少会话归属，请重新发送")
-        if (prof.get("acp_key") or prof is _PROFILES.get("opencode") or prof is _PROFILES.get("harness2")) and not runtime_images.transport_supported(cfg.get("llm")):
+        if (prof.get("acp_key") or prof is _PROFILES.get("opencode")) and not runtime_images.transport_supported(cfg.get("llm")):
             raise runtime_images.ImageInputError("当前所选模型未启用图片输入，请手动选择支持图片的模型后重试；原图已保留，未自动更换模型")
         env[runtime_images.ENV_KEY] = runtime_images.environment(cfg, os.path.join(_store_dir(runtime_ref), "inputs"))
     # Agent skills may launch Python subprocesses. Keep their text boundary
@@ -948,12 +927,12 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
         # DSH's restricted-token sandbox requires a separate runtime temp root.
         # Keep its existing sandbox/approval policy; isolate only host internals.
         from .dsh_runtime import prepare_temp, apply_access_env
-        prepare_temp(env, _data_root(), runtime_ref, work_root)
+        prepare_temp(env, runtime_root or _data_root(), runtime_ref, work_root)
         apply_access_env(env, cfg.get("accessPolicy"))
     if prof is _PROFILES.get("codex"):
         # Give each session an independent CODEX_HOME to avoid desktop and concurrent-task cache conflicts.
         # Copy authentication state only, excluding personal hooks, MCP configuration, caches, and history.
-        codex_home = _codex_runtime_home.prepare(env, _data_root(), runtime_ref)
+        codex_home = _codex_runtime_home.prepare(env, runtime_root or _data_root(), runtime_ref)
     # Pass the out-of-repository MCP configuration path to the bridge.
     if (cfg or {}).get("mcpServers"):
         env["SODUWORK_MCP_SERVERS"] = str(cfg["mcpServers"])
@@ -966,7 +945,7 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
             env[str(target)] = os.environ[str(source)]
     if prof is _PROFILES.get("opencode"):
         from .opencode_runtime_config import prepare_environment
-        prepare_environment(env, _data_root())
+        prepare_environment(env, runtime_root or _data_root())
     # Use the task owner's Git identity and credentials.
     # Inject them before the needs_llm early return.
     # Self-authenticated runtimes still need Git credentials for code delivery.
@@ -977,21 +956,19 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
     # Add repository hosts to NO_PROXY while preserving system proxies for other requests.
     # Set this before the needs_llm early return so agents using native accounts also inherit it.
     _git_host_no_proxy(env, str((cfg or {}).get("repoGitUrl") or ""))
-    if prof is _PROFILES.get("harness2"):
-        return _no_proxy_for(_harness2_runtime.environment(env, cfg, runtime_ref=runtime_ref),
-                             str((cfg.get("llm") or {}).get("base") or ""))
     if not prof.get("needs_llm"):
         if prof.get("acp_key"):
-            _acp_agents.home_env(prof["acp_key"], env, _data_root())
+            _acp_agents.home_env(prof["acp_key"], env, runtime_root or _data_root())
         if prof is _PROFILES.get("codex"):
             env["CODEX_HOME"] = codex_home
             _account_acp.prepare_env(env, cfg, _codex_bin() or "")
         return env
     llm = (cfg or {}).get("llm") or {}
     base, key, model = llm.get("base", ""), llm.get("key", ""), llm.get("model", "")
+    local_only = llm.get("localOnly") is True
     kind = llm.get("kind") or "openai-compat"
     acp_key = str(prof.get("acp_key") or "")
-    if not (base and key and model):
+    if not (base and model and (key or local_only)):
         if prof is _PROFILES.get("pi"):
             if require_model:
                 raise RuntimeError("Pi 没有拿到本次派发的模型配置，请检查模型授权后重试。")
@@ -1000,7 +977,7 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
             from .pi_runtime_config import prepare_session_environment
             with _LOCK:
                 execution = dict(_RUNS.get(runtime_ref) or {})
-            prepare_session_environment(env, _data_root(), runtime_ref, execution)
+            prepare_session_environment(env, runtime_root or _data_root(), runtime_ref, execution)
             for name in list(env):
                 if name.upper() == "SODUWORK_LLM_KEY":
                     del env[name]
@@ -1016,17 +993,21 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
                 "为其配置或授权模型后重试；或在执行机上登录 %s 的个人账号。"
                 % (prof.get("name") or acp_key, prof.get("name") or acp_key))
         return env
-    env["SODUWORK_LLM_KEY"] = key
+    if key:
+        env["SODUWORK_LLM_KEY"] = key
+    else:
+        env.pop("SODUWORK_LLM_KEY", None)
     if acp_key:
         _acp_agents.inject_llm_env(
             acp_key, env, llm,
             mode=str((cfg or {}).get("_soduwork_agent_mode") or "work"))
         # Keep agent state directories outside restricted home-directory locations.
         # Some security policies block the rename operations required for session archival.
-        _acp_agents.home_env(acp_key, env, _data_root())
+        _acp_agents.home_env(acp_key, env, runtime_root or _data_root(),
+                            **({"installation_root": _data_root()} if acp_key == "dsh" and runtime_root else {}))
         if acp_key == "qwen":
             from . import qwen_runtime
-            qwen_runtime.configure(env, llm, _data_root(), runtime_ref)
+            qwen_runtime.configure(env, llm, runtime_root or _data_root(), runtime_ref)
         return _no_proxy_for(env, base)
 
     if prof.get("name") == "Pi":
@@ -1035,7 +1016,7 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
         from .pi_runtime_config import prepare
         with _LOCK:
             execution = dict(_RUNS.get(runtime_ref) or {})
-        prepare(env, _data_root(), llm, window(cfg) or _CTX_WINDOW_DEFAULT, runtime_ref, execution)
+        prepare(env, runtime_root or _data_root(), llm, window(cfg) or _CTX_WINDOW_DEFAULT, runtime_ref, execution)
         return _no_proxy_for(env, base)
     # OpenCode's default external_directory permission asks for confirmation, which unattended execution cannot provide.
     # Grant only the authorized Runner work root rather than enabling all permissions.
@@ -1061,7 +1042,7 @@ def _env_for(prof: dict, cfg: dict, runtime_ref: str = "", *, require_model: boo
         "$schema": "https://opencode.ai/config.json",
         "provider": {"company": {
             "npm": provider_pkg, "name": "SoduWork 模型服务",
-            "options": {"baseURL": base, "apiKey": "{env:SODUWORK_LLM_KEY}"},
+            "options": {"baseURL": base, **({"apiKey": "{env:SODUWORK_LLM_KEY}"} if key else {})},
             "models": {model: {"name": "公司 coding 模型",
                 "limit": {"context": context_limit, "output": min(output_limit, context_limit)},
                 "modalities": {
@@ -1120,7 +1101,7 @@ def _friendly(msg: str) -> str:
     if not m:
         return ""
     if "Not logged in" in m or "authentication_failed" in m or "/login" in m:
-        return ("本机的 claude 没有可用凭据（CLI 报 Not logged in）。"
+        return ("当前执行底座没有可用凭据（CLI 报 Not logged in）。"
                 "要么在这台机器上先把 CLI 登录好，要么给它配 API Key / 共享模型服务——"
                 "这一步得由人来定，SoduWork 不替你存密钥。")
     if "Incorrect API key" in m or "invalid_api_key" in m:

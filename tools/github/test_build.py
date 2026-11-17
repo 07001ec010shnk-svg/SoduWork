@@ -42,6 +42,52 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'digest differs'):
                 build.download('https://example.test/file', self.root / 'file', hashlib.sha256(b'expected').hexdigest())
 
+    def test_linux_signs_before_inventory_and_keeps_credentials_out_of_build_subprocesses(self):
+        events = []
+        credentials = {build.linux_signing.PREFIX + 'KEY_B64': 'fixture',
+                       build.linux_signing.PREFIX + 'PASSPHRASE': 'fixture'}
+        def run(*args, **kwargs):
+            events.append(args)
+            self.assertFalse(any(key.startswith(build.linux_signing.PREFIX) for key in kwargs['env']))
+        with patch.dict(build.os.environ, {**credentials, 'SODUWORK_INTERNAL_BUILD': ''}), \
+                patch.object(build, 'ROOT', self.root), patch.object(build, 'prepare_python'), \
+                patch.object(build.platform, 'system', return_value='Linux'), \
+                patch.object(build.platform, 'machine', return_value='x86_64'), \
+                patch.object(build.shutil, 'which', return_value='/fixture/tool'), \
+                patch.object(build.linux_signing, 'settings') as settings, \
+                patch.object(build.linux_signing, 'sign_packages', side_effect=lambda *args: events.append(('sign',))), \
+                patch.object(build, 'run', side_effect=run):
+            build.package_native(self.ctx, 'linux', self.root)
+            settings.assert_called_once()
+        self.assertEqual([args[0] for args in events], ['npm', 'npm', 'sign', 'node'])
+        self.assertIn('inventory', events[-1])
+
+    def test_linux_public_build_without_key_fails_before_dependency_preparation(self):
+        with patch.dict(build.os.environ, {}, clear=True), \
+                patch.object(build.platform, 'system', return_value='Linux'), \
+                patch.object(build.platform, 'machine', return_value='x86_64'), \
+                patch.object(build, 'prepare_python') as prepare, self.assertRaisesRegex(ValueError, 'FINGERPRINT'):
+            build.package_native(self.ctx, 'linux', self.root)
+        prepare.assert_not_called()
+
+    def test_linux_validation_does_not_require_or_use_a_release_key(self):
+        with patch.dict(build.os.environ, SODUWORK_INTERNAL_BUILD=''), \
+                patch.object(build, 'prepare_python'), patch.object(build, 'run'), \
+                patch.object(build.platform, 'system', return_value='Linux'), \
+                patch.object(build.platform, 'machine', return_value='x86_64'), \
+                patch.object(build.shutil, 'which', return_value='/fixture/tool'), \
+                patch.object(build.linux_signing, 'settings') as settings, \
+                patch.object(build.linux_signing, 'sign_packages') as sign:
+            build.package_native(self.ctx, 'linux', self.root, validation=True)
+        settings.assert_not_called()
+        sign.assert_not_called()
+
+    def test_dependency_commands_do_not_inherit_linux_signing_secrets(self):
+        with patch.dict(build.os.environ, {build.linux_signing.PREFIX + 'KEY_B64': 'fixture'}), \
+                patch.object(build.subprocess, 'run') as run:
+            build.run('fixture-build-tool')
+        self.assertFalse(any(key.startswith(build.linux_signing.PREFIX) for key in run.call_args.kwargs['env']))
+
     def test_android_requires_reviewed_mobile_source(self):
         with patch.object(build, 'ROOT', self.root), patch.object(build.platform, 'system', return_value='Linux'), \
                 self.assertRaisesRegex(ValueError, 'reviewed mobile'):
@@ -65,6 +111,46 @@ class BuildTests(unittest.TestCase):
         self.assertIs(build.configure_macos_signing(env, validation=True), env)
         self.assertNotIn('SODUWORK_MAC_RELEASE', env)
         self.assertNotIn('SODUWORK_MAC_REAL_KEYCHAIN', env)
+
+    def test_windows_build_selects_verified_upstream_portable_git_in_mirror_only_mode(self):
+        with patch.dict(build.os.environ, SODUWORK_INTERNAL_BUILD='', SODUWORK_PORTABLE_GIT_MIRROR=''), \
+                patch.object(build, 'ROOT', self.root), patch.object(build, 'prepare_python'), \
+                patch.object(build.platform, 'system', return_value='Windows'), \
+                patch.object(build.platform, 'machine', return_value='AMD64'), \
+                patch.object(build, 'run') as run:
+            build.package_native(self.ctx | {'component': 'client'}, 'windows', self.root)
+        environment = next(call.kwargs['env'] for call in run.call_args_list
+                           if call.args[:3] == ('npm.cmd', 'run', 'build'))
+        self.assertEqual(environment['SODUWORK_RUNTIME_MIRROR_ONLY'], '1')
+        # Exercise the actual consumer before any cache or download can mask an
+        # incomplete build environment. Selection reads no archives or network.
+        script = """
+const { RELEASE, selectRelease } = require('./client/scripts/prepare-shell-runtime.cjs');
+console.log(JSON.stringify({ selected: selectRelease('x64'), official: RELEASE.x64 }));
+"""
+        result = subprocess.run(['node', '-e', script], cwd=build.ROOT, env=environment,
+                                capture_output=True, text=True, check=True, timeout=30)
+        selection = json.loads(result.stdout)
+        self.assertEqual(selection['selected']['urls'], [selection['official']['url']])
+        self.assertTrue(selection['official']['url'].startswith(
+            'https://github.com/git-for-windows/git/releases/download/'))
+        self.assertEqual(selection['selected']['sha256'], selection['official']['sha256'])
+        self.assertRegex(selection['selected']['sha256'], r'^[a-f0-9]{64}$')
+
+    def test_macos_checks_tls_behavior_and_frozen_ca_before_inventory(self):
+        with patch.object(build, 'ROOT', self.root), patch.object(build, 'prepare_python'), \
+                patch.object(build.platform, 'system', return_value='Darwin'), \
+                patch.object(build.platform, 'machine', return_value='arm64'), \
+                patch.object(build, 'run') as run:
+            build.package_native(self.ctx, 'macos-arm64', self.root, validation=True)
+        commands = [tuple(map(str, call.args)) for call in run.call_args_list]
+        tls = next(i for i, args in enumerate(commands) if 'test_runner_tls' in args)
+        frozen = next(i for i, args in enumerate(commands)
+                      if any(arg.endswith('check_runner_tls_bundle.py') for arg in args))
+        inventory = next(i for i, args in enumerate(commands) if 'inventory' in args)
+        self.assertLess(tls, frozen)
+        self.assertLess(frozen, inventory)
+        self.assertEqual(commands[frozen][-1], str(self.root / 'client/runner/soduwork-runner'))
 
     def test_postgres_refuses_non_fixture_databases_before_running_commands(self):
         for url in ['postgresql+asyncpg://user:fixture@db.example.test/soduwork_ci',

@@ -5,14 +5,21 @@
     pi:'Pi', codex:'Codex', 'codex-harness':'Codex Harness', opencode:'OpenCode',
     claude:'Claude Code', kimi:'Kimi Code', qwen:'Qwen Code', dsh:'DeepSeek Harness', harness2:'Google Harness²',
   };
-  function harnessNames() { return global.AgentBrand?.LABELS || FALLBACK_HARNESS_NAMES; }
+  function harnessNames() { return { ...FALLBACK_HARNESS_NAMES, ...global.AgentBrand?.LABELS }; }
+  function historicalHarnessId(value) {
+    if (typeof value !== 'string') return '';
+    const raw = value.toLowerCase();
+    // Retired runtime names remain provenance, never selectable capabilities.
+    if (Object.hasOwn(FALLBACK_HARNESS_NAMES, raw)) return raw;
+    const old = Object.entries(FALLBACK_HARNESS_NAMES).find(([, name]) => name.toLowerCase() === raw);
+    return old?.[0] || global.AgentBrand?.canonical(value) || raw;
+  }
   function historyHarnesses(row) {
     const labels = harnessNames();
     if (Array.isArray(row.usedHarnesses)) {
       // The main process supplies whole-conversation execution provenance. An
       // explicit empty set must never fall back to an unsent composer choice.
-      return [...new Set(row.usedHarnesses.map(value => typeof value === 'string'
-        ? global.AgentBrand?.canonical(value) || value.toLowerCase() : '')
+      return [...new Set(row.usedHarnesses.map(historicalHarnessId)
         .filter(id => id !== 'custom' && Object.hasOwn(labels, id)))];
     }
     if (row.pending || row.workOnly || row.count === 0) return [];
@@ -20,9 +27,16 @@
     return legacy !== 'custom' && Object.hasOwn(labels, legacy) ? [legacy] : [];
   }
   function harnessIcon(id) {
-    if (global.AgentBrand?.html) return global.AgentBrand.html(id);
+    if (global.AgentBrand?.html) return global.AgentBrand.html(id, { title: harnessNames()[id] });
     return '<span class="agent-brand" data-agent-brand="' + id + '"><svg viewBox="0 0 24 24" aria-hidden="true">' +
       '<path d="m12 3 8 4v10l-8 4-8-4V7zM4 7l8 4 8-4M12 11v10"/></svg></span>';
+  }
+  function displayedHarnesses(row) {
+    const ids = historyHarnesses(row);
+    const selected = historicalHarnessId(row.draftAdapterId);
+    const draft = !ids.length && row.workOnly === true && !row.live && !(row.count > 0) &&
+      selected !== 'custom' && Object.hasOwn(harnessNames(), selected);
+    return { ids: draft ? [selected] : ids, draft };
   }
   function create(ctx) {
   function accountOwner() {
@@ -34,17 +48,47 @@
     return String(api?.taskStorageKey?.('tasks') || '');
   }
   let historyOwner = accountOwner(), historyEpoch = 0;
+  let presenceSequence = 0, presenceFloor = 0;
+  const presenceVersions = new Map();
+  const executionFields = ['state', 'status', 'live', 'runtimeUnavailable', 'runtimeFailure', 'executionOutcome',
+    'workOnly', 'draftAdapterId'];
+  function executionState(row) {
+    return Object.fromEntries(executionFields.filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]]));
+  }
+  function preserveNewerPresence(rows, startedAt) {
+    return (rows || []).map(row => {
+      const id = canonicalLocalId(row.id) || row.id;
+      const aliases = [id, row.id, ...(row.historyAliasIds || [])];
+      if (startedAt >= presenceFloor && aliases.every(alias => (presenceVersions.get(alias) || 0) <= startedAt)) return row;
+      const current = ctx.chatItems.find(item => (canonicalLocalId(item.id) || item.id) === id);
+      return current ? { ...row, ...executionState(current) } : row;
+    });
+  }
   let mutationGeneration = 0, accountMutationGeneration = 0, lifecycleOverflow = false;
   const lifecycle = new Map(), MAX_LIFECYCLE_IDS = 1024;
   let localRows = [], localLoad = null, localReady = false, localNext = null, localRestart = false;
   let localCatalog = null, localRecords = new Map(), localAliases = new Set();
   let accountDisplayLinks = new Map();
+  const cloudCacheKeys = new Map();
   let localError = '', accountError = '', nativeRefreshStarted = false;
   let localRefreshTimer = null, localRefreshPending = false, closed = false;
   const historyApi = () => global.soduWorkAPI && (global.soduWorkAPI.conversationSession || global.soduWorkAPI.piSession);
   const supportsLocalHistory = () => historyApi()?.localHistorySupported === true;
   const isLocalId = id => localAliases.has(String(id || ''));
   const canonicalLocalId = id => global.WorkspaceSidebarState?.localHistoryId(id) || '';
+  function cloudDisplaySource(id) {
+    for (const row of localRows) {
+      const source = row.displayCloudSourceId;
+      if (!source || !localVisible(row)) continue;
+      if (row.id === id || source === id || ctx.chatItems.some(item => item.id === id &&
+          item.cloud && !hiddenRow(item) && item.historyAliasIds?.includes(source))) return source;
+    }
+    return '';
+  }
+  function selectedCloudCache(id, active = ctx.activeChatId) {
+    const source = cloudDisplaySource(id);
+    return Boolean(source && source === cloudDisplaySource(active));
+  }
   function selectedChat(id, active = ctx.activeChatId) {
     if (!id || !active) return false;
     if (id === active) return true;
@@ -164,7 +208,9 @@
     if (next === historyOwner) return false;
     historyOwner = next;
     accountDisplayLinks.clear();
+    cloudCacheKeys.clear();
     historyEpoch++;
+    presenceSequence++; presenceFloor = 0; presenceVersions.clear();
     mutationGeneration++;
     lifecycle.clear(); lifecycleOverflow = false;
     ctx.historyLoad = null;
@@ -355,9 +401,22 @@ function updateChatState(event) {
       }
       return;
     }
-    const row = rememberChatName(event && event.presence);
+    const presence = rememberChatName(event && event.presence);
+    const row = presence?.live ? { ...presence, workOnly: false, draftAdapterId: '' } : presence;
     const id = String(event && event.sessionId || row && row.id || '');
     if (!id || !row) return;
+    if (Object.hasOwn(row, 'state') || Object.hasOwn(row, 'status') || Object.hasOwn(row, 'draftAdapterId')) {
+      const canonical = canonicalLocalId(id) || id;
+      presenceVersions.delete(canonical); presenceVersions.set(canonical, ++presenceSequence);
+      if (presenceVersions.size > 1024) {
+        const oldest = presenceVersions.keys().next().value;
+        presenceFloor = Math.max(presenceFloor, presenceVersions.get(oldest));
+        presenceVersions.delete(oldest);
+      }
+      // Account directory refreshes also reuse these cached local rows.
+      localRows = localRows.map(item => (canonicalLocalId(item.id) || item.id) === canonical
+        ? { ...item, ...executionState(row) } : item);
+    }
     const previous = ctx.chatItems.find(item => String(item.id || '') === id);
     if (!row.emptyPlaceholder && !row.accountConversation && !row.remoteProjection &&
         (event.kind === 'renamed' || event.kind === 'history-lifecycle' ||
@@ -394,7 +453,8 @@ function updateChatState(event) {
     const nextState = ctx.chatState(row);
     const merged = { ...before, ...row };
     if (ctx.chatState(before) === nextState && before.title === row.title && before.live === row.live &&
-      JSON.stringify(historyHarnesses(before)) === JSON.stringify(historyHarnesses(merged))) return;
+      JSON.stringify(displayedHarnesses(before)) === JSON.stringify(displayedHarnesses(merged)) &&
+      before.workOnly === merged.workOnly && before.draftAdapterId === merged.draftAdapterId) return;
     if (row.accountConversation || row.cloud) {
       ctx.upsertChat({ ...row, id, pending: false });
       return;
@@ -544,7 +604,7 @@ function _newChatRow() {
       e.stopPropagation();
       const id = b.dataset.chatId || '';
       if (id && global.WorkspaceHost) {
-        const project = ctx.sidebarProjects?.projectForChat(id);
+        const project = ctx.sidebarProjects?.projectForChat(b.dataset.sidebarChatId || id);
         global.WorkspaceHost.open('create', {
           tab: 'chat', chatId: id, chatTitle: title.textContent || '', taskSession: b.dataset.taskSession === '1',
           ...(project ? { sidebarProjectId: project.id, sidebarProjectName: project.name, projectId: project.businessProjectId || '' } : {}),
@@ -562,7 +622,7 @@ function _newChatRow() {
     pin.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 4h8l-1 6 3 3H6l3-3zM12 13v7"/></svg>';
     pin.addEventListener('click', (e) => {
       e.stopPropagation();
-      const id = b.dataset.chatId || '';
+      const id = b.dataset.sidebarChatId || b.dataset.chatId || '';
       if (id) togglePinned(id);
     });
     const more = document.createElement('button');
@@ -589,7 +649,7 @@ function _newChatRow() {
     const move = chatMenuItem('移动到…', ctx.icon('move'), 'ws-chat-move');
     move.addEventListener('click', (e) => {
       e.stopPropagation();
-      const id = b.dataset.chatId || '';
+      const id = b.dataset.sidebarChatId || b.dataset.chatId || '';
       closeChatMenu();
       if (id && typeof ctx.sidebarProjects?.openMoveMenu === 'function') ctx.sidebarProjects.openMoveMenu(id);
     });
@@ -662,20 +722,23 @@ function _paintChatLocale(button) {
     const copy = button._localeChat;
     if (!copy) return;
     const label = copy.title || ctx.wsT('chat.untitled', '未命名对话');
-    const status = ctx.wsT('chat.state.' + copy.state, ctx.CHAT_STATE[copy.state]);
+    const status = copy.offlineCloudCache ? historyText('workspace.history.cloudCache', '本地缓存（只读）')
+      : ctx.wsT('chat.state.' + copy.state, ctx.CHAT_STATE[copy.state]);
     // The title is user data. Translate only the surrounding status, and keep
     // the generic DOM adapter from interpreting the combined attribute text.
     button.setAttribute('data-user-attributes', 'title aria-label');
     const separator = global.SoduWorkI18n?.getLocale() === 'en-US' ? ', ' : '，';
-    button.setAttribute('aria-label', label + separator + status + (copy.harnesses ? separator + copy.harnesses : ''));
-    button.title = label + ' · ' + status + (copy.harnesses ? ' · ' + copy.harnesses : '');
+    const harnesses = (copy.draftHarness ? ctx.wsT('chat.harness.selected', '已选底座') + ' · ' : '') + copy.harnesses;
+    button.setAttribute('aria-label', label + separator + status + (harnesses ? separator + harnesses : ''));
+    button.title = label + ' · ' + status + (harnesses ? ' · ' + harnesses : '');
+    button.querySelector('.ws-chat-runtime').title = harnesses;
     const title = button.querySelector('.ws-chat-title');
     if (title.textContent !== label) title.textContent = label;
   }
 
 function _paintChatRow(row, c, isPinned) {
     const id = String(c.id || '');
-    const selected = ctx.active === 'create' && selectedChat(id);
+    const selected = ctx.active === 'create' && (selectedChat(id) || selectedCloudCache(id));
     const state = ctx.chatState(c);
     const label = c.title || '未命名对话';
     const b = row.querySelector('.ws-chat');
@@ -691,10 +754,12 @@ function _paintChatRow(row, c, isPinned) {
     b.className = 'ws-task ws-chat is-' + state + (c.pending ? ' is-pending' : '') +
       (selected ? ' is-active' : '');
     b.dataset.chatId = id; b.disabled = !id;
+    b.dataset.sidebarChatId = c.displaySlotId || id;
     b.setAttribute('aria-current', selected ? 'page' : 'false');
-    const harnesses = historyHarnesses(c);
+    const { ids: harnesses, draft } = displayedHarnesses(c);
     const runtimeName = harnesses.map(id => harnessNames()[id]).join('、');
-    b._localeChat = { title: c.title, state, harnesses: runtimeName };
+    b._localeChat = { title: c.title, state, harnesses: runtimeName,
+      draftHarness: draft, offlineCloudCache: c.offlineCloudCache };
     _paintChatLocale(b);
     dot.className = 'st-chat st-chat-' + state;
     /* A local collaboration cache is presentation state, not proof that this
@@ -709,7 +774,6 @@ function _paintChatRow(row, c, isPinned) {
       runtime.innerHTML = markup;
       runtime._harnessMarkup = markup;
     }
-    runtime.title = runtimeName;
     runtime.setAttribute('aria-hidden', 'true');
     runtime.setAttribute('data-user-attributes', 'title');
     pin.title = isPinned ? '取消置顶' : '置顶聊天';
@@ -778,7 +842,7 @@ function _syncChatList(target, items, isPinned, pool) {
         replacedNative.add(id);
       }
     }
-    return items.filter(row => {
+    const visible = items.filter(row => {
       // A verified account display counterpart must not resurrect a locally
       // hidden source. This is presentation only, never a Hub lifecycle write.
       if (hiddenDisplaySource(row)) return false;
@@ -787,6 +851,25 @@ function _syncChatList(target, items, isPinned, pool) {
       if (representative) return representative.id === row.id;
       return !replacedNative.has(canonicalLocalId(row.id));
     });
+    const replacements = new Map(), hiddenCopies = new Set();
+    for (const copy of localRows) {
+      const source = copy.displayCloudSourceId;
+      if (!source || !localVisible(copy) || hiddenRow(copy)) continue;
+      const cached = available.find(row => row.id === copy.id);
+      if (!cached) continue;
+      const remote = ctx.chatItems.find(row => row.cloud && !row.archived && !row.deleted && !hiddenRow(row) &&
+        (row.id === source || row.historyAliasIds?.includes(source)));
+      const original = available.find(row => row.id === (remote?.id || source) && !hiddenRow(row));
+      const slot = original && (!placed.has(copy.id) || placed.has(original.id)) ? original : cached;
+      if (!cloudCacheKeys.has(source)) cloudCacheKeys.set(source, remote ? ctx._chatUiKey(remote) : 'chat:' + source);
+      // Keep storage, selection targets and lifecycle IDs intact. Only the
+      // displayed slot is shared; an unavailable original falls back to its cache.
+      replacements.set(slot.id, { ...(remote || copy), displaySlotId: slot.id,
+        _uiKey: cloudCacheKeys.get(source), ...(!remote ? { state: 'completed', offlineCloudCache: true } : {}) });
+      hiddenCopies.add(copy.id);
+      if (original) hiddenCopies.add(original.id);
+    }
+    return visible.flatMap(row => replacements.has(row.id) ? [replacements.get(row.id)] : hiddenCopies.has(row.id) ? [] : [row]);
   }
 
 function renderChats() {
@@ -812,8 +895,8 @@ function renderChats() {
     const available = groups ? [...groups.pinned, ...groups.recent, ...(groups.projects || []).flatMap(project => project.items)] : list;
     const placed = new Set(groups ? [...groups.pinned, ...(groups.projects || []).flatMap(project => project.items)]
       .map(item => item.id) : pins);
-    const displayedIds = new Set(displayRows(available, available, placed).map(item => item.id));
-    const visible = items => items.filter(item => !hiddenRow(item) && displayedIds.has(item.id));
+    const displayed = new Map(displayRows(available, available, placed).map(item => [item.displaySlotId || item.id, item]));
+    const visible = items => items.filter(item => !hiddenRow(item)).flatMap(item => displayed.has(item.id) ? [displayed.get(item.id)] : []);
     const pinned = visible(groups ? groups.pinned : list.filter((item) => pins.has(String(item.id || ''))));
     const recent = visible(groups ? groups.recent : list.filter((item) => !pins.has(String(item.id || ''))));
     const pinnedBox = ctx.root.querySelector('#wsPinnedBox');
@@ -879,6 +962,7 @@ function refreshAccountHistory() {
       return Promise.resolve(false);
     }
     const epoch = historyEpoch, generation = accountMutationGeneration, localRevision = localCatalog?.revision;
+    const presenceAtStart = presenceSequence;
     const current = () => { syncHistoryOwner(); return epoch === historyEpoch && generation === accountMutationGeneration; };
     const job = Promise.resolve().then(() => {
       if (!current()) return null;
@@ -906,7 +990,8 @@ function refreshAccountHistory() {
         // response's accepted cleanup IDs even when old ledger entries expire.
         forgetPinned([...archived], '这条会话暂时无法归档', true);
         forgetPinned([...deleted]);
-        ctx.setChats(supportsLocalHistory() ? [...localRows, ...(got.chats || []).filter(row => !isLocalId(row.id))] : got.chats || []);
+        const incoming = preserveNewerPresence(got.chats, presenceAtStart);
+        ctx.setChats(supportsLocalHistory() ? [...localRows, ...incoming.filter(row => !isLocalId(row.id))] : incoming);
       }
       else { accountError = 'unavailable'; ctx.chatsLoading = false; ctx.renderChats(); }
       return Boolean(got && got.ok);
@@ -932,6 +1017,7 @@ function refreshAccountHistory() {
     if (localLoad) return localLoad;
     if (append && !localNext && !localRestart) return Promise.resolve(true);
     const workspace = localCatalog?.workspace, epoch = historyEpoch;
+    const presenceAtStart = presenceSequence;
     const current = () => { syncHistoryOwner(); return !closed && epoch === historyEpoch; };
     const options = { source: 'local', limit: 50, ...(refresh ? { refresh: true } : {}),
       ...(append && localNext && !localRestart ? { after: localNext } : {}),
@@ -965,7 +1051,7 @@ function refreshAccountHistory() {
       }
       const previousRevision = localCatalog?.revision;
       localCatalog = { workspace: catalog.workspace, revision: catalog.revision };
-      const oldRows = localRows.filter(localVisible), incoming = (got.chats || []).filter(localVisible);
+      const oldRows = localRows.filter(localVisible), incoming = preserveNewerPresence(got.chats, presenceAtStart).filter(localVisible);
       const ids = new Set(incoming.map(row => row.id));
       localRows = append ? [...oldRows.filter(row => !ids.has(row.id)), ...incoming]
         : [...incoming, ...oldRows.filter(row => !ids.has(row.id))];
@@ -1044,7 +1130,7 @@ function refreshAccountHistory() {
     ctx.activeChatId = next;
     global.WorkspaceNavigation?.chatChanged(next);
     for (const button of ctx.root?.querySelectorAll('.ws-chat') || []) {
-      const selected = ctx.active === 'create' && selectedChat(button.dataset.chatId, next);
+      const selected = ctx.active === 'create' && (selectedChat(button.dataset.chatId, next) || selectedCloudCache(button.dataset.chatId, next));
       if (button.classList.contains('is-active') === selected) continue;
       button.classList.toggle('is-active', selected);
       button.setAttribute('aria-current', selected ? 'page' : 'false');

@@ -1,5 +1,6 @@
 (function (global) {
   const messages = {
+    "编辑 Markdown": "Edit Markdown",
     "始终允许": "Always allow",
     "内容由 AI 生成，请核实重要信息": "AI-generated content; please verify important information",
     "审批权限列表暂时不可用": "Review permissions are temporarily unavailable",

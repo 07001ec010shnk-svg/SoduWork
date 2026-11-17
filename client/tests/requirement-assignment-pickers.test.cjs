@@ -44,6 +44,24 @@ test('assignment picker renders untrusted catalog names, identifiers and diagnos
   assert.doesNotMatch(markup, /<(?:img|script)\b/i);
 });
 
+test('English assignment choices translate UI labels and preserve plugin and agent names', () => {
+  const h = fixture({
+    substrates: [agent('agent-id', {name: '团队 Agent', locationLabel: '本机'})],
+    workflows: [flow('workflow-id', {name: '团队插件'})], models: [],
+  });
+  const work = require('../core/locales/en-US-work-pages.js');
+  const copy = { ...work, '本机': 'Local' };
+  h.ctx.window.SoduWorkI18n = {translateText: value => copy[value] || value};
+  h.ctx._fwdPaintSelection = h.ctx._fwdSyncConfirm = () => {};
+  let markup;
+  const box = {set innerHTML(value) {markup = value;},
+    querySelector: () => ({addEventListener() {}}), querySelectorAll: () => []};
+  h.ctx._fwdRenderAIPickers('fixture-task', box);
+  assert.match(markup, /No plugin · Run directly/);
+  assert.match(markup, /团队插件/);
+  assert.match(markup, /团队 Agent · Local/);
+});
+
 test('assignment methods require builtin or installed provenance plus a binding', () => {
   const h = fixture();
   for (const [item, expected] of [
@@ -185,28 +203,45 @@ function directModelFixture() {
   return {...h, options, button, dispatches};
 }
 
-test('direct model removal stays explicit and blocks confirmation until a valid model or default is chosen', async () => {
-  for (const models of [['replacement-model'], []]) {
-    for (const recovery of ['', ...models]) {
-      const h = directModelFixture();
-      assert.equal(h.nodes.get('fwdModel').value, 'chosen-model');
-      h.update({...h.options, models});
-      h.ctx._fwdSyncConfirm('task');
-      const select = h.nodes.get('fwdModel');
-      assert.equal(select.value, '__unselected__');
-      assert.equal(select.options[0].disabled, true);
-      assert.match(select.options[0].text, /原模型已不可用，请重新选择/);
-      assert.equal(h.run('_fwdModel'), 'chosen-model');
-      assert.equal(h.button.disabled, true);
-      await h.ctx._fwdConfirm('task');
-      assert.equal(h.dispatches.length, 0, 'programmatic confirmation also rejects the stale selection');
-      h.nodes.get('fwdModel').change(recovery);
-      assert.equal(h.run('_fwdModel'), recovery);
-      assert.equal(h.button.disabled, false);
-      await h.ctx._fwdConfirm('task');
-      assert.equal(h.dispatches.length, 1);
-    }
+test('new requirement execution explicitly selects the sole usable model and excludes unavailable default placeholders', () => {
+  for (const name of ['only-hub-model', 'local:model-0123456789abcdef0123456789abcdef']) {
+    const h = directModelFixture();
+    h.update({ substrates: [agent('chosen', { cli: 'qwen', localConversationAvailable: true })],
+      defaultModel: 'unavailable:default', defaultModelErrors: { qwen: 'No default' },
+      modelOptions: [{ name, localOnly: name.startsWith('local:') }] });
+    h.run('_fwdModel = ""'); h.ctx._fwdSyncConfirm('task');
+    assert.equal(h.run('_fwdModel'), name);
+    assert.equal(h.nodes.get('fwdModel').value, name);
+    assert.equal(h.button.disabled, false);
+    h.run('_fwdModel = "local:model-fedcba9876543210fedcba9876543210"');
+    h.ctx._fwdSyncConfirm('task');
+    assert.equal(h.button.disabled, false, 'a deleted choice resolves to the first available replacement');
+    assert.equal(h.run('_fwdModel'), name);
   }
+});
+
+test('direct model removal resolves its replacement before both display and confirmation', async () => {
+  const h = directModelFixture();
+  h.update({...h.options, models: ['replacement-model', 'another-model']});
+  h.ctx._fwdSyncConfirm('task');
+  assert.equal(h.nodes.get('fwdModel').value, 'replacement-model');
+  assert.equal(h.run('_fwdModel'), 'replacement-model');
+  assert.equal(h.button.disabled, false);
+  h.run("_fwdModel='deleted-after-display'");
+  await h.ctx._fwdConfirm('task');
+  assert.equal(h.run('_fwdModel'), 'replacement-model');
+  assert.equal(h.dispatches.length, 1);
+  h.nodes.get('fwdModel').change('another-model');
+  assert.equal(h.run('_fwdModel'), 'another-model');
+  await h.ctx._fwdConfirm('task');
+  assert.equal(h.dispatches.length, 2);
+  const empty = directModelFixture();
+  empty.update({...empty.options, models: []});
+  empty.ctx._fwdSyncConfirm('task');
+  assert.equal(empty.button.disabled, true);
+  assert.equal(empty.run('_fwdModel'), 'chosen-model');
+  await empty.ctx._fwdConfirm('task');
+  assert.equal(empty.dispatches.length, 0);
 });
 
 test('model controls rebuilt while dispatch is busy stay disabled and ignore changes', () => {
@@ -289,7 +324,7 @@ test('local model catalog is optional, source-labeled and kept beside Hub choice
   assert.deepEqual(rows.map(row => [row.name, row.source, row.localOnly]),
     [['local:model-abc', 'local', true]]);
   h.ctx._fwdMergeLocalModelChoices(rows);
-  assert.deepEqual(h.ctx.options.modelOptions.map(row => row.name), ['hub-model', 'local:model-abc']);
+  assert.deepEqual(h.ctx.options.modelOptions.map(row => row.name), ['local:model-abc', 'hub-model']);
   h.run("_fwdLocalAgents = [{key:'local:pi', name:'Pi', executionSource:'conversation', modelPick:true}]");
   h.ctx.options.substrates = [agent('local:pi', {name: 'Hub Pi', remote: false})];
   const merged = h.ctx._fwdDirectAgents()[0];
@@ -428,18 +463,24 @@ test('the native duplicate never replaces a repository, workflow or saved Runner
 });
 
 
-test('only a verified native Pi advertises device-owned models while other Agent catalogs remain usable', () => {
+test('a verified local managed Agent advertises device-owned models while account Agents remain isolated', () => {
   const h = directModelFixture();
   h.ctx._fwdMergeLocalModelChoices([{name: 'local:model-fixture', label: 'Fixture local model', localOnly: true}]);
-  for (const cli of ['qwen', 'codex-harness', 'opencode', 'dsh', 'harness2', 'custom-runtime', '']) {
-    h.ctx.options.substrates = [agent('local:' + cli, {name: 'Pi', cli, executionSource: 'conversation', modelPick: true})];
+  for (const cli of ['qwen', 'codex-harness', 'opencode', 'dsh', 'custom-runtime']) {
+    h.ctx.options.substrates = [agent('local:' + cli, {name: cli, cli, executionSource: 'conversation', modelPick: true})];
     h.run("_fwdSelection.ai = {type:'direct',id:'previous-pi',available:true};_fwdModel = 'local:model-fixture'");
     h.ctx._fwdChoose('task', {type:'direct',id:'local:'+cli,available:true});
-    assert.equal(h.run('_fwdModel'), '', 'switching runtime must not retain a local override: ' + cli);
-    assert.doesNotMatch(h.nodes.get('fwdDecision').innerHTML, /value="local:model-fixture"/);
-    assert.match(h.nodes.get('fwdDecision').innerHTML, /value="chosen-model"/,
-      'managed choices remain usable: ' + cli);
+    assert.equal(h.run('_fwdModel'), 'local:model-fixture', 'managed runtime keeps the local override: ' + cli);
+    assert.match(h.nodes.get('fwdDecision').innerHTML, /value="local:model-fixture"/,
+      'local choice remains visible: ' + cli);
     assert.equal(h.button.disabled, false);
+  }
+  for (const cli of ['codex']) {
+    h.ctx.options.substrates = [agent('local:' + cli, {name: cli, cli, executionSource: 'conversation', modelMode: 'account', modelPick: true})];
+    h.run("_fwdSelection.ai = {type:'direct',id:'previous-pi',available:true};_fwdModel = 'local:model-fixture'");
+    h.ctx._fwdChoose('task', {type:'direct',id:'local:'+cli,available:true});
+    assert.equal(h.run('_fwdModel'), '', 'account runtime cannot retain a local override: ' + cli);
+    assert.doesNotMatch(h.nodes.get('fwdDecision').innerHTML, /value="local:model-fixture"/);
   }
   assert.equal(h.ctx._fwdLocalModelAllowed({key: 'local:pi', local: true}), false,
     'a local label without successful discovery does not prove conversation readiness');
