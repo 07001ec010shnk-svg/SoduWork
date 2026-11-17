@@ -74,6 +74,7 @@ for (const [adapterId, connectors] of [
 });
 
 test('old Runner sessions still execute but cannot advertise mid-session permission changes', async t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-legacy-runner-change-'));
   const adapter = createRunnerRuntimeAdapter({
     modelConfig: { fetchModel: async () => ({ ok: true, model: { id: 'fixture', key: 'fixture' } }) },
     runnerRuntime: { async rpc(op) {
@@ -81,10 +82,11 @@ test('old Runner sessions still execute but cannot advertise mid-session permiss
       if (op === 'job.session') return { ok: true, data: { status: 'done', items: [] } };
       return { ok: true, data: { ok: true } };
     } } });
-  const session = await adapter.resumeSession({ native: { runner: { openOptions: { cwd: os.tmpdir(), resumePath: 'legacy-old-runner' } } } });
-  t.after(() => session.dispose()); const handle = getRunnerSessionDetails(session).handle;
+  const session = await adapter.resumeSession({ native: { runner: { openOptions: { cwd: root, resumePath: 'legacy-old-runner' } } } });
+  t.after(async () => { await session.dispose(); fs.rmSync(root, { recursive: true, force: true }); });
+  const handle = getRunnerSessionDetails(session).handle;
   await until(() => handle.snapshot().status === 'idle');
   assert.equal(handle.snapshot().accessControl.canChangeDuringSession, false);
-  assert.equal((await handle.setAccessPolicy(rules.create('full', os.tmpdir()), 0)).ok, false);
+  assert.equal((await handle.setAccessPolicy(rules.create('full', root), 0)).ok, false);
   assert.equal((await session.send({ text: 'compatibility followup' }).completion).ok, true);
 });
