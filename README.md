@@ -376,7 +376,7 @@ Ideas are welcome in [Discussions](https://github.com/mdiri-ai/SoduWork/discussi
 - **Chat**: [Discord](https://discord.gg/AXYNrAYHy)
 - **Bugs and feature requests**: [GitHub Issues](https://github.com/mdiri-ai/SoduWork/issues)
 - **Questions and ideas**: [GitHub Discussions](https://github.com/mdiri-ai/SoduWork/discussions)
-- **Enterprise**: private deployment, integration and support. Email [soduwork@outlook.com](mailto:soduwork@outlook.com).
+- **Enterprise**: private deployment, integration and support. Email [contact@soduwork.ai](mailto:contact@soduwork.ai).
 
 ## Contributing
 
