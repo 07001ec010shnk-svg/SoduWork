@@ -15,6 +15,12 @@ let win;
 const js = code => win.webContents.executeJavaScript(code);
 const tick = () => js('new Promise(resolve => setTimeout(resolve, 35))');
 async function locale(value) { await js(`SoduWorkI18n.setLocale(${JSON.stringify(value)})`); await tick(); }
+async function checkHiddenTeamNavigation() {
+  await js(`document.querySelector('[data-rail-menu="more"]').click();void 0`);
+  assert.equal(await js(`document.querySelectorAll('#wsNav [data-view="aidesk"], #wsRail [data-rail-view="aidesk"], #wsRailMoreMenu [data-rail-view="aidesk"]').length`), 0);
+  assert.equal(await js(`document.querySelector('#wsRailMoreMenu [data-rail-view="memory"]').checkVisibility()`), true);
+  await js(`document.querySelector('[data-rail-menu="more"]').click();void 0`);
+}
 async function run() {
   win = new BrowserWindow({ show: false, width: 1000, height: 800,
     webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
@@ -37,10 +43,13 @@ async function run() {
       {id:'literal-file',title:'D:/保存/New chat.md',state:'completed',adapterId:'pi'}]);
     WorkspaceShell.setTasks([{id:'task-zh',title:'删除',status:'todo'},{id:'task-en',title:'Settings',status:'done'}]);`);
   await tick();
+  await checkHiddenTeamNavigation();
   assert.equal(await js(`document.querySelector('.ws-new-chat [data-view="create"] span').textContent`), 'New chat');
   assert.equal(await js(`document.querySelector('[data-i18n="nav.history"]').textContent`), 'Issues');
   assert.equal(await js(`document.querySelector('#wsRecentToggle span').textContent`), 'Recent issues');
   await locale('zh-CN');
+  await checkHiddenTeamNavigation();
+  report.cases.push('AI team stays absent from navigation and More in both locales while Memory remains available');
   assert.equal(await js(`document.querySelector('.ws-new-chat [data-view="create"] span').textContent`), '新对话');
   assert.equal(await js(`document.querySelector('.ws-new-chat').getAttribute('aria-label')`), '新对话');
   assert.equal(await js(`document.querySelector('[data-i18n="nav.history"]').textContent`), '需求池');
