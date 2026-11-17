@@ -68,7 +68,11 @@ try{
     await delay(80);
   }
   async function shot(name){const s=await page.call('Page.captureScreenshot',{format:'png'});fs.writeFileSync(path.join(output,name+'.png'),Buffer.from(s.data,'base64'));}
-  async function edit(){await click('.cap-plugin-open[data-plugin="'+initial.pluginId+'"]');await click('#capPersonalEdit');await page.waitFor(()=>!!document.querySelector('#capPluginIconUpload'));}
+  async function edit(){
+    await click('.cap-plugin-open[data-plugin="'+initial.pluginId+'"]');
+    await click('#capPersonalEdit');
+    await page.waitFor(()=>!!document.querySelector('#capPluginIconUpload'));
+  }
   async function upload(file){
     const doc=await page.call('DOM.getDocument');
     const {nodeId}=await page.call('DOM.querySelector',{nodeId:doc.root.nodeId,selector:'#capPluginIconFile'});
@@ -98,16 +102,25 @@ try{
   }
   await shot('01-upload');
   const bad=path.join(root,'invalid.png');fs.writeFileSync(bad,'not an image');
-  await upload(bad);await page.waitFor(()=>document.querySelector('#capPluginIconStatus').textContent.includes('无法读取'));
+  await upload(bad);await page.waitFor(()=>document.querySelector('#capPluginIconError').textContent.includes('无法读取'));
   assert.equal(await page.run(()=>document.querySelector('#capPluginIconPreview img').src),uploaded);
   checks.push('invalid image rejected without replacing current selection');
   const svg=path.join(root,'unsafe.svg');fs.writeFileSync(svg,'<svg xmlns="http://www.w3.org/2000/svg" onload="window.pwned=true"/>');
-  await upload(svg);assert.match(await page.run(()=>document.querySelector('#capPluginIconStatus').textContent),/请选择 PNG/);
+  await upload(svg);assert.match(await page.run(()=>document.querySelector('#capPluginIconError').textContent),/请选择 PNG/);
   assert.equal(await page.run(()=>!!window.pwned),false);
   checks.push('active image format rejected');
   const large=path.join(root,'large.png');fs.writeFileSync(large,Buffer.alloc(2*1024*1024+1));
-  await upload(large);assert.match(await page.run(()=>document.querySelector('#capPluginIconStatus').textContent),/2 MB/);
-  checks.push('oversized upload rejected');
+  await upload(large);assert.match(await page.run(()=>document.querySelector('#capPluginIconError').textContent),/2 MB/);
+  assert.equal(await page.run(() => {
+    const error = document.querySelector('#capPluginIconError');
+    const style = getComputedStyle(error);
+    return error.checkVisibility() && error.getAttribute('role') === 'alert' && parseFloat(style.borderTopWidth) > 0;
+  }), true);
+  assert.equal(await page.run(() => document.querySelector('#capPluginIconPreview img').src), uploaded);
+  await upload(path.join(root, 'logo.webp'));
+  assert.equal(await page.run(() => document.querySelector('#capPluginIconError').textContent), '');
+  assert.equal(await page.run(() => document.querySelector('#capPluginIconPreview img').src), uploaded);
+  checks.push('oversized upload is announced and visible; selecting a valid image clears the error');
   await save();
   assert.equal(personal.get(app,initial.pluginId).icon,uploaded);
   await page.waitFor(id=>!!document.querySelector('.cap-plugin-open[data-plugin="'+id+'"] .cap-plugin-custom-icon'),initial.pluginId);

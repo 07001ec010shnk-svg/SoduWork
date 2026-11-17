@@ -12,7 +12,8 @@
 .cap-maker-icon-actions{display:flex;gap:8px;flex-wrap:wrap}
 .cap-maker-icon-actions button{min-height:32px;font:inherit;font-size:max(var(--font-min-readable, 14.5px), 12px);border-radius:8px}
 .cap-maker-icon-actions button:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
-.cap-maker-icon-actions [hidden],#capPluginIconStatus:empty{display:none}
+.cap-maker-icon-actions [hidden],#capPluginIconStatus:empty,.cap-maker-icon-error:empty{display:none}
+.cap-maker-icon-error{max-width:100%;box-sizing:border-box;padding:8px 10px;border:1px solid var(--danger,#c53030);border-radius:8px;color:var(--danger,#c53030);background:color-mix(in srgb,var(--danger,#c53030) 8%,var(--surface,#fff));font-size:var(--font-min-readable,14.5px);line-height:1.45;overflow-wrap:anywhere}
 @media(max-width:620px){.cap-maker-icon-field{gap:12px}.cap-maker-icon-field>.cap-plugin-brand{width:52px;height:52px;flex-basis:52px;border-radius:14px}}
 .cap-maker-types{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
 .cap-maker-standalone-toggle{display:flex;align-items:center;gap:7px;min-height:34px;padding:7px 10px;
