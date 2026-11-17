@@ -34,6 +34,7 @@
   var passwordEye = null;
   var displayInput = null;
   var statusNode = null;
+  var statusSource = '';
   var submitButton = null;
   var retryButton = null;
   var recoveryNode = null;
@@ -123,7 +124,7 @@
     if (transition) return transition;
     var raw = text(detail.error || detail.message || detail.reason);
     if (!isConnectionFailure(detail)) return raw;
-    return '暂时无法连接 SoduWork 服务。请检查网络后重试。';
+    return '暂时无法连接 SoduWork 服务，请检查网络后重试。';
   }
 
   /*
@@ -266,8 +267,10 @@
   }
 
   function setStatus(message, kind) {
+    if (emailView) { emailView.setStatus(message, kind); return; }
     if (!statusNode) return;
-    statusNode.textContent = text(message);
+    statusSource = text(message);
+    statusNode.textContent = translate(statusSource);
     statusNode.className = 'soduwork-auth-status' + (kind ? ' is-' + kind : '');
   }
 
@@ -494,6 +497,12 @@
     currentQuota = quota || currentQuota;
     global.SoduWorkQuotaNotice?.update({ user: currentUser, quota: currentQuota });
     renderQuotaNotice();
+    renderIdentity();
+    if (currentUser) mountSettings();
+  }
+
+  // Repaint rebuilt account controls from the cached identity without refreshing auth or quota.
+  function renderIdentity() {
     if (!currentUser) return;
     var name = text(currentUser.displayName).trim() || text(currentUser.username).trim() || '我的';
     ['#wsMine b', '#wsMine .ws-mine-name', '[data-soduwork-user-name]'].forEach(function (selector) {
@@ -502,7 +511,6 @@
     document.querySelectorAll('[data-soduwork-user-initial]').forEach(function (node) {
       renderAccountAvatar(node, name);
     });
-    mountSettings();
   }
 
   function clearQuotaNotice() {
@@ -997,6 +1005,7 @@
     global.addEventListener('soduwork-profile-updated', function (event) { updateIdentity(event.detail, null); });
     global.addEventListener('soduwork-locale-change', function () {
       if (restoringMessage) restoringMessage.textContent = translate('正在加载…');
+      if (!emailView && statusNode) statusNode.textContent = translate(statusSource);
       mountSettings();
       renderQuotaNotice();
     });
@@ -1034,6 +1043,7 @@
     accountCardHtml: accountCardHtml,
     changePassword: openChangePwd,
     updateIdentity: updateIdentity,
+    renderIdentity: renderIdentity,
     clearQuotaNotice: clearQuotaNotice,
     snapshot: function () { return { user: currentUser, quota: currentQuota, policy: policy }; }
   };

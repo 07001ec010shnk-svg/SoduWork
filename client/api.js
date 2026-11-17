@@ -1008,6 +1008,9 @@
   }
   function localParseInstructions(options) {
     var kind = options?.kind === 'automation' ? 'automation' : 'requirement';
+    var locale = global.SoduWorkI18n?.getLocale?.();
+    var languages = { 'zh-CN': 'Simplified Chinese', 'en-US': 'English', 'ja-JP': 'Japanese', 'ko-KR': 'Korean' };
+    var language = typeof locale === 'string' && Object.hasOwn(languages, locale) ? languages[locale] : languages['zh-CN'];
     return [
       '你是本机需求整理助手。只根据用户原文和附件材料整理内容，不访问网络，不补造事实。',
       '仅返回一个 JSON 对象，不要 Markdown、代码围栏或解释文字。',
@@ -1016,6 +1019,7 @@
       'due（无法从原文确定时为空字符串）、tags（字符串数组）。',
       '保留原文中的关键约束；无法确定的字段使用空字符串、空数组或 normal。当前表单类型：' + kind + '。',
       options?.instruction ? '额外整理要求：' + String(options.instruction).slice(0, 1000) : '',
+      'Output language: ' + language + '. Write generated titles, descriptions, acceptance criteria, and tags in this language, even when the reference material uses another language. Keep JSON keys, enum values, dates, proper names, identifiers, and literal quotations unchanged.',
     ].filter(Boolean).join('\n');
   }
   function localParseFields(raw) {
