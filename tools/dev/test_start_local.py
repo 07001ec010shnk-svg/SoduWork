@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 import io
+import errno
 from contextlib import closing, nullcontext, redirect_stdout
 import os
 from pathlib import Path
@@ -21,6 +22,17 @@ from tools.dev import verify_desktop_fixture as desktop_fixture
 
 
 class LocalStartupTests(unittest.TestCase):
+    def test_bind_failure_reports_unavailable_address_not_port_conflict(self):
+        with patch.object(start.socket, 'socket') as socket_factory:
+            probe = socket_factory.return_value.__enter__.return_value
+            probe.bind.side_effect = OSError(errno.EADDRNOTAVAIL, 'address unavailable')
+            with self.assertRaises(start.StartupError) as caught:
+                start.assert_available('192.0.2.1', 18989)
+        message = str(caught.exception)
+        self.assertIn('192.0.2.1:18989', message)
+        self.assertIn('address unavailable', message)
+        self.assertNotIn('already in use', message)
+
     def test_headless_desktop_fails_before_initialization_password_or_downloads(self):
         for options in ([], ['--prepare-only'], ['--check']):
             with self.subTest(options=options), patch.object(sys, 'platform', 'linux'), \
