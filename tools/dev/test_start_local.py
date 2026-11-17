@@ -192,6 +192,86 @@ class LocalStartupTests(unittest.TestCase):
             self.assertEqual(start.default_state(), fresh)
             self.assertEqual(marker.read_text(encoding="utf-8"), "{}")
 
+    @unittest.skipIf(os.name == 'nt', 'Linux XDG paths use POSIX semantics')
+    def test_linux_default_state_falls_back_for_invalid_xdg_data_home(self):
+        home = Path(self.temp.name) / 'home'
+        expected = home / '.local/share/soduwork/source-service'
+        for value in (None, '', 'relative-data', '~/data'):
+            environment = {} if value is None else {'XDG_DATA_HOME': value}
+            with self.subTest(value=value), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(sys, 'platform', 'linux'), patch.object(Path, 'home', return_value=home):
+                self.assertEqual(start.default_state(), expected)
+        self.assertFalse(home.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'Linux XDG paths use POSIX semantics')
+    def test_linux_default_state_preserves_absolute_xdg_data_and_existing_files(self):
+        for name in ('custom-data', 'custom data with spaces'):
+            base = Path(self.temp.name) / name
+            expected = base / 'soduwork/source-service'
+            expected.mkdir(parents=True)
+            marker = expected / 'local-service.json'
+            marker.write_text('{}', encoding='utf-8')
+            with self.subTest(name=name), patch.dict(os.environ, {'XDG_DATA_HOME': str(base)}), \
+                    patch.object(sys, 'platform', 'linux'):
+                self.assertEqual(start.default_state(), expected)
+            self.assertEqual(marker.read_text(encoding='utf-8'), '{}')
+
+    @unittest.skipIf(os.name == 'nt', 'Linux XDG paths use POSIX semantics')
+    def test_linux_prepare_only_uses_safe_default_with_invalid_xdg_data_home(self):
+        home = Path(self.temp.name) / 'home'
+        expected = (home / '.local/share/soduwork/source-service').resolve()
+        for value in ('', 'relative-data'):
+            with self.subTest(value=value), patch.dict(os.environ, {'XDG_DATA_HOME': value}), \
+                    patch.object(sys, 'platform', 'linux'), patch.object(Path, 'home', return_value=home), \
+                    patch.object(start, 'check_dependencies'), patch.object(start.signal, 'signal'), \
+                    patch.object(start, 'initialize', return_value={}) as initialize, \
+                    patch.object(start, 'exclusive', return_value=nullcontext()), \
+                    patch.object(start, 'prepare') as prepare, redirect_stdout(io.StringIO()), \
+                    patch('sys.stderr', io.StringIO()):
+                self.assertEqual(start.main(['--prepare-only']), 0)
+                initialize.assert_called_once_with(expected, 'admin')
+                prepare.assert_called_once_with(expected, expected / 'startup.log')
+        self.assertFalse(home.exists())
+
+    def test_explicit_data_dir_overrides_invalid_platform_data_home(self):
+        home = Path(self.temp.name) / 'home'
+        chosen = (Path(self.temp.name) / 'chosen data').resolve()
+        chosen.mkdir()
+        marker = chosen / 'local-service.json'
+        marker.write_text('{}', encoding='utf-8')
+        for value in ('', 'relative-data'):
+            with self.subTest(value=value), \
+                    patch.dict(os.environ, {'XDG_DATA_HOME': value, 'LOCALAPPDATA': value}), \
+                    patch.object(Path, 'home', return_value=home), \
+                    patch.object(start, 'check_dependencies'), patch.object(start.signal, 'signal'), \
+                    patch.object(start, 'initialize', return_value={}) as initialize, \
+                    patch.object(start, 'exclusive', return_value=nullcontext()), \
+                    patch.object(start, 'prepare') as prepare, redirect_stdout(io.StringIO()), \
+                    patch('sys.stderr', io.StringIO()):
+                self.assertEqual(start.main(['--prepare-only', '--data-dir', str(chosen)]), 0)
+                initialize.assert_called_once_with(chosen, 'admin')
+                prepare.assert_called_once_with(chosen, chosen / 'startup.log')
+            self.assertEqual(marker.read_text(encoding='utf-8'), '{}')
+        self.assertFalse(home.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'Linux XDG paths use POSIX semantics')
+    def test_linux_absolute_xdg_data_home_inside_checkout_is_still_rejected(self):
+        checkout = (Path(self.temp.name) / 'checkout').resolve()
+        checkout.mkdir()
+        base = checkout / 'xdg-data'
+        with patch.dict(os.environ, {'XDG_DATA_HOME': str(base)}), \
+                patch.object(sys, 'platform', 'linux'), patch.object(start, 'ROOT', checkout), \
+                patch.object(start, 'check_dependencies'), patch.object(start.signal, 'signal'), \
+                patch.object(start, 'initialize') as initialize, patch.object(start, 'exclusive') as exclusive, \
+                patch.object(start, 'prepare') as prepare, redirect_stdout(io.StringIO()), \
+                patch('sys.stderr', io.StringIO()) as errors:
+            self.assertEqual(start.main(['--prepare-only']), 1)
+        self.assertIn('outside the source checkout', errors.getvalue())
+        initialize.assert_not_called()
+        exclusive.assert_not_called()
+        prepare.assert_not_called()
+        self.assertFalse(base.exists())
+
     def test_windows_default_state_ignores_empty_or_relative_localappdata(self):
         home = Path(self.temp.name) / "home"
         expected = home / "AppData/Local/SoduWork/source-service"
