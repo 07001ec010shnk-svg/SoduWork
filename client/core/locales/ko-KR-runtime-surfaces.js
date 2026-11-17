@@ -191,6 +191,7 @@
     "workspace.history.localError": "현재 로컬 기록을 불러올 수 없습니다",
     "workspace.history.accountError": "현재 일부 대화를 불러올 수 없습니다",
     "workspace.history.loading": "불러오는 중…",
+    "workspace.history.cloudCache": "로컬 캐시(읽기 전용)",
     "模型请求失败（HTTP {status}）：{detail}": "모델 요청 실패(HTTP {status}): {detail}",
     "所选 Linux 执行机的 CPU 缺少 {instructions} 指令集，无法运行 OpenCode。请选择兼容的执行机，或由管理员调整该虚拟机的 CPU 配置。": "선택한 Linux 실행 호스트의 CPU에 OpenCode에 필요한 {instructions} 명령어가 없습니다. 호환 호스트를 선택하거나 관리자에게 가상 머신 CPU 구성 조정을 요청하세요.",
     "模型上下文超限；完整历史已保留，将通过现有会话接续机制恢复。": "모델 컨텍스트 한도를 초과했습니다. 전체 기록은 유지되며 기존 대화 이어가기 기능으로 복구합니다.",

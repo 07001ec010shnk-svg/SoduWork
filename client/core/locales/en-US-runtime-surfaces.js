@@ -140,6 +140,7 @@
     "workspace.history.localError": "Local history is temporarily unavailable",
     "workspace.history.accountError": "Some conversations are temporarily unavailable",
     "workspace.history.loading": "Loading…",
+    "workspace.history.cloudCache": "Local cache (read-only)",
     "模型请求失败（HTTP {status}）：{detail}": "Model request failed (HTTP {status}): {detail}",
     "所选 Linux 执行机的 CPU 缺少 {instructions} 指令集，无法运行 OpenCode。请选择兼容的执行机，或由管理员调整该虚拟机的 CPU 配置。": "The selected Linux host CPU lacks {instructions} instructions required by OpenCode. Select a compatible host or ask an administrator to adjust the virtual machine's CPU configuration.",
     "模型上下文超限；完整历史已保留，将通过现有会话接续机制恢复。": "The model context limit was exceeded. Full history is retained; the existing conversation continuation mechanism will recover it.",

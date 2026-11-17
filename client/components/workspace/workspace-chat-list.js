@@ -69,12 +69,26 @@
   let localRows = [], localLoad = null, localReady = false, localNext = null, localRestart = false;
   let localCatalog = null, localRecords = new Map(), localAliases = new Set();
   let accountDisplayLinks = new Map();
+  const cloudCacheKeys = new Map();
   let localError = '', accountError = '', nativeRefreshStarted = false;
   let localRefreshTimer = null, localRefreshPending = false, closed = false;
   const historyApi = () => global.soduWorkAPI && (global.soduWorkAPI.conversationSession || global.soduWorkAPI.piSession);
   const supportsLocalHistory = () => historyApi()?.localHistorySupported === true;
   const isLocalId = id => localAliases.has(String(id || ''));
   const canonicalLocalId = id => global.WorkspaceSidebarState?.localHistoryId(id) || '';
+  function cloudDisplaySource(id) {
+    for (const row of localRows) {
+      const source = row.displayCloudSourceId;
+      if (!source || !localVisible(row)) continue;
+      if (row.id === id || source === id || ctx.chatItems.some(item => item.id === id &&
+          item.cloud && !hiddenRow(item) && item.historyAliasIds?.includes(source))) return source;
+    }
+    return '';
+  }
+  function selectedCloudCache(id, active = ctx.activeChatId) {
+    const source = cloudDisplaySource(id);
+    return Boolean(source && source === cloudDisplaySource(active));
+  }
   function selectedChat(id, active = ctx.activeChatId) {
     if (!id || !active) return false;
     if (id === active) return true;
@@ -194,6 +208,7 @@
     if (next === historyOwner) return false;
     historyOwner = next;
     accountDisplayLinks.clear();
+    cloudCacheKeys.clear();
     historyEpoch++;
     presenceSequence++; presenceFloor = 0; presenceVersions.clear();
     mutationGeneration++;
@@ -589,7 +604,7 @@ function _newChatRow() {
       e.stopPropagation();
       const id = b.dataset.chatId || '';
       if (id && global.WorkspaceHost) {
-        const project = ctx.sidebarProjects?.projectForChat(id);
+        const project = ctx.sidebarProjects?.projectForChat(b.dataset.sidebarChatId || id);
         global.WorkspaceHost.open('create', {
           tab: 'chat', chatId: id, chatTitle: title.textContent || '', taskSession: b.dataset.taskSession === '1',
           ...(project ? { sidebarProjectId: project.id, sidebarProjectName: project.name, projectId: project.businessProjectId || '' } : {}),
@@ -607,7 +622,7 @@ function _newChatRow() {
     pin.innerHTML = '<svg viewBox="0 0 24 24"><path d="M8 4h8l-1 6 3 3H6l3-3zM12 13v7"/></svg>';
     pin.addEventListener('click', (e) => {
       e.stopPropagation();
-      const id = b.dataset.chatId || '';
+      const id = b.dataset.sidebarChatId || b.dataset.chatId || '';
       if (id) togglePinned(id);
     });
     const more = document.createElement('button');
@@ -634,7 +649,7 @@ function _newChatRow() {
     const move = chatMenuItem('移动到…', ctx.icon('move'), 'ws-chat-move');
     move.addEventListener('click', (e) => {
       e.stopPropagation();
-      const id = b.dataset.chatId || '';
+      const id = b.dataset.sidebarChatId || b.dataset.chatId || '';
       closeChatMenu();
       if (id && typeof ctx.sidebarProjects?.openMoveMenu === 'function') ctx.sidebarProjects.openMoveMenu(id);
     });
@@ -707,7 +722,8 @@ function _paintChatLocale(button) {
     const copy = button._localeChat;
     if (!copy) return;
     const label = copy.title || ctx.wsT('chat.untitled', '未命名对话');
-    const status = ctx.wsT('chat.state.' + copy.state, ctx.CHAT_STATE[copy.state]);
+    const status = copy.offlineCloudCache ? historyText('workspace.history.cloudCache', '本地缓存（只读）')
+      : ctx.wsT('chat.state.' + copy.state, ctx.CHAT_STATE[copy.state]);
     // The title is user data. Translate only the surrounding status, and keep
     // the generic DOM adapter from interpreting the combined attribute text.
     button.setAttribute('data-user-attributes', 'title aria-label');
@@ -722,7 +738,7 @@ function _paintChatLocale(button) {
 
 function _paintChatRow(row, c, isPinned) {
     const id = String(c.id || '');
-    const selected = ctx.active === 'create' && selectedChat(id);
+    const selected = ctx.active === 'create' && (selectedChat(id) || selectedCloudCache(id));
     const state = ctx.chatState(c);
     const label = c.title || '未命名对话';
     const b = row.querySelector('.ws-chat');
@@ -738,10 +754,12 @@ function _paintChatRow(row, c, isPinned) {
     b.className = 'ws-task ws-chat is-' + state + (c.pending ? ' is-pending' : '') +
       (selected ? ' is-active' : '');
     b.dataset.chatId = id; b.disabled = !id;
+    b.dataset.sidebarChatId = c.displaySlotId || id;
     b.setAttribute('aria-current', selected ? 'page' : 'false');
     const { ids: harnesses, draft } = displayedHarnesses(c);
     const runtimeName = harnesses.map(id => harnessNames()[id]).join('、');
-    b._localeChat = { title: c.title, state, harnesses: runtimeName, draftHarness: draft };
+    b._localeChat = { title: c.title, state, harnesses: runtimeName,
+      draftHarness: draft, offlineCloudCache: c.offlineCloudCache };
     _paintChatLocale(b);
     dot.className = 'st-chat st-chat-' + state;
     /* A local collaboration cache is presentation state, not proof that this
@@ -824,7 +842,7 @@ function _syncChatList(target, items, isPinned, pool) {
         replacedNative.add(id);
       }
     }
-    return items.filter(row => {
+    const visible = items.filter(row => {
       // A verified account display counterpart must not resurrect a locally
       // hidden source. This is presentation only, never a Hub lifecycle write.
       if (hiddenDisplaySource(row)) return false;
@@ -833,6 +851,25 @@ function _syncChatList(target, items, isPinned, pool) {
       if (representative) return representative.id === row.id;
       return !replacedNative.has(canonicalLocalId(row.id));
     });
+    const replacements = new Map(), hiddenCopies = new Set();
+    for (const copy of localRows) {
+      const source = copy.displayCloudSourceId;
+      if (!source || !localVisible(copy) || hiddenRow(copy)) continue;
+      const cached = available.find(row => row.id === copy.id);
+      if (!cached) continue;
+      const remote = ctx.chatItems.find(row => row.cloud && !row.archived && !row.deleted && !hiddenRow(row) &&
+        (row.id === source || row.historyAliasIds?.includes(source)));
+      const original = available.find(row => row.id === (remote?.id || source) && !hiddenRow(row));
+      const slot = original && (!placed.has(copy.id) || placed.has(original.id)) ? original : cached;
+      if (!cloudCacheKeys.has(source)) cloudCacheKeys.set(source, remote ? ctx._chatUiKey(remote) : 'chat:' + source);
+      // Keep storage, selection targets and lifecycle IDs intact. Only the
+      // displayed slot is shared; an unavailable original falls back to its cache.
+      replacements.set(slot.id, { ...(remote || copy), displaySlotId: slot.id,
+        _uiKey: cloudCacheKeys.get(source), ...(!remote ? { state: 'completed', offlineCloudCache: true } : {}) });
+      hiddenCopies.add(copy.id);
+      if (original) hiddenCopies.add(original.id);
+    }
+    return visible.flatMap(row => replacements.has(row.id) ? [replacements.get(row.id)] : hiddenCopies.has(row.id) ? [] : [row]);
   }
 
 function renderChats() {
@@ -858,8 +895,8 @@ function renderChats() {
     const available = groups ? [...groups.pinned, ...groups.recent, ...(groups.projects || []).flatMap(project => project.items)] : list;
     const placed = new Set(groups ? [...groups.pinned, ...(groups.projects || []).flatMap(project => project.items)]
       .map(item => item.id) : pins);
-    const displayedIds = new Set(displayRows(available, available, placed).map(item => item.id));
-    const visible = items => items.filter(item => !hiddenRow(item) && displayedIds.has(item.id));
+    const displayed = new Map(displayRows(available, available, placed).map(item => [item.displaySlotId || item.id, item]));
+    const visible = items => items.filter(item => !hiddenRow(item)).flatMap(item => displayed.has(item.id) ? [displayed.get(item.id)] : []);
     const pinned = visible(groups ? groups.pinned : list.filter((item) => pins.has(String(item.id || ''))));
     const recent = visible(groups ? groups.recent : list.filter((item) => !pins.has(String(item.id || ''))));
     const pinnedBox = ctx.root.querySelector('#wsPinnedBox');
@@ -1093,7 +1130,7 @@ function refreshAccountHistory() {
     ctx.activeChatId = next;
     global.WorkspaceNavigation?.chatChanged(next);
     for (const button of ctx.root?.querySelectorAll('.ws-chat') || []) {
-      const selected = ctx.active === 'create' && selectedChat(button.dataset.chatId, next);
+      const selected = ctx.active === 'create' && (selectedChat(button.dataset.chatId, next) || selectedCloudCache(button.dataset.chatId, next));
       if (button.classList.contains('is-active') === selected) continue;
       button.classList.toggle('is-active', selected);
       button.setAttribute('aria-current', selected ? 'page' : 'false');

@@ -191,6 +191,7 @@
     "workspace.history.localError": "ローカル履歴を一時的に読み込めません",
     "workspace.history.accountError": "一部の会話を一時的に読み込めません",
     "workspace.history.loading": "読み込み中…",
+    "workspace.history.cloudCache": "ローカルキャッシュ（読み取り専用）",
     "模型请求失败（HTTP {status}）：{detail}": "モデルリクエストに失敗しました（HTTP {status}）：{detail}",
     "所选 Linux 执行机的 CPU 缺少 {instructions} 指令集，无法运行 OpenCode。请选择兼容的执行机，或由管理员调整该虚拟机的 CPU 配置。": "選択した Linux 実行ホストの CPU に OpenCode が必要とする {instructions} 命令がありません。互換ホストを選択するか、管理者に仮想マシンの CPU 設定変更を依頼してください。",
     "模型上下文超限；完整历史已保留，将通过现有会话接续机制恢复。": "モデルのコンテキスト上限を超えました。全履歴は保持され、既存の会話継続機能で復旧します。",

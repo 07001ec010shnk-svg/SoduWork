@@ -82,6 +82,24 @@ test('work drafts display their persisted selection separately from execution pr
   assert.doesNotMatch(f.node('.ws-chat-runtime').innerHTML, /data-agent-brand="qwen"/);
 });
 
+test('reused sidebar rows preserve offline cache labels and draft runtime selection independently', () => {
+  const f = fixture();
+  const draft = { id: 'draft', title: 'Automation draft', workOnly: true, count: 0,
+    usedHarnesses: [], draftAdapterId: 'codex-harness' };
+  f.api._paintChatRow(f.row, draft, false);
+  assert.match(f.node('.ws-chat')['aria-label'], /已选底座 · Codex Harness/);
+  f.api._paintChatRow(f.row, { id: 'cached-cloud', title: 'Cloud chat', offlineCloudCache: true,
+    displaySlotId: 'cloud-source', usedHarnesses: ['qwen'] }, false);
+  assert.match(f.node('.ws-chat')['aria-label'], /本地缓存（只读）.*Qwen Code/);
+  assert.doesNotMatch(f.node('.ws-chat')['aria-label'], /已选底座/);
+  assert.equal(f.node('.ws-chat').dataset.sidebarChatId, 'cloud-source');
+  assert.equal(f.node('.ws-chat-runtime').title, 'Qwen Code');
+  f.api._paintChatRow(f.row, draft, false);
+  assert.match(f.node('.ws-chat')['aria-label'], /已选底座 · Codex Harness/);
+  assert.doesNotMatch(f.node('.ws-chat')['aria-label'], /本地缓存/);
+  assert.equal(f.node('.ws-chat').dataset.sidebarChatId, 'draft');
+});
+
 test('persisted runtime manifest projects complete history icons without adding the selected unused runtime', () => {
   const history = require('../main/conversation/runtime-segments');
   const projected = history.row({id:'restored',title:'跨底座协作',cwd:'',at:1,
