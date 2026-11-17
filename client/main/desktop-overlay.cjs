@@ -123,6 +123,7 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
   let _overlayAwaitingShape = true;
   let _overlayInputRects = [];
   let _overlayInputIgnored = null;
+  let _overlayDragging = false;
   let _overlayInputGuardTimer = null;
   let _initialPaintReady = false;
   let _initialRevealPending = true;
@@ -187,18 +188,37 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
       const point = screen.getCursorScreenPoint();
       const bounds = mainWindow.getContentBounds();
       /*
+       * An active pet/dock drag holds the pointer on the overlay via mouse capture.
+       * Keep input enabled while dragging so crossing work-window areas or display
+       * boundaries cannot cut the drag short.
+       */
+      if (_overlayDragging) {
+        _setOverlayInputIgnored(false);
+        return;
+      }
+      const inside = _overlayShape.containsPoint(
+        _overlayInputRects, point.x - bounds.x, point.y - bounds.y);
+      if (inside) {
+        /*
+         * The interactive region is visible above an unfocused work window; keep its
+         * input so a parked pet can still be clicked and dragged away. When the
+         * workspace owns focus the overlay sits below it and work-window controls
+         * keep priority, closing the first-click race before its focus event lands.
+         */
+        _setOverlayInputIgnored(_workWindowFocused ? true : false);
+        return;
+      }
+      /*
        * The desktop overlay is a full-screen transparent window. If a normal SoduWork
-       * window is under the cursor, its controls must win even when the pet or dock happens
-       * to overlap that point. This closes the first-click race before the work window emits
-       * its native focus event and applies on Windows, Linux and macOS alike.
+       * window is under the cursor outside the interactive regions, its controls must
+       * win. This closes the first-click race before the work window emits its native
+       * focus event and applies on Windows, Linux and macOS alike.
        */
       if (_isPointOverWorkWindow(point)) {
         _setOverlayInputIgnored(true);
         return;
       }
-      const inside = _overlayShape.containsPoint(
-        _overlayInputRects, point.x - bounds.x, point.y - bounds.y);
-      _setOverlayInputIgnored(!inside);
+      _setOverlayInputIgnored(false);
     } catch (e) {
       /* Enable passthrough when global cursor position is unavailable rather than blocking other applications. */
       _setOverlayInputIgnored(true);
@@ -300,7 +320,7 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
   let _workWindowFocused = false;
   function _setOverlayTopmost(flag) {
     if (!mainWindow || mainWindow.isDestroyed()) return;
-    mainWindow.setAlwaysOnTop(_workWindowFocused ? false : !!flag, overlayTopLevel());
+    mainWindow.setAlwaysOnTop(_overlayDragging ? true : (_workWindowFocused ? false : !!flag), overlayTopLevel());
   }
   function setWorkWindowFocused(focused) {
     const next = !!focused;
@@ -308,8 +328,9 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
     _workWindowFocused = next;
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (next) {
-      /* Keep the workspace above the transparent desktop layer while it owns focus. */
-      _setOverlayInputIgnored(true);
+      /* Keep the workspace above the transparent desktop layer while it owns focus.
+         An active drag keeps the overlay on top so the pet remains visible while crossing. */
+      _setOverlayInputIgnored(_overlayDragging ? false : true);
       _setOverlayTopmost(false);
     } else if (!_overlayHiddenByWorkspace && !_emergencyMode) {
       _setOverlayTopmost(true);
@@ -370,6 +391,7 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
     if (isCurrent(mainWindow) && !_emergencyMode) {
       try {
         _emergencyMode = true;
+        _overlayDragging = false;
         _overlayAwaitingShape = true;
         _overlayShapeRevision++;
         _lastOverlayRects = [];
@@ -735,6 +757,7 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
       _appliedOverlayShape = [];
       _overlayInputRects = [];
       _overlayInputIgnored = null;
+      _overlayDragging = false;
       _overlayShapeEnabled = false;
       _overlayShapeReported = false;
       _overlayShapeRevision = 0;
@@ -833,6 +856,22 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
     /* Renderer requests may trigger reevaluation but cannot disable native parking or input guards. */
     if (_overlayShapeEnabled) _syncOverlayInputNow();
     else _setOverlayInputIgnored(ignore);
+  });
+
+  onIpc('window-set-overlay-dragging', (event, dragging) => {
+    if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return;
+    const next = !!dragging;
+    if (_overlayDragging === next) return;
+    _overlayDragging = next;
+    if (next) {
+      /* The renderer entered drag mode. Keep input and stacking stable while the pet is
+         dragged so work-window or display boundaries cannot cut the drag short. */
+      _setOverlayInputIgnored(false);
+      _setOverlayTopmost(true);
+    } else {
+      _setOverlayTopmost(true);
+      _syncOverlayInputNow();
+    }
   });
 
   /*

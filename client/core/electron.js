@@ -175,6 +175,8 @@ if(typeof window!=='undefined')window.beginOverlayDrag=function(){
   _lastShapeKey=null;                      /* Create the drag region immediately before movement begins. */
   _interactiveCacheDirty=true;
   _queueOverlayShape(0);
+  /* Keep the main-process input guard from cutting input while the drag crosses work windows or display edges. */
+  if(IS_ELECTRON&&window.soduWorkAPI&&soduWorkAPI.setOverlayDragging)soduWorkAPI.setOverlayDragging(true);
 };
 if(typeof window!=='undefined')window.endOverlayDrag=function(){
   if(!_dragMode)return;
@@ -184,6 +186,7 @@ if(typeof window!=='undefined')window.endOverlayDrag=function(){
   _lastShapeKey=null;                      /* Force a fresh region calculation on release despite cached keys. */
   _interactiveCacheDirty=true;
   _queueOverlayShape(200);
+  if(IS_ELECTRON&&window.soduWorkAPI&&soduWorkAPI.setOverlayDragging)soduWorkAPI.setOverlayDragging(false);
 };
 function _queueOverlayShape(trackMs){
   if(!IS_ELECTRON||!window.soduWorkAPI||!soduWorkAPI.setOverlayShape)return;
