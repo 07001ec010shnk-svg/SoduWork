@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
+import net from 'node:net';
 import assert from 'node:assert/strict';
 import {createRequire} from 'node:module';
 import {spawn} from 'node:child_process';
@@ -38,15 +39,49 @@ const server=http.createServer(async(req,res)=>{
 });
 await new Promise(r=>server.listen(0,'127.0.0.1',r));
 const endpoint='http://127.0.0.1:'+server.address().port;
-const child=spawn('C:/Program Files/Google/Chrome/Application/chrome.exe',[
-  '--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check',
-  '--remote-debugging-address=127.0.0.1','--remote-debugging-port=0','--user-data-dir='+profile,
-  '--window-size=1440,1000','about:blank'],{windowsHide:true,stdio:'ignore'});
+const probe=net.createServer();
+await new Promise((resolve,reject)=>{probe.once('error',reject);probe.listen(0,'127.0.0.1',resolve);});
+const port=probe.address().port;
+await new Promise(resolve=>probe.close(resolve));
+const entry=path.join(root,'icon-window.cjs');
+fs.writeFileSync(entry,`
+  const {app,BrowserWindow}=require('electron');
+  app.setPath('userData',process.argv[2]);
+  app.disableHardwareAcceleration();
+  let win;
+  app.whenReady().then(async()=>{
+    win=new BrowserWindow({show:false,width:1440,height:1000,
+      webPreferences:{nodeIntegration:false,contextIsolation:true,sandbox:true,
+        offscreen:true,backgroundThrottling:false}});
+    win.webContents.on('render-process-gone',(_event,detail)=>{
+      console.error('Isolated renderer stopped:',JSON.stringify(detail));app.exit(1);
+    });
+    await win.loadURL('about:blank');
+  }).catch(error=>{console.error(error);app.exit(1);});
+  process.on('message',message=>{if(message==='close')app.quit();});
+  app.on('window-all-closed',()=>app.quit());
+`);
+const env={...process.env};
+for(const key of ['ELECTRON_RUN_AS_NODE','NODE_OPTIONS','CHROME_CRASHPAD_PIPE_NAME','CHROME_CRASHPAD_PIPE_HANDLE'])delete env[key];
+const args=[entry,profile,'--remote-debugging-address=127.0.0.1','--remote-debugging-port='+port];
+if(process.platform==='linux'&&!env.DISPLAY)args.push('--ozone-platform=headless');
+const child=spawn(require('electron'),args,{windowsHide:true,env,stdio:['ignore','ignore','pipe','ipc']});
+let browserDiagnostics='';
+child.stderr.on('data',chunk=>{browserDiagnostics=(browserDiagnostics+chunk.toString()).slice(-4000);});
+let startupError;
+child.on('error',error=>{startupError=error;});
+const closed=new Promise(resolve=>child.once('exit',resolve));
 let page;
 try{
-  let port;
-  for(let i=0;i<80;i++){try{port=Number(fs.readFileSync(path.join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);if(port)break;}catch{}await delay(100);}
-  assert.ok(port);page=await CdpPage.connect((await listPages(port))[0]);
+  let target;
+  for(let i=0;i<80;i++){
+    if(startupError)throw startupError;
+    if(child.exitCode!==null)throw Error('Isolated Electron exited: '+browserDiagnostics);
+    try{target=(await listPages(port,1000)).find(row=>row.url==='about:blank');if(target)break;}catch{}
+    await delay(100);
+  }
+  assert.ok(target,'Isolated Electron did not open its renderer: '+browserDiagnostics);
+  page=await CdpPage.connect(target);
   await page.call('Page.enable');
   await page.call('Page.addScriptToEvaluateOnNewDocument',{source:'window.iconTestFetch=window.fetch.bind(window);'});
   await page.call('Page.navigate',{url:new URL('../tests/plugin-presentation.html',import.meta.url).href});
@@ -172,11 +207,21 @@ try{
   checks.push('reopened default stays unchanged');
   assert.deepEqual(await page.run(()=>fixtureErrors),[]);
   assert.deepEqual(page.takeRuntimeErrors(),[]);
-  fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({ok:true,checks,root,scope:'isolated browser + actual local store; no live client changes'},null,2));
+  fs.writeFileSync(path.join(output,'results.json'),JSON.stringify({ok:true,checks,root,scope:'isolated Electron renderer + actual local store; no live client changes'},null,2));
   console.log(JSON.stringify({ok:true,checks:checks.length,output}));
-}catch(error){if(page){try{await shotFailure();}catch{}console.error(await page.run(()=>({errors:fixtureErrors,text:document.body.innerText.slice(-1600)})));}throw error;
+}catch(error){
+  console.error('Isolated Electron exit:',child.exitCode,browserDiagnostics);
+  if(page){
+    try{await shotFailure();}catch{}
+    try{console.error(await page.run(()=>({errors:fixtureErrors,text:document.body.innerText.slice(-1600)})));}catch{}
+  }
+  throw error;
 }finally{
-  if(page){try{await page.call('Browser.close');}catch{}page.close();}
+  if(page)page.close();
+  if(child.connected)child.send('close');
+  let exitTimer;
+  await Promise.race([closed,new Promise(resolve=>{exitTimer=setTimeout(resolve,5000);})]);
+  clearTimeout(exitTimer);
   if(child.exitCode===null)child.kill();
   await new Promise(r=>server.close(r));
 }
