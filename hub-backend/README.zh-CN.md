@@ -50,6 +50,8 @@ python3 quality_gate.py --list
 
 `live` 层可能连接真实 Hub、Runner、代码平台、模型或业务库，默认拒绝执行，不能用来替代离线发布门禁。详细口径见 [`../docs/release-scope.md`](../docs/release-scope.md)。
 
+离线检查拥有各自的子进程树，并在清理完成后返回，包括命令先于后代进程退出的情况。在 Windows 上，门禁复用仓库中的 Windows PowerShell Job 辅助程序，确认 Job 分配成功后才允许命令执行。输出采集到私有临时文件，避免后代继承输出句柄导致超时后无限等待；失败报告保留超时前产生的输出。运行 `py -m unittest test_quality_gate_cleanup` 可验证当前平台上的真实进程清理回归。
+
 受权限控制的回合在结算或开始下一轮前，必须确认执行宿主已退出。已有可靠的 Agent 退出记录时，正常收尾最多等待 30 秒，例如冻结程序清理自己的解压目录；取消和权限变更仍使用较短的停止期限。终止无法确认时继续跟踪原进程并阻止替换，不能仅凭已有回答或终止请求成功就判定完成。可运行 `python3 -m unittest test_local_process_cleanup`，使用隔离子进程验证延迟退出与终止未确认的行为。
 
 冒烟脚本集中在 [`smoke/`](smoke/) 目录。单独运行时，在 `hub-backend/` 目录使用模块命令，例如 `python3 -m smoke.smoke_capabilities`；质量门禁会选择已登记的模块。单元测试和 `tests/` 集成辅助脚本保留现有位置。
