@@ -42,6 +42,57 @@ class BuildTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'digest differs'):
                 build.download('https://example.test/file', self.root / 'file', hashlib.sha256(b'expected').hexdigest())
 
+    def test_linux_signs_before_inventory_and_keeps_credentials_out_of_build_subprocesses(self):
+        events = []
+        credentials = {build.linux_signing.PREFIX + 'KEY_B64': 'fixture',
+                       build.linux_signing.PREFIX + 'PASSPHRASE': 'fixture'}
+        def run(*args, **kwargs):
+            events.append(args)
+            self.assertFalse(any(key.startswith(build.linux_signing.PREFIX) for key in kwargs['env']))
+        with patch.dict(build.os.environ, {**credentials, 'SODUWORK_INTERNAL_BUILD': ''}), \
+                patch.object(build, 'ROOT', self.root), patch.object(build, 'prepare_python'), \
+                patch.object(build.platform, 'system', return_value='Linux'), \
+                patch.object(build.platform, 'machine', return_value='x86_64'), \
+                patch.object(build.shutil, 'which', return_value='/fixture/tool'), \
+                patch.object(build.linux_signing, 'settings') as settings, \
+                patch.object(build.linux_signing, 'sign_packages', side_effect=lambda *args: events.append(('sign',))), \
+                patch.object(build, 'run', side_effect=run):
+            build.package_native(self.ctx, 'linux', self.root)
+            settings.assert_called_once()
+        signed = events.index(('sign',))
+        frozen = next(i for i, args in enumerate(events)
+                      if any(str(arg).endswith('check_runner_tls_bundle.py') for arg in args))
+        inventory = next(i for i, args in enumerate(events) if 'inventory' in args)
+        self.assertLess(frozen, signed)
+        self.assertLess(signed, inventory)
+        self.assertIn('inventory', events[-1])
+
+    def test_linux_public_build_without_key_fails_before_dependency_preparation(self):
+        with patch.dict(build.os.environ, {}, clear=True), \
+                patch.object(build.platform, 'system', return_value='Linux'), \
+                patch.object(build.platform, 'machine', return_value='x86_64'), \
+                patch.object(build, 'prepare_python') as prepare, self.assertRaisesRegex(ValueError, 'FINGERPRINT'):
+            build.package_native(self.ctx, 'linux', self.root)
+        prepare.assert_not_called()
+
+    def test_linux_validation_does_not_require_or_use_a_release_key(self):
+        with patch.dict(build.os.environ, SODUWORK_INTERNAL_BUILD=''), \
+                patch.object(build, 'prepare_python'), patch.object(build, 'run'), \
+                patch.object(build.platform, 'system', return_value='Linux'), \
+                patch.object(build.platform, 'machine', return_value='x86_64'), \
+                patch.object(build.shutil, 'which', return_value='/fixture/tool'), \
+                patch.object(build.linux_signing, 'settings') as settings, \
+                patch.object(build.linux_signing, 'sign_packages') as sign:
+            build.package_native(self.ctx, 'linux', self.root, validation=True)
+        settings.assert_not_called()
+        sign.assert_not_called()
+
+    def test_dependency_commands_do_not_inherit_linux_signing_secrets(self):
+        with patch.dict(build.os.environ, {build.linux_signing.PREFIX + 'KEY_B64': 'fixture'}), \
+                patch.object(build.subprocess, 'run') as run:
+            build.run('fixture-build-tool')
+        self.assertFalse(any(key.startswith(build.linux_signing.PREFIX) for key in run.call_args.kwargs['env']))
+
     def test_android_requires_reviewed_mobile_source(self):
         with patch.object(build, 'ROOT', self.root), patch.object(build.platform, 'system', return_value='Linux'), \
                 self.assertRaisesRegex(ValueError, 'reviewed mobile'):

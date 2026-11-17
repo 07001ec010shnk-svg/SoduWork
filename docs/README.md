@@ -11,6 +11,7 @@
 | Deploy for a team | [Docker self-hosting](../ops/self-host/README.md) |
 | Build a plugin or application | [Extension development](development.en.md#skills-and-plugins); [plugin protocol](plugin-authoring.en.md) |
 | Check what the release contains | [Release scope](release-scope.en.md) |
+| Verify Linux installer signatures | [Linux download verification](linux-package-verification.en.md) |
 | Export source and prepare a public repository | [Source distribution](open-source.en.md) |
 | Report a security issue | [Security reporting](../SECURITY.md) |
 | Read component and integration contracts | [Desktop](../client/README.md), [backend](../hub-backend/README.md), [management UI](../hub-frontend/README.md), [H5 SDK](../client/sdk/README.md), [OAuth](../hub-backend/CONNECTOR_OAUTH.en.md) |
