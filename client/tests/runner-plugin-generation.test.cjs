@@ -12,12 +12,14 @@ async function fixture(t, fixes, options = {}) {
   const write = valid => {
     fs.writeFileSync(file, valid ? JSON.stringify(body) : '{"name":"invalid "quote""}');
     if (Number.isFinite(options.writeAt)) fs.utimesSync(file, options.writeAt / 1000, options.writeAt / 1000);
+    else if (options.fileTime) fs.utimesSync(file, options.fileTime, options.fileTime);
   };
+  if (options.existingInvalid) write(false);
   const runtime = { async rpc(op, value) {
     calls.push({ op, value });
     if (op === 'job.dispatch') {
       fs.writeFileSync(path.join(root, 'requested-report.txt'), 'Requested report');
-      write(Boolean(options.validFirst));
+      if (!options.leaveDraftUntouched) write(Boolean(options.validFirst));
       return { ok: true, data: { ok: true, ref: _uuidV5('9af442c8-cd1d-4b91-a668-22da2b2635bf', value.dispatchId) } };
     }
     if (op === 'job.comment') { round++; write(options.goalScenario && round === 2 ? false : fixes); if (options.switchOwnerOnRepair) handle.deliveryOwner = 'changed-owner'; return { ok: true, data: { ok: true, state: 'running' } }; }
@@ -87,6 +89,33 @@ test('Runner identity change during draft repair ends validation as cancelled', 
   assert.equal(result.cancelled, true);
   assert.equal(f.handle.snapshot().status, 'aborted');
   assert.equal(f.observed[0].state, 'stopped');
+});
+
+test('new invalid drafts cannot bypass Runner validation when file time precedes the conversation', async t => {
+  const fileTime = new Date(Date.now() - 60000);
+  const f = await fixture(t, false, { fileTime }), result = await f.turn.completion;
+  assert.equal(result.ok, false);
+  assert.equal(result.failureKind, 'plugin-validation');
+  assert.equal(f.calls.filter(row => row.op === 'job.comment').length, 2);
+  assert.equal(f.observed[0].state, 'failed');
+  assert.equal(f.handle.outputSnapshot().pluginValidation[0].state, 'invalid');
+});
+
+test('backdated draft repair still cancels when the Runner owner changes', async t => {
+  const f = await fixture(t, true, { fileTime: new Date(Date.now() - 60000), switchOwnerOnRepair: true });
+  assert.equal((await f.turn.completion).cancelled, true);
+  assert.equal(f.handle.snapshot().status, 'aborted');
+  assert.equal(f.observed[0].state, 'stopped');
+});
+
+test('an untouched invalid draft predating a Runner conversation is not repaired or exposed', async t => {
+  const f = await fixture(t, false, { fileTime: new Date(Date.now() - 60000),
+    existingInvalid: true, leaveDraftUntouched: true });
+  assert.equal((await f.turn.completion).ok, true);
+  assert.equal(f.calls.filter(row => row.op === 'job.comment').length, 0);
+  const snapshot = f.handle.outputSnapshot();
+  assert.equal(snapshot.files.some(row => row.path === f.file), false);
+  assert.deepEqual(snapshot.pluginValidation, []);
 });
 test('Runner resumed native goal validates the generated draft before completing', async t => {
   const f = await fixture(t, true, { validFirst: true, goalScenario: true });
