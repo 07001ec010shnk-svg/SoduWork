@@ -145,6 +145,8 @@ def initialized(state: Path) -> bool:
     db = state / "soduwork.db"
     if not db.exists():
         return False
+    # A database file alone does not mean the first administrator was created.
+    # Inspect existing users read-only so this check cannot initialize the database.
     try:
         with closing(sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)) as conn:
             return bool(conn.execute("SELECT COUNT(*) FROM app_user").fetchone()[0])
