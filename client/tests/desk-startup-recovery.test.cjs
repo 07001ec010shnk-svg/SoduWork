@@ -1,0 +1,82 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+
+const read = name => fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
+const html = read('desk.html');
+const boot = read('desk-boot.js');
+
+function fixture({ failMount = false, failOpen = false, view = 'create', initData = async () => {} } = {}) {
+  const events = new EventTarget();
+  const classes = new Set();
+  const blank = { style: {}, classList: { add: value => classes.add(value) } };
+  const hint = { textContent: '正在载入…' };
+  const retry = Object.assign(new EventTarget(), { hidden: true, textContent: '' });
+  const elements = { deskBlank: blank, deskBlankHint: hint, deskBlankRetry: retry };
+  let deadline, start, reloads = 0;
+  const scope = {
+    __deskPanel: 'workspace', __deskArgs: { view }, navigator: { language: 'zh-CN' },
+    addEventListener: events.addEventListener.bind(events),
+    dispatchEvent: events.dispatchEvent.bind(events), Event, initData,
+    setTimeout: (callback, ms) => { deadline = { callback, ms }; },
+    location: { reload: () => { reloads++; } },
+    document: { readyState: 'loading', getElementById: id => elements[id],
+      addEventListener(type, listener) { if (type === 'DOMContentLoaded') start = listener; } },
+    WorkspaceShell: {
+      mount() { if (failMount) throw Error('fixture mount failure'); },
+      setTasks() {}, setConnected() {},
+    },
+    WorkspaceNavigation: { open() { if (failOpen) throw Error('fixture open failure'); } },
+    console: { error() {}, warn() {} },
+  };
+  scope.window = scope;
+  vm.createContext(scope);
+  const recovery = html.match(/<script id="deskStartupRecovery">([\s\S]*?)<\/script>/)?.[1];
+  if (recovery) vm.runInContext(recovery, scope);
+  vm.runInContext(boot, scope);
+  return { start, blank, hint, retry, classes, deadline, reloads: () => reloads };
+}
+
+test('a workspace mount failure exposes a reload action after the startup timeout', () => {
+  const f = fixture({ failMount: true });
+  assert.throws(f.start, /fixture mount failure/);
+  assert.equal(f.retry.hidden, true);
+  assert.equal(f.deadline?.ms, 15000);
+  f.deadline.callback();
+  assert.match(f.hint.textContent, /工作区尚未打开/);
+  assert.equal(f.retry.hidden, false);
+  assert.ok(f.classes.has('desk-startup-recovery'));
+  f.retry.dispatchEvent(new Event('click'));
+  assert.equal(f.reloads(), 1);
+});
+
+test('an initial page error shows reload without waiting for the timeout', () => {
+  const f = fixture({ failOpen: true });
+  f.start();
+  assert.equal(f.retry.hidden, false);
+  assert.match(f.hint.textContent, /工作区尚未打开/);
+});
+
+test('a successful open keeps the recovery action hidden past the deadline', () => {
+  const f = fixture();
+  f.start();
+  assert.equal(f.blank.style.display, 'none');
+  f.deadline?.callback();
+  assert.equal(f.retry.hidden, true);
+});
+
+test('a slow workspace can still open and dismiss recovery without reloading', async () => {
+  let finish;
+  const f = fixture({ view: 'history', initData: () => new Promise(resolve => { finish = resolve; }) });
+  f.start();
+  f.deadline?.callback();
+  assert.equal(f.retry.hidden, false);
+  finish();
+  await new Promise(setImmediate);
+  assert.equal(f.blank.style.display, 'none');
+  assert.equal(f.reloads(), 0);
+});

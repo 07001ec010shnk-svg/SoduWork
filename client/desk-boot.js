@@ -345,7 +345,7 @@
     _contentReadySent = true;
     try {
       if (window.soduWorkAPI && soduWorkAPI.deskContentReady) soduWorkAPI.deskContentReady();
-    } catch (e) { /* The main process also enforces a startup timeout. */ }
+    } catch (e) { /* The main process can still reveal the window. */ }
   }
 
   function openPage(payload) {
@@ -359,8 +359,12 @@
        */
       console.error('[desk] 开「' + PANEL + '」这一页失败', e);
       _openFailed = true;
-      const hint = document.getElementById('deskBlankHint');
-      if (hint) hint.textContent = '这一页没能打开：' + (e && e.message || e);
+      if (PANEL === 'workspace' && !_opened) {
+        window.dispatchEvent(new Event('soduwork-desk-startup-failed'));
+      } else {
+        const hint = document.getElementById('deskBlankHint');
+        if (hint) hint.textContent = '这一页没能打开：' + (e && e.message || e);
+      }
       contentReady();
       return;
     }
