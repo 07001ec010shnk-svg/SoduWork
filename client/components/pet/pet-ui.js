@@ -315,6 +315,13 @@ function _onPetPointerDown(e) {
 
 function _onPetPointerMove(e) {
   if (dragOX === 0 && dragOY === 0) return; /* No active press. */
+  /*
+   * The native passthrough guard can swallow pointerup when the cursor leaves the overlay
+   * window mid-drag (for example onto another display). If the button is no longer held
+   * while drag state is still pending or active, end the drag so the pet cannot stick
+   * to the cursor.
+   */
+  if ((e.buttons & 1) === 0) { _onPetPointerUp(e); return; }
   const dx = e.clientX - dragOX;
   const dy = e.clientY - dragOY;
   if (!dragging) {
@@ -459,6 +466,8 @@ function _bindPetEvents() {
   if (window.soduWorkAPI && soduWorkAPI.onOverlayWindowBlur && !window.__taskBlurBound) {
     window.__taskBlurBound = true;
     soduWorkAPI.onOverlayWindowBlur(() => {
+      /* Blur parks the overlay and can swallow the in-flight pointerup; end any active drag. */
+      if (dragging || dragOX !== 0 || dragOY !== 0) _onPetPointerUp(null);
 
       closeDockMore();
       const menu = document.querySelector('.ctx-menu.show');

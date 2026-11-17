@@ -552,16 +552,35 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
     }).catch(() => { /* Retry after renderer readiness. */ });
   }
 
+  /*
+   * Cover every connected display so the pet can be dragged across monitors.
+   * Negative origins (monitors left of/above the primary) are preserved.
+   */
+  function _allDisplaysBounds() {
+    let displays = [];
+    try { displays = screen.getAllDisplays() || []; } catch (_) { /* Fall back to the primary bounds below. */ }
+    if (!displays.length) return screen.getPrimaryDisplay().bounds;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const d of displays) {
+      const b = d.bounds;
+      minX = Math.min(minX, b.x);
+      minY = Math.min(minY, b.y);
+      maxX = Math.max(maxX, b.x + b.width);
+      maxY = Math.max(maxY, b.y + b.height);
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }
+
   function createWindow() {
     if (_disposed) throw new Error('Desktop overlay controller is disposed');
     if (isCurrent(mainWindow)) return mainWindow;
     _initialPaintReady = false;
     _initialRevealPending = true;
     /*
-     * Use full display bounds, including the taskbar, so edge-aligned components reach the
-     * physical display edge.
+     * Use the bounding box of all displays, including the taskbar, so edge-aligned
+     * components reach the physical display edge and the pet can cross monitors.
      */
-    const { x: dispX, y: dispY, width: screenWidth, height: screenHeight } = screen.getPrimaryDisplay().bounds;
+    const { x: dispX, y: dispY, width: screenWidth, height: screenHeight } = _allDisplaysBounds();
 
     mainWindow = new BrowserWindow({
       width: screenWidth,
@@ -675,7 +694,7 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
      */
     const fitToScreen = () => {
       if (!isCurrent(owner)) return;
-      const b = screen.getPrimaryDisplay().bounds;
+      const b = _allDisplaysBounds();
       const w = mainWindow.getBounds();
       if (w.x !== b.x || w.y !== b.y || w.width !== b.width || w.height !== b.height) {
         mainWindow.setBounds(b);
