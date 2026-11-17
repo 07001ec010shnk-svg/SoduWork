@@ -75,6 +75,8 @@ RELEASE_SMOKES = tuple(sorted((
     "smoke/smoke_video_plugin.py",
     "smoke/smoke_acp_runtime.py",
     "smoke/smoke_runner_images.py",
+    "test_image_generation.py",
+    "test_security_dependency_contract.py",
     "test_qwen_runtime.py",
     "test_kimi_runtime.py",
     "smoke/smoke_acp_team_admin.py",
