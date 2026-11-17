@@ -44,6 +44,24 @@ test('assignment picker renders untrusted catalog names, identifiers and diagnos
   assert.doesNotMatch(markup, /<(?:img|script)\b/i);
 });
 
+test('English assignment choices translate UI labels and preserve plugin and agent names', () => {
+  const h = fixture({
+    substrates: [agent('agent-id', {name: '团队 Agent', locationLabel: '本机'})],
+    workflows: [flow('workflow-id', {name: '团队插件'})], models: [],
+  });
+  const work = require('../core/locales/en-US-work-pages.js');
+  const copy = { ...work, '本机': 'Local' };
+  h.ctx.window.SoduWorkI18n = {translateText: value => copy[value] || value};
+  h.ctx._fwdPaintSelection = h.ctx._fwdSyncConfirm = () => {};
+  let markup;
+  const box = {set innerHTML(value) {markup = value;},
+    querySelector: () => ({addEventListener() {}}), querySelectorAll: () => []};
+  h.ctx._fwdRenderAIPickers('fixture-task', box);
+  assert.match(markup, /No plugin · Run directly/);
+  assert.match(markup, /团队插件/);
+  assert.match(markup, /团队 Agent · Local/);
+});
+
 test('assignment methods require builtin or installed provenance plus a binding', () => {
   const h = fixture();
   for (const [item, expected] of [

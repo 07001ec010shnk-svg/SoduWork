@@ -345,14 +345,17 @@ function _fwdRenderAIPickers(tid, box) {
   const flow = plugins.find(row => _fwdSameId(row.bindingId, selectedId));
   const missingMethod = !_fwdNoPlugin && !flow;
   const agentState = _fwdAgentPickerState(flow);
-  const pluginOptions = (missingMethod ? _fwdPickerOption('__unselected__', '请重新选择工作方式', '__unselected__', true) : '') +
-    _fwdPickerOption('', '不用插件 · 直接执行', missingMethod ? null : selectedId) + plugins.map(plugin =>
-    _fwdPickerOption(plugin.bindingId, plugin.name + (_fwpReady(plugin, _fwdOptions) ? '' : ' · 暂不可用'),
-      selectedId, !_fwpReady(plugin, _fwdOptions))).join('');
+  const translate = value => window.SoduWorkI18n?.translateText?.(value) || value;
+  const pluginOptions = (missingMethod ? _fwdPickerOption('__unselected__', translate('请重新选择工作方式'), '__unselected__', true) : '') +
+    _fwdPickerOption('', translate('不用插件 · 直接执行'), missingMethod ? null : selectedId) + plugins.map(plugin => {
+      const ready = _fwpReady(plugin, _fwdOptions);
+      const label = ready ? plugin.name : plugin.name + ' · ' + translate('暂不可用');
+      return _fwdPickerOption(plugin.bindingId, label, selectedId, !ready);
+    }).join('');
   const placeholder = agentState.fixed ? '插件已指定 Agent' : agentState.stale ? '请重新选择 Agent' : '请选择可用 Agent';
   const agentOptions = (agentState.fixed || agentState.stale || agentState.value == null
-    ? _fwdPickerOption('__unselected__', placeholder, '__unselected__', true) : '') + agentState.rows.map(row =>
-    _fwdPickerOption(row.value, [row.label, row.locationLabel, row.available === false ? '未就绪' : ''].filter(Boolean).join(' · '),
+    ? _fwdPickerOption('__unselected__', translate(placeholder), '__unselected__', true) : '') + agentState.rows.map(row =>
+    _fwdPickerOption(row.value, [row.label, translate(row.locationLabel), row.available === false ? translate('未就绪') : ''].filter(Boolean).join(' · '),
       agentState.stale ? null : agentState.value, row.available === false)).join('');
   window.ForwardSelect?.destroy(box);
   box.innerHTML = '<section class="fwd-method-picker"><label class="fwd-picker-field"><span>选择插件</span>' +
