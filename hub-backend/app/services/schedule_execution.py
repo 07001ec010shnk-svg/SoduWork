@@ -299,9 +299,9 @@ async def _preflight_execution(session: AsyncSession, s,
                 "message": "执行设备的登录账号已变更，请原账号登录后再执行"}
     if not aid:
         return {"state": "blocked", "mode": mode,
-                "message": "请先选择执行 Agent",
+                "message": "请先选择执行底座",
                 "checks": [{"key": "agent", "state": "blocked",
-                            "label": "尚未选择执行 Agent"}]}
+                            "label": "尚未选择执行底座"}]}
     from . import ai_exec
     try:
         ctx = await ai_exec.load(session, force=True)
