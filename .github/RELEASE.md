@@ -9,7 +9,7 @@
 | Component | Build and acceptance | GitHub Release assets |
 | --- | --- | --- |
 | source | Export the committed tree; verify the file inventory, public boundary and shared quality gates | Source ZIP without Git history |
-| client | Windows fresh installation, repair, upgrade and compatibility; Mac DMG, signature, restart and upgrade; installation, startup, upgrade and removal in Ubuntu 22/24 and Rocky 9 containers | Windows x64 EXE, Linux x64 DEB/RPM/tar.gz, Mac ARM64/x64 DMG |
+| client | Windows fresh installation, repair, upgrade and compatibility; Mac DMG, signature, restart and upgrade; installation, startup, upgrade and removal in Ubuntu 22/24, Rocky 9 and Fedora 45 containers; RPM/OpenPGP verification | Windows x64 EXE, Linux x64 DEB/RPM/tar.gz with detached signatures and public key, Mac ARM64/x64 DMG |
 | hub | Shared self-hosting Dockerfile; disposable PostgreSQL, migrations, baked release identity, health/readiness, frontend assets, Pi/Codex versions, Runner entrypoint, non-root writable directories, restart, image export and reload | Linux amd64 Docker image tar.gz |
 
 Hub release and Compose builds share `ops/self-host/Dockerfile`; the former
@@ -31,6 +31,24 @@ Before running the public Client release, configure these repository or environm
 
 For migration from an older ad-hoc-signed macOS release, its reviewed baseline entry may explicitly set `notarization: "legacy-ad-hoc"`. Acceptance verifies its SoduWork identity, older version, exact artifact path and pinned SHA-256 before extraction, then still requires a strict bundle signature. Only that old baseline is exempt from Gatekeeper and stapled-ticket checks, and the exception is recorded in the receipt. New candidate packages always require both checks. Do not mark the candidate as a legacy baseline.
 
+Linux releases require repository secrets `SODUWORK_LINUX_SIGNING_KEY_B64` and
+`SODUWORK_LINUX_SIGNING_PASSPHRASE`, plus repository variable
+`SODUWORK_LINUX_SIGNING_FINGERPRINT`. Missing credentials block the build before
+dependency preparation. RPMs receive embedded OpenPGP signatures; all three Linux
+formats also receive detached signatures. The exported public key and signatures
+are required candidate assets and are hashed after signing. Native RPM acceptance
+requires a trusted signature with `localpkg_gpgcheck=True`. See
+[Linux signing setup and download verification](../docs/linux-package-verification.en.md)
+for key requirements and first-install trust instructions. Standalone DEB signatures
+do not provide automatic APT repository authentication.
+
+The published 1.13.15 RPM predates package signing. Its committed upgrade baseline
+explicitly records `rpmSignature: "legacy-unsigned"`. In disposable acceptance
+containers only, the old installer is rechecked against its pinned SHA-256 before
+an old-package-only signature exception is applied. The receipt records the
+baseline exception and hash. Candidate installation, verification and upgrade
+still require the new signature; never mark a candidate as a legacy baseline.
+
 ## Repository setup
 
 To validate packaging before publication approval, set `PACKAGE_VALIDATION_REPOSITORY`
@@ -40,6 +58,17 @@ GitHub-hosted runners. Each job uploads only its build/checksum report.
 Installers stay on the ephemeral runner while binary distribution review remains
 pending. This workflow neither creates a Release nor supplies
 upgrade-acceptance receipts to `Draft release`.
+
+To exercise Linux signing with repository secrets before a Release, enable
+`signed_linux` in **Native package validation**. This runs only the Linux build,
+signs the actual installers, verifies the committed upgrade baselines and runs
+the native Linux installation matrix. It uploads `signed-linux-validation` with
+the installers, signatures, public key and a validation-only receipt. The ordinary
+unsigned matrix is skipped in this mode. The binary scope and third-party review
+must already permit distribution. This mode neither creates a Release nor emits
+the protected release pipeline's `linux-receipt.json`; it can also validate a fork
+against the committed upstream public baselines, always checking their pinned
+digests. Publication still requires the independent protected Release workflow.
 
 1. Set the repository variable `PUBLIC_RELEASE_REPOSITORY` to the final public repository's `owner/name`. The workflow must exist on the default branch before its manual entry appears in Actions.
 2. Protect every maintained `release/X.Y.x` branch, prohibit force pushes and restrict updates to maintainers. Protect `v*`; prohibit moving or deleting published tags. A new maintenance branch must be protected before its first release workflow run.

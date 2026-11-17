@@ -76,10 +76,14 @@ function validateAcceptance(record, receipt) {
     firstRelease?.excludedProduct === 'SoduWork Global' &&
     Array.isArray(firstRelease.keys) && firstRelease.keys.includes('windows-x64-exe');
   const required = record.platform === 'windows' ? ['fresh-repair', ...(firstWindowsRelease ? [] : ['soduwork-upgrade']), 'compatibility']
-    : record.platform === 'linux' ? ['ubuntu22-deb', 'ubuntu24-deb', 'rocky9-rpm', 'ubuntu22-tgz']
+    : record.platform === 'linux' ? ['ubuntu22-deb', 'ubuntu24-deb', 'rocky9-rpm', 'fedora45-rpm', 'ubuntu22-tgz']
       : record.artifacts.map(item => item.arch + '-' + item.format);
   assert.deepEqual(receipt.checks.map(item => item.name).sort(), required.sort());
-  for (const check of receipt.checks) assert.equal(check.ok, true, check.name);
+  for (const check of receipt.checks) {
+    assert.equal(check.ok, true, check.name);
+    if (record.platform === 'linux' && check.name.endsWith('-rpm'))
+      assert.equal(check.rpmSignatureVerified, true, 'RPM acceptance must verify the package signature');
+  }
   return receipt;
 }
 async function acceptance(platform, checks, limitations = [], arch) {
