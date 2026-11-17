@@ -89,6 +89,25 @@ Codex ACP 协商带版本的 `sessionFailure` 能力，在接受 `end_turn` 前�
 
 ## 连数据库
 
+领域排序接受 32 位有符号整数及旧客户端使用的十进制整数字符串。非法值、
+布尔值、小数和越界值会在修改记录前返回 HTTP 400。PATCH 省略排序或传入 null
+时保留原排序，创建时仍默认使用 0。调度数字字段和客户端更新进度使用相同的
+整数校验，并保留原有范围限制和可选字段默认值。新提交的调度时区必须是有效的
+IANA 时区；省略时保留原配置，null 或空字符串沿用默认时区。历史无效时区仍可
+通过默认时区回退正常读取。
+
+迁移 `0091_domain_sort_validation` 修复 SQLite 中存储类型或范围异常的历史领域
+排序，保留正常排序、领域 ID 和关联关系。排序仍有空间时，修复项排列在正常项
+之后；若已达到上限，则在上限并列，并按创建时间和 ID 排序。每次修复会在同一
+事务中先写入 `domain.sort_repair`
+审计记录，保存原存储类型、原值的无损表示及替换值。首次接管旧版未使用 Alembic
+的数据库时也会执行此修复，重复运行不会重复处理。PostgreSQL 的领域数据保持不变。
+升级前请备份数据库；降级不会恢复异常值。管理员可通过审计记录复核并调整排序。
+
+离线回归命令：`python3 -m unittest test_api_integer_validation
+test_domain_sort_validation test_domain_sort_migration
+test_schedule_update_input_validation`。这些测试已登记到发布质量检查清单。
+
 在 `.env` 里设 `DATABASE_URL`：
 
 | 场景 | DATABASE_URL |
