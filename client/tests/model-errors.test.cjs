@@ -6,6 +6,26 @@ const secretBody = '<html><body><h1>504 Gateway Time-out</h1>' +
   "The server didn't respond in time. http://192.0.2.40:8181/private?token=fixture-secret" +
   '<p>Authorization: Bearer fixture-secret</p></body></html>';
 
+test('a request transformed to omit the tool result cannot report a tool continuation', async () => {
+  const phase = require('../main/pi-session/model-request-phase.cjs');
+  let dispatch, wire;
+  const agent = { async streamFunction(model, context, options) {
+    wire = await options.onPayload({ messages: [{ role: 'tool', tool_call_id: 'call1' }] }, model);
+  } };
+  const session = { agent, subscribe(listener) { dispatch = listener; return () => {}; } };
+  const acc = stream.create();
+  const off = phase.subscribe(session, event => acc.push(event));
+  dispatch({ type: 'agent_start' });
+  const result = { role: 'toolResult', toolCallId: 'call1' };
+  dispatch({ type: 'message_end', message: result });
+  const replacement = { messages: [{ role: 'user', content: 'Replacement' }] };
+  await agent.streamFunction({ api: 'openai-completions' }, { messages: [result] }, { onPayload: () => replacement });
+  assert.equal(wire, replacement);
+  dispatch({ type: 'message_end', message: { role: 'assistant', stopReason: 'error', errorMessage: '403 forbidden' } });
+  assert.equal(acc.snapshot().completion.error, '模型请求被拒绝（HTTP 403）');
+  off();
+});
+
 test('gateway HTTP status lines and HTML bodies produce stable safe summaries', () => {
   for (const value of ['504 ' + secretBody, 'HTTP/1.1 504 Gateway Time-out\n' + secretBody,
     'HTTP/2 504', '504', 'Error: 504 ' + secretBody, secretBody,
@@ -90,6 +110,16 @@ test('image rejection errors explain the safe recovery path without offering a b
   const info = errors.describe(value);
   assert.equal(info.retryable, false);
   assert.equal(errors.forDisplay(value), '当前模型不接受图片输入，请切换支持图片的模型或启用视觉适配（HTTP 400）');
+});
+
+test('a verified tool phase preserves recognized quota and billing diagnostics', () => {
+  for (const error of [{ status: 403, detail: { code: 'TOKEN_QUOTA_EXCEEDED' } },
+    { error: { status: 403, code: 'insufficient_balance' } }]) {
+    const info = errors.describe(error, true);
+    assert.equal(info.retryable, false);
+    assert.match(info.publicText, /额度/);
+    assert.equal(info.publicText, errors.forDisplay(error));
+  }
 });
 
 test('public stream snapshots hide gateway bodies but retain interrupted state and completed work', () => {

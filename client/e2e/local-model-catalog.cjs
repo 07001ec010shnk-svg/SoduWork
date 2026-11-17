@@ -38,6 +38,8 @@ if (typeof electron === 'string') {
     modelNames: ['shared-model'], modelDefs: [{ name: 'shared-model', label: 'Shared model', modality: 'chat' }],
   })), myModels: [], usable: ['company-first', 'company-second'].map(providerId => ({
     providerId, name: 'shared-model', label: 'Shared model', keyFrom: 'org' })), mediaUsable: {} };
+  managed.providers.push({id:'custom-personal-fixture', name:'Personal Hub service', personal:true,
+    baseUrl:'https://personal.example.invalid/v1', kind:'openai-compat', modelNames:[], modelDefs:[]});
   let win, server, hub, localId, holdLocalSaves = false, failedHubWrites = 0;
   const pendingLocalSaves = [];
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -215,6 +217,8 @@ if (typeof electron === 'string') {
       await click('[data-mdselect="' + id + '"]');
       assert.equal(await js('document.querySelectorAll(".md-model-row").length'), 1);
       assert.equal(await js('document.querySelectorAll("[data-mdedit]").length'), 0);
+      assert.equal(await js('document.querySelector(".md-settings-section input").readOnly'), true);
+      assert.equal(await js('document.querySelector("[data-purl]")'), null);
       assert.equal(await js('document.querySelector(".md-model-list").textContent.includes("Shared model")'), true);
     }
     record('Identical model names from separate Hub providers remain visible and organization-managed');
@@ -285,7 +289,7 @@ if (typeof electron === 'string') {
     const mixedLocalId = await js('document.querySelector("[data-pname]").dataset.pname');
     await fill('[data-pname]', 'Mixed local service'); await fill('[data-purl]', 'http://127.0.0.1:2/v1');
     await fill('[data-pkey]', key);
-    await click('[data-mdselect="company-first"]'); await fill('[data-purl]', 'https://managed-retry.invalid/v1');
+    await click('[data-mdselect="custom-personal-fixture"]'); await fill('[data-purl]', 'https://managed-retry.invalid/v1');
     failedHubWrites = 1; await js('notices.length=0'); await click('#mdSave');
     await until('!_mdSaveFlight&&_mdManagedDirty&&!_mdLocalDirty');
     assert.equal(hubWrites.length, 1);
@@ -298,10 +302,11 @@ if (typeof electron === 'string') {
     await click('#mdSave'); await until('!_mdSaveFlight&&_mdLoadState==="ready"&&!_mdDirty');
     assert.equal(hubWrites.length, 2);
     assert.equal(store.get().revision, 9, 'retry must not replay the already committed local save');
-    assert.equal(managed.providers[0].baseUrl, 'https://managed-retry.invalid/v1');
+    assert.equal(managed.providers.find(row => row.id === 'custom-personal-fixture').baseUrl, 'https://managed-retry.invalid/v1');
     await win.loadURL(desk); await until('_mdLoadState==="ready"');
     assert.equal(await js(`_mdData.providers.find(row=>row.id===${JSON.stringify(mixedLocalId)}).name`), 'Mixed local service');
-    assert.equal(await js('_mdData.providers.find(row=>row.id==="company-first").baseUrl'), 'https://managed-retry.invalid/v1');
+    await click('[data-mdselect="custom-personal-fixture"]');
+    assert.equal(await js('document.querySelector("[data-purl]").value'), 'https://managed-retry.invalid/v1');
     record('Mixed local and managed edits report partial success and retry only the uncommitted Hub save');
 
     for (const body of hubWrites) {
@@ -311,7 +316,7 @@ if (typeof electron === 'string') {
       assert.equal(JSON.stringify(body).includes('Mixed local service'), false);
       assert.equal(JSON.stringify(body).includes('127.0.0.1'), false);
       assert.deepEqual(body.models, []); assert.deepEqual(body.keys, {});
-      assert.deepEqual(body.providers.map(provider => provider.id), ['company-first', 'company-second']);
+      assert.deepEqual(body.providers.map(provider => provider.id), ['custom-personal-fixture']);
       assert.ok(!Object.keys(body).some(name => name.startsWith('local')));
     }
     assert.deepEqual(blocked, []); assert.deepEqual(await js('errors'), []);

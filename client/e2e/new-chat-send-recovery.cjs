@@ -174,7 +174,8 @@ if (typeof electron === 'string') {
     for (const file of ['agent-brand', 'compose-candidate-navigation', 'chat-plugin-mention-model', 'chat-plugin-mention'])
       await js(read('components/panels/' + file + '.js') + '\nvoid 0;');
     for (const script of scripts) await js(script + '\nvoid 0;');
-    await js(`SoduWorkAPI.taskStorageKey=()=> 'isolated-first-send-recovery';void 0;`);
+    await js(`SoduWorkAPI.taskStorageKey=()=> 'isolated-first-send-recovery';
+      SoduWorkAPI.myModels=async()=>({usable:[{name:'fixture-model',label:'Isolated fixture'}]});void 0;`);
 
     const offline = scenario('offline-first');
     await prepare(); await click('#nchatInput'); await win.webContents.insertText('你好');
