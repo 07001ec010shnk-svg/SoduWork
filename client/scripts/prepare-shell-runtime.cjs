@@ -138,7 +138,7 @@ async function prepareArchive(release, { cache = cacheRoot, environment = proces
   fail('PortableGit download failed: ' + lastError + '. Check HTTP_PROXY/HTTPS_PROXY, configure SODUWORK_PORTABLE_GIT_MIRROR, or use SODUWORK_PORTABLE_GIT_ARCHIVE');
 }
 
-function selfTest(root) {
+function selfTest(root, environment = process.env, run = spawnSync) {
   const bash = path.join(root, 'bin', 'bash.exe');
   if (!fs.existsSync(bash)) fail('archive does not contain bin/bash.exe');
   // Run actual Git init, commit, log, and utility operations after pruning.
@@ -153,12 +153,13 @@ function selfTest(root) {
     "find . -name probe.txt | grep -q probe; " +
     "tar -cf probe.tar probe.txt; tar -tf probe.tar | grep -q probe; " +
     'cd /; rm -rf "$work"';
-  const windowsRoot = process.env.SystemRoot || 'C:\\Windows';
-  const result = spawnSync(bash, ['-c', command], {
+  const windowsRoot = environment.SystemRoot || 'C:\\Windows';
+  const result = run(bash, ['-c', command], {
     encoding: 'utf8', timeout: 30000, windowsHide: true,
     env: {
-      SystemRoot: windowsRoot, WINDIR: process.env.WINDIR || windowsRoot,
+      SystemRoot: windowsRoot, WINDIR: environment.WINDIR || windowsRoot,
       PATH: path.join(windowsRoot, 'System32'), CHERE_INVOKING: '1', MSYS_NO_PATHCONV: '1',
+      ...Object.fromEntries(Object.entries(environment).filter(([key]) => /^(TMPDIR|TEMP|TMP)$/i.test(key))),
     },
   });
   if (result.status !== 0 || !String(result.stdout || '').includes('SODUWORK_SHELL_OK')) {
@@ -185,7 +186,7 @@ async function prepare({ platform = process.platform, environment = process.env,
       const manifest = JSON.parse(fs.readFileSync(manifestFile, 'utf8'));
       if (manifest.version === item.version && manifest.arch === arch &&
           manifest.sha256 === item.sha256 && manifest.prune === PRUNE_REV) {
-        test(runtimeRoot);
+        test(runtimeRoot, environment);
         console.log('[SoduWork shell runtime] ready: Git for Windows ' + item.version + ' (' + arch + ')');
         return;
       }
@@ -218,7 +219,7 @@ async function prepare({ platform = process.platform, environment = process.env,
     }
   }
   prune(runtimeRoot);
-  test(runtimeRoot);
+  test(runtimeRoot, environment);
   fs.writeFileSync(manifestFile, JSON.stringify({
     product: 'Git for Windows PortableGit', version: item.version, arch,
     sha256: item.sha256, source: item.url, prune: PRUNE_REV,
