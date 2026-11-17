@@ -25,9 +25,9 @@ You do not need to create a database, install Docker or Git, prepare an `.env` f
 
 The launcher installs both Hub and Runner dependencies in its private `venv/`, checks the Runner's Python imports, and gives the desktop that exact interpreter. You do not need a separate `hub-backend/.venv` for this entry point. If Agent management reports an incomplete source Runner environment, quit the source session and rerun the same launcher; keep the data directory intact.
 
-npm and pip caches from the install go to `cache/` inside the data directory, so `--data-dir` on another volume does not leave downloads on the system drive. Skip `cache/` when backing up or moving the data directory; it is regenerable. If you already set `npm_config_cache` or `PIP_CACHE_DIR`, the launcher keeps your values.
+npm, pip and Electron download caches from both service and desktop preparation default to `cache/npm`, `cache/pip` and `cache/electron` inside the data directory. Nonempty `npm_config_cache`, `PIP_CACHE_DIR` and `electron_config_cache` settings keep their explicit locations; these may be outside the data directory. Preparation also creates `cache/tmp` and sets `TMPDIR`, `TEMP` and `TMP` for its child processes on every platform, so downloads, unpacking and builds use the selected volume instead of the inherited system temporary directory. Your shell environment is unchanged. After stopping the launcher, you can skip `cache/` when backing up or moving the data directory; it is regenerable.
 
-On Windows, desktop startup also prepares and verifies a private PortableGit command runtime in this instance's application copy so Agents can use Bash, Git, and common tools. No separate Git installation or WSL configuration is needed. Later starts preserve the runtime and download cache and check the tools again. If preparation fails, inspect `startup.log`, fix network access, and rerun the same launcher.
+On Windows, desktop startup also prepares and verifies a private PortableGit command runtime in this instance's application copy so Agents can use Bash, Git, and common tools. No separate Git installation or WSL configuration is needed. Later starts preserve the runtime and download cache and check the tools again. If preparation fails, inspect `startup.log`, resolve the reported cause, and rerun the same launcher.
 
 ## Know when startup is complete
 
@@ -130,7 +130,7 @@ Hidden input is normal: no characters or asterisks appear. Press Enter when done
 
 ### Downloads are slow or setup fails
 
-“Still running” means the installation process has not exited; it does not prove a download has succeeded. Read the printed `startup.log`, check network/proxy and npm/Python package download access, then rerun the same launcher. Do not delete the data directory. The initial Electron download also needs internet access.
+“Still running” means the installation process has not exited; it does not prove a download has succeeded. Read the failing step in the printed `startup.log` before retrying. “Disk full” means you must free space on the volume holding the data directory or an explicitly configured cache; retrying a download does not free space. Missing package versions, permission errors and other failures also need their own remedies. Check network/proxy and package download access when the log reports a connection failure. Then rerun the same launcher; completed steps are reused. Do not delete the data directory. The initial Electron download also needs internet access.
 
 The npm registry and binary downloads use separate endpoints. Changing the npm registry mirror changes npm package downloads; it does not change the Electron or PortableGit download URLs:
 

@@ -25,9 +25,9 @@
 
 启动器会在专用 `venv/` 中安装 Hub 和 Runner 两套依赖，检查 Runner 所需的 Python 模块，并把同一解释器交给桌面端。使用此入口无需另建 `hub-backend/.venv`。如果 Agent 管理提示源码 Runner 环境不完整，请退出源码启动会话后重跑同一入口，保留原数据目录。
 
-安装期间的 npm 与 pip 缓存写入数据目录下的 `cache/`，因此 `--data-dir` 指向另一个磁盘时，下载缓存不会留在系统盘。备份或迁移时可以跳过 `cache/`，它是可再生的；如已自行设置 `npm_config_cache` 或 `PIP_CACHE_DIR`，启动器沿用你的设置。
+服务端和桌面端准备期间，npm、pip 和 Electron 下载缓存默认分别写入数据目录下的 `cache/npm`、`cache/pip` 和 `cache/electron`。非空的 `npm_config_cache`、`PIP_CACHE_DIR` 和 `electron_config_cache` 设置会保留其显式指定的位置，这些位置可以在数据目录之外。所有平台的准备流程还会创建 `cache/tmp`，并为子进程设置 `TMPDIR`、`TEMP` 和 `TMP`，让下载、解包和构建使用所选磁盘，不再沿用系统临时目录；当前终端的环境变量不变。停止启动器后，备份或迁移时可以跳过可再生的 `cache/`。
 
-Windows 桌面启动还会在本实例的应用副本中准备并校验命令运行环境（PortableGit），供 Agent 使用 Bash、Git 和常用命令。无需单独安装 Git 或配置 WSL。后续启动会保留运行环境和下载缓存，并再次检查可用性；准备失败时查看 `startup.log`，修复网络后重跑同一入口。
+Windows 桌面启动还会在本实例的应用副本中准备并校验命令运行环境（PortableGit），供 Agent 使用 Bash、Git 和常用命令。无需单独安装 Git 或配置 WSL。后续启动会保留运行环境和下载缓存，并再次检查可用性；准备失败时查看 `startup.log`，解决日志报告的问题后重跑同一入口。
 
 ## 怎么判断启动成功
 
@@ -131,7 +131,7 @@ sh start.sh --desktop
 
 ### 安装很慢、失败或提示网络错误
 
-长步骤的「Still running」表示安装进程尚未结束，并不代表下载已经成功。查看终端打印的 `startup.log`；检查网络、代理及 npm/Python 包下载是否可用，修正后重跑同一入口。不要删除数据目录。首次 Electron 下载也需要联网。
+长步骤的「Still running」表示安装进程尚未结束，并不代表下载已经成功。重试前先查看终端打印的 `startup.log` 中失败的步骤。提示「磁盘空间不足 / Disk full」时，应释放数据目录或显式指定缓存所在磁盘的空间；重复下载不会释放空间。依赖版本不存在、权限不足等错误也需要分别处理，仅在日志报告连接失败时检查网络、代理及包下载访问。修正后重跑同一入口，已完成的步骤会复用。不要删除数据目录。首次 Electron 下载也需要联网。
 
 npm 注册表与二进制下载使用不同的地址。设置 npm 镜像只改变 npm 包的来源，不会同时改变 Electron 或 PortableGit 的下载地址：
 
