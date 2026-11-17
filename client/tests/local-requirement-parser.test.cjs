@@ -69,19 +69,39 @@ function completion(text, finishReason = 'stop') {
     usage: { prompt_tokens: 8, completion_tokens: 12, total_tokens: 20 } } };
 }
 
-function rendererParser(parser) {
+function rendererParser(parser, getLocale) {
   const values = new Map();
   const box = { URL, URLSearchParams, AbortController, Response, console,
     navigator: { platform: 'test' }, CustomEvent: class {}, dispatchEvent() {},
     setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0,
     localStorage: { getItem: key => values.get(key) ?? null,
       setItem: (key, value) => values.set(key, String(value)), removeItem: key => values.delete(key) },
+    SoduWorkI18n: { getLocale },
     soduWorkAPI: { conversationSession: { localRequirementParse: parser } },
     fetch: () => assert.fail('private parsing must not contact Hub') };
   box.window = box;
   vm.runInNewContext(require('./renderer-source.cjs').readFileSync(path.join(__dirname, '../api.js'), 'utf8'), box);
   return box.SoduWorkAPI;
 }
+
+test('private parsing requests generated fields in the current UI language', async () => {
+  let locale = 'en-US';
+  const instructions = [];
+  const api = rendererParser(async request => {
+    instructions.push(request.instructions);
+    assert.equal(request.input, '原始需求：\nOriginal issue');
+    return { ok: true, text: '{"title":"Original issue"}' };
+  }, () => locale);
+  assert.equal((await api.parseTaskText('Original issue', 'local:test')).title, 'Original issue');
+  assert.match(instructions[0], /Output language: English\./);
+  assert.match(instructions[0], /Keep JSON keys, enum values, dates, proper names, identifiers, and literal quotations unchanged/);
+  locale = 'ja-JP';
+  await api.parseTaskText('Original issue', 'local:test', [], { kind: 'automation' });
+  assert.match(instructions[1], /Output language: Japanese\./);
+  locale = 'constructor';
+  await api.parseTaskText('Original issue', 'local:test');
+  assert.match(instructions[2], /Output language: Simplified Chinese\./);
+});
 
 test('the default local parser resolves encrypted configuration and calls a real keyless provider', async t => {
   const f = await providerFixture(t, () => completion('{"title":"Local requirement","note":"Keep the full instruction"}'));
