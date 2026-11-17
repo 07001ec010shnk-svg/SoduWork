@@ -2,6 +2,11 @@
 const _mdDrafts = new Map();
 const _mdChecks = new Map();
 function _mdCheckKey(pid, name) { return JSON.stringify([pid, name]); }
+function _mdClearCheck(key) {
+  // Abort before removing the record: an unsaved edit never reaches the host.
+  if (_mdChecks.get(key)?.pending) _mdCancelModelCheck(...JSON.parse(key));
+  _mdChecks.delete(key);
+}
 function _mdReconcileChecks(data) {
   const models = new Map((data.myModels || []).map(row => [_mdCheckKey(row.providerId, row.name), row]));
   for (const provider of data.providers || []) for (const row of provider.modelDefs || [])
@@ -13,8 +18,10 @@ function _mdReconcileChecks(data) {
   }
 }
 function _mdModelListHtml(p, models, own) {
+  const editable = _mdCanEdit(p);
+  if (!editable) own = [];
   const rows = models.map(model => ({ model, index: -1 })).concat(own.map((model, index) => ({ model, index })));
-  if (!rows.length) return '<p class="md-model-help">添加模型后可配置能力并进行检测。</p>';
+  if (!rows.length) return '<p class="md-model-help">' + (editable ? '添加模型后可配置能力并进行检测。' : '服务端尚未配置模型。') + '</p>';
   return '<div class="md-model-list">' + rows.map(({ model, index }) => {
     const id = _mdCheckKey(p.id, model.name), check = _mdChecks.get(id);
     const item = p._capStale ? { ...model, capabilityProfile: undefined, capabilityCheck: null } : model;
@@ -23,13 +30,15 @@ function _mdModelListHtml(p, models, own) {
       '<span data-user-content>' + esc(model.label || model.name) + '</span></div>' +
       (model.label && model.label !== model.name ? '<span class="md-model-id" data-user-content>' + esc(model.name) + '</span>' : '') +
       ModelCapabilitiesUI.badges(item) + '</div><div class="md-model-actions">' +
-      (_mdType(model.modality) === 'chat' ? '<button type="button" data-mdcheck' + (check?.pending ? ' disabled' : '') + '>' + (check?.pending ? '检测中…' : '检测能力') + '</button>' : '') +
-      (index >= 0 ? '<button type="button" data-mdedit="' + esc(p.id) + '|' + index + '">编辑</button>' +
-        '<button type="button" data-mdel="' + esc(p.id) + '|' + index + '" title="移除模型" aria-label="移除模型">移除</button>' : '<span class="md-cap-unchecked">组织管理</span>') +
-      '</div>' + (_mdType(model.modality) === 'chat' ? '<div class="md-model-report">' + ModelCapabilitiesUI.report(check || item.capabilityCheck) + '</div>' : '') + '</article>';
+      (editable && _mdType(model.modality) === 'chat' ? '<button type="button" data-mdcheck' + (check?.pending ? ' disabled' : '') + '>' + (check?.pending ? '检测中…' : '检测能力') + '</button>' : '') +
+      (editable && check?.pending && check.modelRef ? '<button type="button" data-mdcancelcheck>取消检测</button>' : '') +
+      (editable && index >= 0 ? '<button type="button" data-mdedit="' + esc(p.id) + '|' + index + '">编辑</button>' +
+        '<button type="button" data-mdel="' + esc(p.id) + '|' + index + '" title="移除模型" aria-label="移除模型">移除模型</button>' : '<span class="md-cap-unchecked">组织管理</span>') +
+      '</div>' + (_mdType(model.modality) === 'chat' ? '<div class="md-model-report">' + ModelCapabilitiesUI.evidenceWarning(item) + ModelCapabilitiesUI.report(check || item.capabilityCheck) + '</div>' : '') + '</article>';
   }).join('') + '</div>';
 }
 function _mdModelEditorHtml(p) {
+  if (!_mdCanEdit(p)) return '';
   const draft = _mdDrafts.get(p.id), model = draft?.model || {}, config = model.config || {}, type = _mdType(model.modality);
   return '<details class="md-model-editor" data-mdeditor="' + esc(p.id) + '"' + (draft?.open ? ' open' : '') + '><summary>' +
     (draft?.original ? '编辑模型' : '添加模型') + '</summary><div class="md-addgrid">' +
@@ -43,16 +52,19 @@ function _mdModelEditorHtml(p) {
     '<input class="md-addin md-addresult" data-paddresult="' + esc(p.id) + '" aria-label="结果下载路径" value="' + esc(config.resultPath || '') + '" placeholder="状态接口直接返回视频地址时留空">' +
     '<textarea class="md-addin md-adddefaults" data-padddefaults="' + esc(p.id) + '" aria-label="默认生成参数" rows="3">' + esc(JSON.stringify(config.defaults || {}, null, 2)) + '</textarea>' +
     '<div class="md-model-editor-actions"><button type="button" class="md-model-add" data-madd="' + esc(p.id) + '">' + (draft?.original ? '应用修改' : '添加模型') + '</button>' +
-    (draft?.original ? '<button type="button" class="md-model-add-cancel" data-mdcancel="' + esc(p.id) + '">取消</button>' : '') + '</div></div></details>';
+    '<button type="button" class="md-model-add-cancel" data-mdcancel="' + esc(p.id) + '">取消</button></div></div></details>';
 }
 function _mdBindModels(box) {
   box.querySelectorAll('[data-mdedit]').forEach(button => button.addEventListener('click', () => {
     if (button.isConnected === false) return;
     const [pid, index] = button.dataset.mdedit.split('|'), model = _mdMyModels.filter(row => row.providerId === pid)[+index];
-    if (!model) return;
+    if (!_mdCanEdit(_mdProvider(pid)) || !model) return;
     _mdDrafts.set(pid, { original: model.name, model: structuredClone(model), open: true });
     _mdRender();
-    box.querySelector('[data-padd]')?.focus();
+    const field = box.querySelector('[data-padd]');
+    field?.focus({ preventScroll: true });
+    // Reveal the editor only as far as necessary, without jumping to the form top.
+    field?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }));
   box.querySelectorAll('[data-mdcancel]').forEach(button => button.addEventListener('click', () => {
     if (button.isConnected === false) return;
@@ -60,19 +72,23 @@ function _mdBindModels(box) {
   }));
   box.querySelectorAll('[data-mdeditor]').forEach(editor => {
     const pid = editor.dataset.mdeditor;
+    if (!_mdCanEdit(_mdProvider(pid))) return;
     const restored = _mdDrafts.get(pid);
     for (const [selector, value] of Object.entries(restored?.fields || {})) {
       const field = editor.querySelector(selector); if (field) field.value = value;
     }
     if (restored?.advanced) editor.querySelector('.md-cap-advanced')?.setAttribute('open', '');
-    function capture() {
-      if (!editor.isConnected) return;
+    function capture(event) {
+      if (!editor.isConnected || !_mdCanEdit(_mdProvider(pid))) return;
       const fields = {};
       editor.querySelectorAll('input,select,textarea').forEach(field => {
         const attr = [...field.attributes].find(attribute => attribute.name.startsWith('data-'));
         if (attr) fields['[' + attr.name + '="' + CSS.escape(attr.value) + '"]'] = field.value;
       });
-      _mdDrafts.set(pid, { ...(_mdDrafts.get(pid) || {}), open: editor.open, fields, advanced: !!editor.querySelector('.md-cap-advanced')?.open });
+      const previous = _mdDrafts.get(pid) || {};
+      _mdDrafts.set(pid, { ...previous, open: editor.open, fields,
+        changed: !!(previous.changed || event?.type === 'input' || event?.type === 'change'),
+        advanced: !!editor.querySelector('.md-cap-advanced')?.open });
     }
     editor.addEventListener('input', capture);
     editor.addEventListener('change', capture);
@@ -102,13 +118,17 @@ function _mdBindModels(box) {
     const [pid, name] = JSON.parse(button.closest('[data-md-model]').dataset.mdModel);
     _mdCheckModel(pid, name);
   }));
+  box.querySelectorAll('[data-mdcancelcheck]').forEach(button => button.addEventListener('click', () => {
+    const [pid, name] = JSON.parse(button.closest('[data-md-model]').dataset.mdModel);
+    _mdCancelModelCheck(pid, name);
+  }));
 }
 function _mdApplyModel(editor) {
   if (_mdSaveFlight || editor.isConnected === false) return;
   const pid = editor.dataset.mdeditor, draft = _mdDrafts.get(pid), original = draft?.original;
   const old = _mdMyModels.find(row => row.providerId === pid && row.name === original);
   // A removed edit target must not become an implicit new model.
-  if (!_mdProvider(pid) || (original && !old)) return;
+  if (!_mdCanEdit(_mdProvider(pid)) || (original && !old)) return;
   const value = selector => editor.querySelector(selector)?.value.trim() || '';
   const name = value('[data-padd]'), modality = _mdType(value('[data-paddtype]'));
   if (!name) return;
@@ -136,25 +156,59 @@ function _mdApplyModel(editor) {
     const model = { ...(old || {}), providerId: pid, name, label: value('[data-mdlabel]') || name, modality, config, ...(ctxWindow !== undefined ? { ctxWindow } : {}) };
     delete model.capabilityProfile; delete model.capabilityCheck;
     if (old) _mdMyModels.splice(_mdMyModels.indexOf(old), 1, model); else _mdMyModels.push(model);
-    _mdChecks.delete(_mdCheckKey(pid, name));
-    if (original) _mdChecks.delete(_mdCheckKey(pid, original));
+    _mdClearCheck(_mdCheckKey(pid, name));
+    if (original) _mdClearCheck(_mdCheckKey(pid, original));
     _mdDrafts.delete(pid); _mdMarkOwnedDirty(_mdProvider(pid) || pid); _mdRender();
   } catch (error) { petSay(error.message); }
 }
 async function _mdCheckModel(pid, name) {
+  if (!_mdCanEdit(_mdProvider(pid))) return;
   const key = _mdCheckKey(pid, name);
   if (_mdChecks.get(key)?.pending) return;
-  const pending = { pending: true };
+  const local = _mdProvider(pid)?.localOnly === true;
+  const pending = { pending: true, controller: new AbortController(),
+    ...(local ? { requestId: 'cap-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2) } : {}) };
   _mdChecks.set(key, pending); _mdRender();
+  let unsubscribe;
   try {
-    if ((_mdDirty || Object.keys(_mdKeyEdits).length) && !await _mdSave(false)) throw Error('请先保存模型配置，再检测能力');
-    const report = await SoduWorkAPI.checkMyModelCapabilities({ providerId: pid, model: name, checks: ['connection', 'imageInput', 'toolCalling', 'streaming'] });
+    if (_mdNeedsSave(pid) && !await _mdSave(false)) throw Error('请先保存模型配置，再检测能力');
+    pending.controller.signal.throwIfAborted();
+    if (local) {
+      pending.modelRef = _mdMyModels.find(item => item.providerId === pid && item.name === name)?.id;
+      unsubscribe = globalThis.soduWorkAPI?.localModels?.onCapabilityProgress?.(value => {
+        if (value.requestId !== pending.requestId || _mdChecks.get(key) !== pending) return;
+        (pending.checks ||= {})[value.check] = { status: value.status, code: value.code };
+        _mdRender();
+      });
+      _mdRender();
+    }
+    const report = await SoduWorkAPI.checkMyModelCapabilities({ providerId: pid, model: name,
+      localOnly: local, ...(pending.requestId ? { requestId: pending.requestId } : {}), checks: ['connection', 'imageInput', 'toolCalling', 'streaming'] },
+      { signal: pending.controller.signal });
     if (_mdChecks.get(key) !== pending) return;
     _mdChecks.set(key, report);
     const row = _mdMyModels.find(item => item.providerId === pid && item.name === name) || _mdProvider(pid)?.modelDefs?.find(item => item.name === name);
-    if (row && report.capabilityProfile) row.capabilityProfile = report.capabilityProfile;
+    if (row && report.capabilityProfile) { delete row.capabilityEvidenceError; Object.assign(row, { capabilityProfile: report.capabilityProfile,
+      capabilityCheck: report, ...(report.configRevision ? { configRevision: report.configRevision } : {}),
+      ...(report.runtimeRevision ? { runtimeRevision: report.runtimeRevision } : {}) }); }
+    const connection = report.checks?.connection;
+    if (connection?.status === 'passed' || connection?.status === 'failed') _mdTest[pid] = { state: connection.status === 'passed' ? 'ok' : 'bad', detail: '' };
     if (globalThis.ComposeModelPicker?.refresh) await ComposeModelPicker.refresh(true);
-    globalThis.soduWorkAPI?.broadcast?.('models', { providerId: pid });
-  } catch (error) { if (_mdChecks.get(key) === pending) _mdChecks.set(key, { error: _humanErr(error, '能力检测未完成，请重试') }); }
+    if (report.runtimeChanged !== false) globalThis.soduWorkAPI?.broadcast?.('models', { providerId: pid });
+  } catch (error) {
+    if (_mdChecks.get(key) === pending) _mdChecks.set(key, pending.controller.signal.aborted ? {
+      checkedAt: new Date().toISOString(), checks: Object.fromEntries(['connection', 'imageInput', 'toolCalling', 'streaming']
+        .map(check => [check, { status: 'cancelled', code: 'cancelled' }]))
+    } : { error: _humanErr(error, '能力检测未完成，请重试') });
+  }
+  finally { unsubscribe?.(); }
   _mdRender();
+}
+async function _mdCancelModelCheck(pid, name) {
+  const pending = _mdChecks.get(_mdCheckKey(pid, name));
+  if (!pending?.pending) return;
+  pending.controller.abort();
+  if (!pending.modelRef) return;
+  try { await globalThis.soduWorkAPI?.localModels?.cancelCapabilities?.({ modelRef: pending.modelRef, requestId: pending.requestId }); }
+  catch (_) { petSay('能力检测未能取消，请稍后重试'); }
 }

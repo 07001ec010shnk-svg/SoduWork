@@ -2,7 +2,7 @@
 // Shared authoring contract for plugin-builder and app-developer.
 function body() {
   return {
-    template: 'method', key: 'plugin-builder', name: '插件开发助手', version: '1.4.3',
+    template: 'method', key: 'plugin-builder', name: '插件开发助手', version: '1.4.4',
     locales: {
       'zh-CN': { name: '插件开发助手', description: '把你的工作方法整理成可安装、可发布的 SoduWork 插件' },
       'en-US': { name: 'Plugin Developer', description: 'Turn your working methods into installable, publishable SoduWork plugins' },

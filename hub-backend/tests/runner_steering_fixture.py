@@ -52,9 +52,6 @@ async def run():
         else:
             actual = original_argv(exe, args, ws, cfg, prof)
         commands.append(actual)
-        if agent == "harness2":
-            entry = str(Path(__file__).with_name("steering_harness2_entry.py"))
-            return [actual[0], entry, *actual[2:]]
         if agent == "opencode" or agent in acp_agents.CATALOG:
             split = actual.index("--")
             return [*actual[:split + 1], sys.executable, peer, agent, "--acp-fixture"]
@@ -64,15 +61,6 @@ async def run():
     # Never read/copy account credentials or contact any configured model. The
     # peer's model boundary is synthetic; broker/process/spool are unmodified.
     local_process._env_for = lambda *_args, **_kwargs: dict(os.environ)
-    if agent == "harness2":
-        from app.services import harness2_runtime
-
-        def harness_environment(*_args, **_kwargs):
-            return {**os.environ, harness2_runtime.MODEL_ENV: "{}",
-                    harness2_runtime.EXECUTOR_ENV: sys.executable,
-                    harness2_runtime.ROOT_ENV: str(work / "harness2")}
-
-        local_process._env_for = harness_environment
     local_stream._llm_gate_check = lambda *_args: ""
     machine = runner_main.Runner("http://127.0.0.1:1", "fixture", "fixture", "fixture", str(workspace))
     # Exercise steering through real admission without depending on host load.

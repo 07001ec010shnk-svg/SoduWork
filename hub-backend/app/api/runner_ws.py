@@ -843,7 +843,7 @@ async def runner_ws(websocket: WebSocket, token: str = ""):
                               if str(x).strip()][:20]
                 # Refresh installed-agent inventory from heartbeats to reflect changes on the Runner.
                 if isinstance(msg.get("agents"), list):
-                    r.agents = msg["agents"]
+                    r.agents = runner_hub.clean_agent_inventory(msg["agents"])
                     r.inventory_ready = True
                 if isinstance(msg.get("skills"), list):
                     r.skills = runner_hub.clean_skill_names(msg["skills"])

@@ -204,8 +204,8 @@
   <div class="set-page-head ws-page-head"><span class="set-page-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="m10 3-.5 2-2 .9-1.9-.5-2 3.4L5 10.3v2.4l-1.4 1.5 2 3.4 1.9-.5 2-.9.5 2h4l.5-2 2-.9 1.9.5 2-3.4-1.4-1.5v-2.4l1.4-1.5-2-3.4-1.9.5-2-.9L14 3Z"/></svg></span><div class="set-page-title"><span class="set-page-kicker" data-i18n="eyebrow.preferences">PREFERENCES</span><span class="set-page-main-title" data-i18n="settings">设置</span><span class="set-page-sub" data-i18n="settingsSub">管理客户端、工作目录与桌面体验</span></div></div>
   <!-- Persistent desktop widgets are shortcuts to the main window. Each can be closed independently; closing all widgets leaves tray and workspace functionality available. -->
   <div class="set-group set-half"><div class="k">桌面显示</div>
-    <label class="chk-inline"><input type="checkbox" id="dockVisibleChk" checked>贴在屏幕右边的快捷竖条</label>
-    <label class="chk-inline"><input type="checkbox" id="petVisibleChk" checked>桌面上的 SoduWork 小球</label>
+    <label class="chk-inline"><input type="checkbox" id="dockVisibleChk">贴在屏幕右边的快捷竖条</label>
+    <label class="chk-inline"><input type="checkbox" id="petVisibleChk">桌面上的 SoduWork 小球</label>
     <label class="chk-inline"><input type="checkbox" id="trayVisibleChk" checked>右下角状态栏里的图标</label>
     <div class="set-note">这三件都是桌面上的快捷入口，关掉只是不显示——需求、通知、团队都在这扇主窗口里照常用。
       托盘图标右键也能改这几项。<b id="trayOffNote" style="display:none;font-weight:400">关掉图标后，只能从这儿把它打开；SoduWork 起来时会自己打开主窗口。</b></div></div>
@@ -495,6 +495,7 @@
 <script src="components/panels/panels-add.js"></script>
 <script src="core/requirements.js"></script>
 <script src="core/requirement-session-context.js"></script>
+<script src="core/requirement-review-context.js"></script>
 <script src="components/requirements/requirements-view.js"></script>
 <script src="components/requirements/requirements-board.js"></script>
 <script src="components/requirements/requirement-confirm.js"></script>
@@ -554,6 +555,7 @@
   <script src="components/panels/panels-capabilities.js"></script>
 <script src="components/panels/model-capabilities.js"></script>
 <script src="components/panels/model-catalog-editor.js"></script>
+<script src="components/panels/model-service-delete.js"></script>
 <script src="components/panels/panels-models.js"></script>
 <script src="components/panels/panels-runners.js"></script>
 <script src="components/panels/agent-brand.js"></script>
@@ -607,6 +609,7 @@
 
 <!-- Render Markdown outputs with marked and highlight code with highlight.js; see vendor/markdown/README.md for vendored dependencies. -->
 <script src="vendor/markdown/marked.umd.js"></script>
+<script src="core/markdown.js"></script>
 <script src="vendor/markdown/highlight.min.js"></script>
 <script src="vendor/markdown/hljs-theme.js"></script>
 <script src="vendor/markdown/diff.min.js"></script>

@@ -123,7 +123,7 @@ test('automation and UI really call the same chat open/send pipeline; internal c
     assert.equal(foreignSend.ok, false);
     // Exercise the registered production entry points. Loading a capability
     // menu or opening a Runner-backed chat must not initialize an unrelated Pi.
-    const adapters = ['pi', 'opencode', 'codex', 'codex-harness', 'claude', 'qwen', 'dsh', 'custom-example'];
+    const adapters = ['pi', 'opencode', 'codex', 'codex-harness', 'qwen', 'dsh', 'custom-example'];
     for (const adapterId of adapters) {
       require('../main/conversation/session-memory').bind({ getPath: () => directory },
         'archived-agent:' + adapterId, identity, [], true);

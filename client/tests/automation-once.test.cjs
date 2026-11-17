@@ -3,10 +3,60 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), vm = require('node:vm');
 const panels = path.join(__dirname, '../components/panels');
 const now = Date.parse('2026-10-15T01:00:00Z');
+
+test('relative delays create one-off instants from the message time, including midnight and Chinese numbers', () => {
+  const {timing} = runtime(), sentAt = Date.parse('2026-11-16T08:00:00Z');
+  for (const [text, minutes] of [['五分钟后帮我生成日报',5], ['5分钟后生成日报',5], ['半小时后生成日报',30],
+    ['两小时后生成日报',120], ['一刻钟后生成日报',15], ['120分钟后生成日报',120],
+    ['10分钟以后生成日报',10], ['一刻钟过后生成日报',15]]) {
+    const draft = timing.infer(text, {timeZone:'Asia/Shanghai'}, sentAt);
+    assert.equal(draft.every, 'once', text);
+    assert.equal(draft.runAt, new Date(sentAt + minutes * 60000).toISOString(), text);
+    assert.equal(timing.validate(draft, null, sentAt), '', text);
+  }
+  const crossing = timing.infer('五分钟后生成日报', {timeZone:'Asia/Shanghai'}, Date.parse('2026-11-16T15:58:00Z'));
+  assert.equal(timing.localInput(crossing.runAt, crossing.timeZone), '2026-11-17T00:03');
+});
+
+test('incomplete, invalid and ambiguous timing cannot pass as daily 18:00', () => {
+  const {timing} = runtime();
+  for (const text of ['【自动化】：五分钟红帮我做个任务。', '每天提醒我喝水', '每天25:00生成日报',
+    '零分钟后生成日报', '五分钟后或十分钟后生成日报', '生成日报']) {
+    const value = timing.infer(text, {timeZone:'Asia/Shanghai'}, now);
+    assert.ok(timing.validate(value, null, now), text);
+    assert.notEqual(value.atHour, 18, text);
+  }
+  const prior = {every:'daily',atHour:9,atMinute:0,timeZone:'Asia/Shanghai'};
+  assert.ok(timing.validate(timing.infer('改为五分钟红', prior, now)));
+  assert.equal(timing.infer('每天汇总日报并在上午9点发送', {}, now).atHour, 9);
+});
+
+test('supplementing work preserves the original delay; a new delay uses its own message time', () => {
+  const {timing} = runtime(), sentAt = Date.parse('2026-11-16T08:00:00Z');
+  const initial = timing.infer('五分钟后生成日报', {timeZone:'Asia/Shanghai'}, sentAt);
+  assert.equal(timing.infer('增加来源链接', initial, sentAt + 60000).runAt, initial.runAt);
+  assert.equal(timing.infer('改为十分钟后', initial, sentAt + 60000).runAt, '2026-11-16T08:11:00.000Z');
+  assert.equal(timing.infer('改为十分钟后生成日报', initial, sentAt + 60000).runAt, '2026-11-16T08:11:00.000Z');
+  for (const text of ['不要五分钟后执行', '如果五分钟后执行会怎样', '分析五分钟后的日志'])
+    assert.equal(timing.infer(text, initial, sentAt + 60000).runAt, initial.runAt, text);
+});
+
+test('a generic task stays incomplete until the user supplies concrete work', () => {
+  const {proposalOf} = runtime();
+  const initial = proposalOf({title:'待明确的任务',note:'帮我做个任务'}, '五分钟后帮我做个任务');
+  assert.equal(initial.needsTask, true);
+  const timingOnly = proposalOf({title:initial.title,note:initial.note}, '改为十分钟后', initial);
+  assert.equal(timingOnly.needsTask, true);
+  const clarified = proposalOf({title:initial.title,note:initial.note}, '就是五分钟后', initial);
+  assert.equal(clarified.needsTask, true, 'clarifying the time does not supply the missing task');
+  const completed = proposalOf({title:'日报',note:'生成当天日报'}, '帮我生成当天日报', timingOnly);
+  assert.equal(completed.needsTask, false);
+  assert.equal(completed.runAt, timingOnly.runAt);
+});
 function runtime() {
   class Clock extends Date { constructor(...args) { super(...(args.length ? args : [now])); } static now() { return now; } }
   const context = {Date:Clock, Intl, setTimeout, clearTimeout}; context.window = context;
-  for (const file of ['schedule-timing.js','work-automation-bindings.js']) {
+  for (const file of ['schedule-timing.js','work-automation-bindings.js','work-automation-card-state.js']) {
     const target = path.join(panels,file);
     if (fs.existsSync(target)) vm.runInNewContext(fs.readFileSync(target,'utf8'),context);
   }
@@ -16,6 +66,19 @@ function runtime() {
   context.probe.state.agents = [{id:'local:pi',name:'Pi',available:true}];
   return {...context.probe, timing:context.ScheduleTiming};
 }
+test('only unambiguous time-only instructions bypass task extraction', () => {
+  const {timing} = runtime();
+  const prior = {every:'once',runAt:'2026-10-15T08:05:00.000Z',timeZone:'Asia/Shanghai'};
+  for (const text of ['修改为10分钟之后','修改为10分钟以后','修改为10分钟过后','再改为十五分钟后','请把执行时间调整为半小时后执行']) {
+    assert.equal(timing.relativeEdit(text,prior,now).every,'once',text);
+  }
+  for (const text of ['不要改为10分钟之后','如果改为10分钟之后会怎样','把标题改为“10分钟后”',
+    '10分钟后生成新的日报','分析10分钟后采集的日志','修改为10分钟后或20分钟后']) {
+    assert.equal(timing.relativeEdit(text,prior,now),null,text);
+  }
+  const invalid = timing.relativeEdit('修改为0分钟后',prior,now);
+  assert.ok(timing.validate(invalid, null, now)); assert.equal(invalid.runAt,'');
+});
 test('today at noon is a one-time UTC reservation, not a daily fallback', () => {
   const {proposalOf,bodyOf,validate} = runtime();
   const draft=proposalOf({},'在今天中午12点执行一次，生成报告',{timeZone:'Asia/Shanghai'});

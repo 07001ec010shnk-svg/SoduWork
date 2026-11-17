@@ -27,6 +27,16 @@ MODEL_LABEL = "SoduWork managed model"
 _JSON_COMMENTS = re.compile(r'("(?:\\.|[^"\\])*")|//[^\r\n]*|/\*[\s\S]*?\*/')
 
 
+def apply_env(env: dict) -> None:
+    """Bind only the reviewed host preload; native tools never inherit it."""
+    loader = Path(__file__).with_name("qwen_acp_outcome.mjs")
+    if not loader.is_file():
+        raise RuntimeError("Qwen Code 任务结算组件缺失，请更新 SoduWork")
+    env.pop("NODE_OPTIONS", None)
+    env["SODUWORK_QWEN_ACP_OUTCOME"] = "1"
+    env["NODE_OPTIONS"] = "--import=" + loader.resolve().as_uri()
+
+
 def system_settings_path(env: dict) -> Path:
     """Match Qwen's documented operator settings locations on each platform."""
     configured = env.get(SETTINGS_ENV)
@@ -88,6 +98,10 @@ def settings(llm: dict, operator: dict, inherited_generation: dict | None = None
     # Native settings can otherwise retain a model selected by an earlier turn.
     model["name"] = llm["model"]
     model["baseUrl"] = "$OPENAI_BASE_URL"
+    # The native default only warns about repeated failed tools and can keep
+    # consuming model calls. Stop at Qwen's own loop decision in managed runs,
+    # without imposing a smaller general task budget or editing user settings.
+    model["loopProtection"] = "stop"
     generation = model.setdefault("generationConfig", {})
     generation.setdefault("modalities", {})["image"] = image
     generation["splitToolMedia"] = True
@@ -123,7 +137,8 @@ def configure(env: dict, llm: dict, data_root: str, runtime_ref: str = "") -> No
     file per invocation avoids races with concurrent sessions or model switches,
     and does not rely on atomic renames blocked by some Windows filesystem filters.
     """
-    if not all(llm.get(key) for key in ("base", "key", "model")):
+    if not (llm.get("base") and llm.get("model") and
+            (llm.get("key") or llm.get("localOnly") is True)):
         return
     try:
         defaults = Path(env.get(DEFAULTS_ENV) or system_settings_path(env).parent / "system-defaults.json")

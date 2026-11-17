@@ -43,6 +43,7 @@ const conversationSession = {
   },
   runtimeModels: (adapterId) => ipcRenderer.invoke('pi-session-runtime-models', String(adapterId || '')),
   capabilities: (options) => timedPageInvoke('conversation-capabilities', options || {}),
+  localRequirementParse: params => ipcRenderer.invoke('pi-session-local-requirement-parse', params || {}),
   pathForFile: (file) => {
     try { return webUtils.getPathForFile(file); } catch (error) { return ''; }
   },
@@ -84,7 +85,7 @@ const conversationSession = {
   send: (ref, text, attachments, options) => ipcRenderer.invoke('pi-session-send', ref, text, attachments || [], options || {}),
   cancelQueued: (ref, id) => ipcRenderer.invoke('pi-session-queue-cancel', ref, id),
   updateQueue: (ref, id, action, value) => ipcRenderer.invoke('pi-session-queue-update', ref, id, action, value),
-  selectAgent: (ref, agentId) => ipcRenderer.invoke('pi-session-select-agent', ref, agentId),
+  selectAgent: (ref, agentId, selection) => ipcRenderer.invoke('pi-session-select-agent', ref, agentId, selection),
   conversationRuntimes: (ref, options) => ipcRenderer.invoke('pi-session-conversation-runtimes', ref, options || {}),
   selectModel: (ref, name) => ipcRenderer.invoke('pi-session-select-model', ref, name),
   setThinking: (ref, value) => ipcRenderer.invoke('pi-session-set-thinking', ref,
@@ -445,6 +446,24 @@ const soduWorkBridge = {
     get: () => ipcRenderer.invoke('local-models-get'),
     save: input => ipcRenderer.invoke('local-models-save', input || {}),
     test: (providerId, modelName) => ipcRenderer.invoke('local-models-test', String(providerId || ''), String(modelName || '')),
+    checkCapabilities: input => ipcRenderer.invoke('local-models-capabilities-check', input || {}),
+    cancelCapabilities: input => ipcRenderer.invoke('local-models-capabilities-cancel', input || {}),
+    onCapabilityProgress: fn => {
+      const handler = (_event, value) => { try { fn(value); } catch (_) {} };
+      ipcRenderer.on('local-models-capabilities-progress', handler);
+      return () => ipcRenderer.removeListener('local-models-capabilities-progress', handler);
+    },
+  },
+  localAgentModels: {
+    get: input => ipcRenderer.invoke('local-agent-models-get', input || {}),
+    set: input => ipcRenderer.invoke('local-agent-models-set', input || {}),
+    remove: input => ipcRenderer.invoke('local-agent-models-remove', input || {}),
+    probe: input => ipcRenderer.invoke('local-agent-models-probe', input || {}),
+  },
+  automationModels: {
+    get: input => ipcRenderer.invoke('automation-models-get', input || {}),
+    set: input => ipcRenderer.invoke('automation-models-set', input || {}),
+    remove: input => ipcRenderer.invoke('automation-models-remove', input || {}),
   },
   personalPlugins: {
     debug: (ref, options) => ipcRenderer.invoke('personal-plugin-debug', ref || '', options || {}),

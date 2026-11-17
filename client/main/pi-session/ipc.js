@@ -289,6 +289,16 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
     realtime: true, metadataOnly: true,
     preserveLegacyOutbox: (job, identity) => _sharedHistory.preserveLegacyOutbox(job, identity),
   });
+  const localRequirementParse = require('../local-requirement-parser.cjs').createLocalRequirementParser({
+    app, identityOf: sendIdentityOf || identityOf,
+  });
+  ipcMain.handle('pi-session-local-requirement-parse', (event, raw) => {
+    const frame = event?.senderFrame, sender = event?.sender;
+    const url = frame?.url || sender?.getURL?.() || '';
+    if ((frame && frame !== sender?.mainFrame) || (url && !String(url).startsWith('file:')))
+      return { ok: false, code: 'APP_AI_UNAVAILABLE', reason: '本地需求解析只允许工作台调用' };
+    return localRequirementParse(raw);
+  });
   // Account-conversation WebSocket messages are invalidation hints, but they
   // still need to reach the renderer.  Without this bridge the sync service
   // refreshed its private cache while an already-open desktop projection and
@@ -470,11 +480,13 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
         return { ok: false, notFound: true, reason: '这条会话已经不存在了' };
       };
       let nativeLocal = false;
+      let knownAccountProjection = false;
       if (local) {
         let executable = true;
         try { historyAccess.assertOwner(app, opts.chatId, historyAccess.actor(app), local); }
         catch (_) { executable = false; }
-        if (local.deleted || local.cached || !executable) return await openLocalHistory();
+        if (local.deleted || local.cached || !executable ||
+            ['claude', 'harness2'].includes(local.adapterId)) return await openLocalHistory();
         // Canonical local identity wins over stale renderer projection flags.
         nativeLocal = true;
         Object.assign(opts, { adapterId: local.adapterId || 'pi',
@@ -524,6 +536,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       const selectedLive = opts.chatId && session.findBySessionId(opts.chatId);
       if (opts.chatId && (!selectedLive || selectedLive.adapterId === 'account-sync') &&
           typeof _accountSync !== 'undefined' && _accountSync?.isAccountConversation?.(opts.chatId)) {
+        knownAccountProjection = true;
         const item = await _accountSync.row(opts.chatId);
         await assertHistoryCurrent();
         if (item?.deleted) return { ok: false, notFound: true, reason: '这条会话已经不存在了' };
@@ -627,9 +640,9 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       // would turn a recoverable history miss into an adapter-not-registered
       // error page. The sidebar can refresh the authenticated directory and
       // retry the projection without creating a duplicate local session.
-      if (opts.chatId && (String(opts.adapterId || '').toLowerCase() === 'account-sync' ||
+      if (opts.chatId && (knownAccountProjection && !nativeLocal || String(opts.adapterId || '').toLowerCase() === 'account-sync' ||
           opts.accountConversation === true || opts.accountProjection === true)) {
-        return { ok: false, notFound: true,
+        return { ok: false, code: 'ACCOUNT_HISTORY_UNAVAILABLE',
           reason: '账号会话暂时无法读取，请刷新历史后重试' };
       }
       if (opts.chatId && typeof _cloudHandoff.reopen === 'function') {
@@ -706,7 +719,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       if (resume?.adapterId && !work.first) opts.adapterId = resume.adapterId;
       if (resume && (String(opts.adapterId || '').toLowerCase() === 'account-sync' ||
           resume.accountConversation === true || resume.accountProjection === true)) {
-        return { ok: false, notFound: true,
+        return { ok: false, code: 'ACCOUNT_HISTORY_UNAVAILABLE',
           reason: '账号会话暂时无法读取，请刷新历史后重试' };
       }
       // History links can omit the Agent or carry a stale composer choice.
@@ -842,6 +855,9 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
          * and draft discovery then use conversation time boundaries.
          */
         resumedConversation: Boolean(resume && !work.bootstrap),
+        // Replaying an archive is not evidence that a later failed attempt succeeded.
+        retainedHistoryId: local?.id,
+        retainedExecutionFailure: (require('../conversation/execution-outcome.cjs').recover(local) || local)?.state === 'failed',
         /* SDK uses the validated directory; the archive path remains separate. */
         resumeCwd: resume ? cwd : '',
         resumeAt: resume ? resume.at : 0,
@@ -922,7 +938,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       try {
         const result = await applicationEntries.navigate(event, raw.chatId);
         if (!result.ok || result.handled) return { ...result, applicationOpened: result.handled === true };
-      } catch (error) { return { ok: false, reason: String(error.message || error) }; }
+      } catch (error) { return { ok: false, reason: String(error.message || error),
+        ...(error.code === 'ACCOUNT_CONVERSATION_DELETED' ? { notFound: true, code: error.code } : {}) }; }
     }
     return openConversation(event, raw);
   });
@@ -1005,6 +1022,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       const acceptance = require('../conversation/acceptance-session').assertTask(s, rawOptions?.taskId);
       if (acceptance) rawOptions = { ...(rawOptions || {}), taskId: acceptance.taskRef,
         taskExecution: { acceptanceOnly: true, acceptanceMode: acceptance.acceptanceMode, approvalId: acceptance.approvalId,
+          ...Object.fromEntries(['acceptanceDraft', 'acceptanceInstruction'].filter(key =>
+            typeof rawOptions?.taskExecution?.[key] === 'string').map(key => [key, rawOptions.taskExecution[key]])),
           ...(acceptance.acceptanceAttachmentIds ? { acceptanceAttachmentIds: acceptance.acceptanceAttachmentIds } : {}) } };
       else if (rawOptions?.taskExecution?.acceptanceOnly) {
         if (rawOptions?.taskExecution?.acceptanceExecutionSession !== true)
@@ -1107,14 +1126,14 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       sentAt: Number.isFinite(rawOptions?.sentAt) && rawOptions.sentAt > 0 ? Math.min(rawOptions.sentAt, Date.now()) : Date.now(),
       projectId: String(taskTurn ? taskTurn.task.projectId || '' : rawOptions && rawOptions.projectId || '').slice(0, 36),
       repoId: String(taskTurn ? taskTurn.task.repoId || '' : rawOptions && rawOptions.repoId || '').slice(0, 36),
-      submissionId: String(rawOptions && rawOptions.submissionId || '')
+      submissionId: String(taskTurn?.acceptanceOnly ? taskTurn.submissionId : rawOptions && rawOptions.submissionId || '')
         .replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64),
     };
     if (typeof authorizeAI === 'function') {
       // Resolve ownership for each captured turn, not the session's current
       // model: queued turns can alternate between local and managed services.
-      // Pi can attribute personal funding per call. Other runtimes retain the
-      // strict account gate until they provide equally reliable usage receipts.
+      // Native runtimes retain each call's signed funding receipt so local and
+      // Hub-owned models follow the same admission policy at turn boundaries.
       const agent = s.adapterId || 'pi';
       const modelMode = require('../agent-runtime/runtime-catalog').runtime(agent)?.modelMode;
       sendOptions.beforeTurn = require('../conversation/quota-admission.cjs').beforeTurn(
