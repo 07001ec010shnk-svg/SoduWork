@@ -42,3 +42,25 @@ test('ko-KR native menus translate 重装 to 재설치 using the real native-loc
     locale.setLocale(original);
   }
 });
+test('ko-KR native menus match the page result for keys shared with other ko-KR catalogs', () => {
+  const locale = require('../main/native-locale.cjs');
+  const agentPages = require('../core/locales/ko-KR-agent-pages.js');
+  const otherKoKr = {};
+  for (const file of manifest) {
+    if (!file.startsWith('ko-KR-') || file === 'ko-KR-agent-pages.js') continue;
+    Object.assign(otherKoKr, require('../core/locales/' + file));
+  }
+  const shared = Object.keys(agentPages).filter(key => Object.hasOwn(otherKoKr, key));
+  assert.ok(shared.length > 0, 'expected at least one key shared with other ko-KR catalogs');
+  assert.ok(shared.includes('走我的额度'), 'expected 走我的额度 to be a shared key');
+  const original = locale.getLocale();
+  try {
+    locale.setLocale('ko-KR');
+    for (const key of shared) {
+      assert.equal(locale.translate(key), agentPages[key],
+        `ko-KR native menu for ${JSON.stringify(key)} must match the agent-pages page result`);
+    }
+  } finally {
+    locale.setLocale(original);
+  }
+});
