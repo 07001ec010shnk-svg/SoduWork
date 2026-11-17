@@ -292,19 +292,16 @@ function _mdRender() {
   const active = visible.filter((p) => ['local', 'mine', 'org'].includes(_mdState(p)));
   const available = visible.filter((p) => _mdState(p) === 'open');
   const advanced = visible.filter((p) => _mdState(p) === 'noaddr');
-  const mineN = usable.filter((m) => m.keyFrom === 'mine').length;
-  const homes = new Set(usable.map((m) => m.providerId)).size;
 
   const html = '<div class="cfg-master-detail md-master-detail">' +
     '<aside class="cfg-master md-master" aria-label="模型服务">' +
-      '<div class="cfg-master-head"><span>模型服务</span>' +
-        '<strong>' + _mdMessage('models.available', '{count} 个可选模型', { count: usable.length }) + '</strong>' +
-        '<small>' + _mdMessage('models.types', '{chat} 个聊天 · {image} 个图片 · {video} 个视频', { chat: chatUsable.length, image: (mediaUsable.image || []).length, video: (mediaUsable.video || []).length }) + '</small>' +
-        '<small>' + _mdMessage('models.providers', '{count} 家服务已配置 · {personal} 个使用个人额度', { count: homes, personal: mineN }) + '</small></div>' +
+      '<div class="cfg-master-head"><div class="md-master-toolbar"><span>模型服务</span>' +
+        '<button type="button" class="cfg-master-add" id="mdAddInline" aria-label="添加服务" title="添加服务"><span aria-hidden="true">＋</span> <span>添加</span></button></div>' +
+        '<strong>' + _mdMessage('models.available', '{count} 个可选模型', { count: usable.length }) + '</strong></div>' +
       '<div class="cfg-master-actions">' +
-        '<label class="cfg-master-search"><span>搜索模型服务</span><input id="mdQ" class="md-q" value="' +
-          esc(_mdQuery) + '" placeholder="搜索服务或模型"></label>' +
-        '<button type="button" class="cfg-master-add" id="mdAddInline">＋ 添加服务</button></div>' +
+        '<label class="cfg-master-search"><span>搜索模型服务</span>' +
+          '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4.5 4.5"></path></svg>' +
+          '<input id="mdQ" class="md-q" value="' + esc(_mdQuery) + '" placeholder="服务或模型"></label></div>' +
       '<div class="cfg-master-scroll">' + (visible.length
         ? _mdNavGroupHtml('未保存', visible.filter(p => _mdState(p) === 'draft')) +
           _mdNavGroupHtml('正在使用', active) +

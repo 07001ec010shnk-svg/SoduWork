@@ -25,16 +25,20 @@ function _mdModelListHtml(p, models, own) {
   return '<div class="md-model-list">' + rows.map(({ model, index }) => {
     const id = _mdCheckKey(p.id, model.name), check = _mdChecks.get(id);
     const item = p._capStale ? { ...model, capabilityProfile: undefined, capabilityCheck: null } : model;
+    const result = check || item.capabilityCheck;
+    const inlineStatus = _mdType(model.modality) === 'chat' && !result && !item.capabilityEvidenceError;
     return '<article class="md-model-row md-mtag' + (index >= 0 ? ' is-own' : '') + '" data-md-model="' + esc(id) + '">' +
       '<div><div class="md-model-name"><i class="md-model-type is-' + _mdType(model.modality) + '">' + _MD_TYPES[_mdType(model.modality)] + '</i>' +
       '<span data-user-content>' + esc(model.label || model.name) + '</span></div>' +
       (model.label && model.label !== model.name ? '<span class="md-model-id" data-user-content>' + esc(model.name) + '</span>' : '') +
-      ModelCapabilitiesUI.badges(item) + '</div><div class="md-model-actions">' +
+      ModelCapabilitiesUI.badges(item) + '</div><div class="md-model-footer">' +
+      (inlineStatus ? '<div class="md-model-status">' + ModelCapabilitiesUI.report(null) + '</div>' : '') +
+      '<div class="md-model-actions">' +
       (editable && _mdType(model.modality) === 'chat' ? '<button type="button" data-mdcheck' + (check?.pending ? ' disabled' : '') + '>' + (check?.pending ? '检测中…' : '检测能力') + '</button>' : '') +
       (editable && check?.pending && check.modelRef ? '<button type="button" data-mdcancelcheck>取消检测</button>' : '') +
       (editable && index >= 0 ? '<button type="button" data-mdedit="' + esc(p.id) + '|' + index + '">编辑</button>' +
         '<button type="button" data-mdel="' + esc(p.id) + '|' + index + '" title="移除模型" aria-label="移除模型">移除模型</button>' : '<span class="md-cap-unchecked">组织管理</span>') +
-      '</div>' + (_mdType(model.modality) === 'chat' ? '<div class="md-model-report">' + ModelCapabilitiesUI.evidenceWarning(item) + ModelCapabilitiesUI.report(check || item.capabilityCheck) + '</div>' : '') + '</article>';
+      '</div></div>' + (_mdType(model.modality) === 'chat' && !inlineStatus ? '<div class="md-model-report">' + ModelCapabilitiesUI.evidenceWarning(item) + ModelCapabilitiesUI.report(result) + '</div>' : '') + '</article>';
   }).join('') + '</div>';
 }
 function _mdModelEditorHtml(p) {
