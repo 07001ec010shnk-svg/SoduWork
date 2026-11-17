@@ -244,7 +244,9 @@ test('rhythm parser reads Chinese clocks and preserves periodic scheduling', () 
   assert.equal(rhythm('每天14:10打卡提醒'), 'daily 14:10');
   assert.equal(rhythm('每天下午14:10打卡'), 'daily 14:10');
   assert.equal(rhythm('每天下午2点10分打卡'), 'daily 14:10');
-  assert.equal(rhythm('每小时第10分巡检'), 'hourly 18:10');
-  /* Use the default time only when no explicit time is present. */
-  assert.equal(rhythm('每天提醒我喝水'), 'daily 18:00');
+  assert.equal(rhythm('每小时第10分巡检'), 'hourly 00:10');
+  /* Missing clocks must be completed explicitly, never defaulted to 18:00. */
+  const missing = window.ScheduleTiming.infer('每天提醒我喝水');
+  assert.equal(missing.atHour, null);
+  assert.ok(window.ScheduleTiming.validate(missing));
 });

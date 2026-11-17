@@ -327,7 +327,7 @@
       let record = options.cardRecord;
       if (!record) {
         const seed = {};
-        for (const name of ['source', 'attachmentContext', 'bindingContext', 'proposal', 'saveOnly', 'triageStage', 'projectId', 'visibility']) {
+        for (const name of ['source', 'attachmentContext', 'bindingContext', 'proposal', 'saveOnly', 'triageStage', 'projectId', 'visibility', 'requestedAt']) {
           if (options[name] !== undefined) seed[name] = json(options[name]);
         }
         if (options.conversationContext) {
@@ -513,9 +513,9 @@
         prompt.textContent = (record.actionId === 'work.automation.create' ? '【自动化】：' : '【需求】：') + record.prompt;
         const title = document.createElement('strong'); title.textContent = record.state.receipt?.title || record.state.draft?.title || record.state.proposal?.title || record.prompt || '工作记录';
         const status = document.createElement('span');
-        status.textContent = record.seed.source==='web-app' && record.state.phase==='loading'?'正在整理计划…':({succeeded:'已创建', submitting:'正在保存', loading:'待完善', error:'需要处理'})[record.state.phase] || '草稿 · 尚未创建';
+        status.textContent = record.seed.source==='web-app' && record.state.phase==='loading'?'正在整理计划…':({succeeded:record.state.receipt?.enabled === false ? '已停用' : '已创建', cancelled:'已取消', submitting:'正在保存', loading:'待完善', error:'需要处理'})[record.state.phase] || '草稿 · 尚未创建';
         const open = document.createElement('button'); open.type = 'button'; open.className = 'cp-ghost';
-        open.textContent = record.state.phase === 'succeeded' ? '查看创建结果' : '继续编辑';
+        open.textContent = record.state.phase === 'succeeded' ? '查看创建结果' : record.state.phase === 'cancelled' ? '查看记录' : '继续编辑';
         open.onclick = () => { void activate(record).catch(error => tell(error.message)); };
         row.append(prompt, status, title, open); destination.appendChild(row);
       }

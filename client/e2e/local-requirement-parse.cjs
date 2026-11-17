@@ -4,12 +4,22 @@
 // identity and OpenAI-compatible provider are isolated loopback fixtures.
 const electron = require('electron');
 if (typeof electron === 'string') {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-local-parser-e2e-')));
   const env = { ...process.env };
+  env.SODUWORK_LOCAL_PARSE_TEST_ROOT = temporary;
   for (const key of ['ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS', 'CHROME_CRASHPAD_PIPE_NAME',
     'CHROME_CRASHPAD_PIPE_HANDLE', 'ELECTRON_NO_ATTACH_CONSOLE']) delete env[key];
-  const result = require('node:child_process').spawnSync(electron,
-    [__filename, ...process.argv.slice(2), '--no-sandbox', '--disable-gpu'],
-    { env, stdio: 'inherit', timeout: 90000 });
+  let result;
+  try {
+    result = require('node:child_process').spawnSync(electron,
+      [__filename, ...process.argv.slice(2), '--no-sandbox', '--disable-gpu'],
+      { env, windowsHide: true, stdio: 'inherit', timeout: 90000 });
+  } finally {
+    // Chromium holds profile files on Windows until its process has exited.
+    // Only remove the exact temporary directory created by this parent.
+    fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
   process.exit(result.status ?? 1);
 }
 
@@ -20,7 +30,10 @@ const { pathToFileURL } = require('node:url');
 const output = process.argv[2];
 assert.ok(output && path.isAbsolute(output), 'Absolute evidence directory required');
 fs.mkdirSync(output, { recursive: true });
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-local-parser-e2e-')));
+const root = fs.realpathSync(process.env.SODUWORK_LOCAL_PARSE_TEST_ROOT ||
+  fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-local-parser-e2e-')));
+assert.equal(path.dirname(root), fs.realpathSync(os.tmpdir()));
+assert.ok(path.basename(root).startsWith('soduwork-local-parser-e2e-'));
 const client = path.resolve(__dirname, '..'), profile = path.join(root, 'profile');
 fs.mkdirSync(profile);
 app.setAppPath(client); app.setPath('userData', profile); app.disableHardwareAcceleration();
@@ -137,6 +150,7 @@ app.whenReady().then(async () => {
   responseMode = 'error';
   const failed = await parse(localRef);
   assert.match(failed._parseError, /本地模型服务返回错误.*原文已保留/);
+  assert.match(failed._parseError, /HTTP 503.*暂时不可用/);
   for (const privateValue of [privateKey, providerUrl, 'private-parser-wire']) assert.equal(JSON.stringify(failed).includes(privateValue), false);
   mark('Truncated, malformed and provider-error responses remain explicit without exposing private diagnostics');
   responseMode = 'timeout';
@@ -162,6 +176,9 @@ app.whenReady().then(async () => {
     console.log(JSON.stringify(report, null, 2));
     win?.destroy();
     for (const server of [hubServer, providerServer]) { server?.closeAllConnections(); server?.close(); }
-    fs.rmSync(root, { recursive: true, force: true });
+    if (!process.env.SODUWORK_LOCAL_PARSE_TEST_ROOT) {
+      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }); }
+      catch (error) { console.warn('Temporary profile cleanup deferred:', error.code); }
+    }
     app.exit(report.ok ? 0 : 1);
   });

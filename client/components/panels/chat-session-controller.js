@@ -443,12 +443,13 @@ async function _retryOpenChat() {
   }
 
 async function _send(textOverride, sendOptions) {
+    const options = {...sendOptions, requestedAt:sendOptions?.requestedAt ?? Date.now()};
     if (textOverride == null && global.ChatWorkbenchAnnotations) {
       return ChatWorkbenchAnnotations.submit(batch => _sendCore(textOverride, {
-        ...(sendOptions || {}), annotationBatch: batch,
+        ...options, annotationBatch: batch,
       }));
     }
-    return _sendCore(textOverride, sendOptions);
+    return _sendCore(textOverride, options);
   }
 
 async function _sendCore(textOverride, sendOptions) {
@@ -512,7 +513,7 @@ async function _sendCore(textOverride, sendOptions) {
     if (!typed.trim() && !attachmentNames.length) return false;
     if (fromComposer && !annotations.length && global.ChatWorkActions && typeof ChatWorkActions.route === 'function') {
       const routed = await ChatWorkActions.route({
-        text: typed, attachmentNames, attachments: ctx._messageAttachments,
+        text: typed, requestedAt:sendOptions?.requestedAt, attachmentNames, attachments: ctx._messageAttachments,
         input, mention: ctx._pluginMention,
         isCurrent: () => accessEpoch === ctx._viewEpoch && sendScopeEpoch === ctx._draftScopeEpoch && sendOwnerScope === ctx._draftOwnerScope(),
       }, { open: ctx._openWorkAction, model: ctx._workModel,
