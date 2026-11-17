@@ -142,6 +142,25 @@ class LocalStartupTests(unittest.TestCase):
             self.assertEqual(start.default_state(), fresh)
             self.assertEqual(marker.read_text(encoding="utf-8"), "{}")
 
+    def test_windows_default_state_ignores_empty_or_relative_localappdata(self):
+        home = Path(self.temp.name) / "home"
+        expected = home / "AppData/Local/SoduWork/source-service"
+        for value in ("", "relative-data", ".."):
+            with patch.object(start, "os", wraps=os) as platform_os, \
+                    patch.object(Path, "home", return_value=home), \
+                    patch.dict(os.environ, {"LOCALAPPDATA": value}):
+                platform_os.name = "nt"
+                resolved = start.default_state()
+            self.assertEqual(resolved, expected, f"LOCALAPPDATA={value!r} 时解析结果不正确")
+            self.assertTrue(resolved.is_absolute(), f"LOCALAPPDATA={value!r} 时得到相对路径")
+
+    def test_windows_default_state_keeps_an_absolute_localappdata(self):
+        chosen = Path(self.temp.name) / "chosen"
+        with patch.object(start, "os", wraps=os) as platform_os, \
+                patch.dict(os.environ, {"LOCALAPPDATA": str(chosen)}):
+            platform_os.name = "nt"
+            self.assertEqual(start.default_state(), chosen / "SoduWork/source-service")
+
     def test_macos_default_desktop_profile_is_outside_installed_client(self):
         home = Path(self.temp.name)
         app_data = home / 'Library/Application Support'
