@@ -913,6 +913,41 @@ class LocalStartupTests(unittest.TestCase):
                 self.assertEqual(env["HUB_PUBLIC_URL"], expected)
                 self.assertEqual(env["CORS_ORIGINS"], expected + ",null")
 
+    def test_preparation_failure_leaves_first_password_unread(self):
+        config = {"adminUser": "admin"}
+        for desktop in (False, True):
+            args = Namespace(host="127.0.0.1", port=18991, desktop=desktop, password_stdin=True)
+            failure = start.StartupError("download failed")
+            with self.subTest(desktop=desktop), patch.object(start, "assert_available"), \
+                    patch.object(start, "prepare", return_value=(None, None),
+                                 side_effect=None if desktop else failure), \
+                    patch.object(start, "prepare_desktop", side_effect=failure), \
+                    patch("sys.stdin", io.StringIO("fixture-only-password\n")) as stream, \
+                    redirect_stdout(io.StringIO()) as output:
+                with self.assertRaisesRegex(start.StartupError, "download failed"):
+                    start.serve(self.state, config, args)
+                self.assertEqual(stream.tell(), 0)
+                self.assertNotIn("Create the administrator account", output.getvalue())
+
+    def test_install_command_cannot_read_the_launchers_stdin(self):
+        with patch.object(build.subprocess, "Popen") as popen, patch.object(build, "wait_child", return_value=0):
+            build.run(["installer"], cwd=Path(self.temp.name), log=Path(self.temp.name) / "startup.log",
+                      label="Install fixture")
+        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    @unittest.skipUnless(os.name == "nt", "Windows batch entry point")
+    def test_windows_password_stdin_returns_errors_with_input_pipe_open(self):
+        env = dict(os.environ, SODUWORK_NO_PAUSE="0")
+        command = ["cmd.exe", "/d", "/c", "start.cmd", "--data-dir", str(self.state / "data with spaces"),
+                   "--port", "1", "--password-stdin"]
+        with subprocess.Popen(command, cwd=build.ROOT, env=env, stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
+            try:
+                self.assertEqual(child.wait(timeout=15), 2)
+                self.assertIn(b"port must be between", child.stdout.read())
+            finally:
+                build.stop_child(child)
+
     def test_serve_uses_ipv6_url_for_readiness_and_browser(self):
         config = {"adminUser": "admin", "authSecret": "x" * 48}
         args = Namespace(host="::1", port=18991, desktop=False, no_browser=False, password_stdin=True)
