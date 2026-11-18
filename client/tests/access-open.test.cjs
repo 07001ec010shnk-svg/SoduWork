@@ -779,10 +779,10 @@ test('本机新建需求继承系统权限，显式选择优先且后台派发�
   assert.equal(f.calls.at(-1).accessPolicy.mode, 'standard', '历史未确认的 full 不能提升权限');
 });
 
-test('a fresh interactive desktop chat inherits full access while headless calls cannot inherit it', async () => {
+test('a fresh interactive desktop chat inherits standard access while headless calls cannot inherit it', async () => {
   const fresh = fixture();
   assert.equal((await fresh.open({ adapterId: 'pi' })).ok, true);
-  assert.equal(fresh.calls[0].accessPolicy.mode, 'full'); assert.equal(fresh.dialogs.length, 0);
+  assert.equal(fresh.calls[0].accessPolicy.mode, 'standard'); assert.equal(fresh.dialogs.length, 0);
   const headless = fixture();
   assert.equal((await headless.open({ adapterId: 'pi' }, null)).ok, true);
   assert.equal(headless.calls[0].accessPolicy, null, 'headless legacy calls do not inherit device preferences');
