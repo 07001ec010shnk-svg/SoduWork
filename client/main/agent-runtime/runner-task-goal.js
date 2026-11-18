@@ -21,6 +21,7 @@ function activate(state, goal) {
   state.taskGoalContract = { ...goal };
   state.taskGoal = { status: 'working', reason: '', elapsedMs: 0, steps: 0,
     budgetMs: goal.budgetMinutes * 60000, maxSteps: goal.maxSteps, continuations: 0 };
+  state.taskGoalElapsedAt = Date.now();
   state.goalVisible = true;
   state.intent = 'goal';
   state.goal = goal.objective;
@@ -52,6 +53,7 @@ function observe(state, value, terminal) {
   const goal = receipt(value);
   if (!goal || state.pendingTaskGoalControl) return null;
   state.taskGoal = goal;
+  state.taskGoalElapsedAt = Date.now();
   state.goalVisible = goal.status !== 'disabled';
   state.intent = state.goalVisible ? 'goal' : '';
   if (typeof goal.objective === 'string') state.goal = goal.objective;

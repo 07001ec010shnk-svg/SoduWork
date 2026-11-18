@@ -43,6 +43,16 @@ After a Runner restart, recovery terminals bind the same owned history without r
 
 To verify this path with a real Runner and Pi subprocess against a disposable authenticated Hub and loopback model, install the client dependencies and run `python3 e2e_pi_dispatch_config.py --output /absolute/evidence/directory` from the backend test environment. The check covers dispatch, follow-up, output files, native terminal recovery after restart, and preservation of personal model configuration. It does not exercise a production model or native desktop UI.
 
+## Concurrent Runner conversations
+
+Desktop-private and Hub RPCs use bounded work, read, discovery and control lanes. A slow discovery or history read cannot occupy the workers reserved for stopping another conversation. Mutations of one execution reference remain ordered across both transports; stopping it invalidates older requests that have not reached durable admission. Requests rejected for transport capacity are explicitly unaccepted and may be retried with the same business ID. This does not change account authorization, local-model privacy or the adaptive CPU/memory execution budget.
+
+Process creation runs outside the shared session lock. Cancellation retains the exact launch identity until process-tree cleanup is confirmed; an unconfirmed exit does not free its execution slot or authorize a replacement. Event-retention failures preserve the unsaved batch and retry it before resuming admission. An empty current snapshot or an unrelated acknowledgement cannot discard that batch.
+
+Model metadata carries its privacy classification from snapshot capture to remote projection. Switching to a Hub model while a read is pending cannot expose an older local model identity or its token counts. Attachment reads and follow-up workers also retain cancellation ownership until the underlying operation finishes.
+
+Run `python3 -m unittest test_runner_local_rpc test_runner_remote_rpc test_runner_event_delivery test_runner_usage_receipts test_runner_input_cleanup test_local_process_cleanup test_task_goal_stop_races` in the backend test environment. The private-pipe test uses a real Runner process and durable queue with synthetic discovery; process-cleanup tests use isolated operating-system children. These checks do not establish real-provider or Windows acceptance when run on another platform.
+
 ## Offline quality gate
 
 Use the dedicated test environment, not a production service environment:

@@ -24,6 +24,8 @@ _ANSI = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 _IDLE_LIMIT_S = int(os.environ.get("SODUWORK_LOCAL_IDLE_LIMIT_S") or 15 * 60)
 _HARD_LIMIT_S = int(os.environ.get("SODUWORK_LOCAL_HARD_LIMIT_S") or 8 * 3600)
 _TIMEOUT_S = _HARD_LIMIT_S          # Compatibility alias for older callers.
+_LAUNCH_TREE_UNCONFIRMED = "execution_launch_cleanup_unconfirmed"
+_LAUNCH_TREE_UNCONFIRMED_ERROR = "执行主进程已退出，但子进程清理仍未确认，请检查这条会话的剩余执行进程"
 
 # Use a configurable context-window estimate when the gateway cannot report the real limit.
 # Label estimates in the UI and replace them with observed limits when overflow errors provide one.
@@ -777,6 +779,13 @@ def _reclaim_missing() -> dict:
             if ref in _RUNS:
                 continue
             _RUNS[ref] = run
+        if run.get('state') == 'running' and run.get('failureKind') == _LAUNCH_TREE_UNCONFIRMED:
+            # A dead host cannot prove that its previously unverified children
+            # exited. Restart must retain this session's admission fence.
+            run.update(detached=True, stopping=True, error=_LAUNCH_TREE_UNCONFIRMED_ERROR)
+            n_live += 1
+            _save_meta(ref)
+            continue
         if run.get("state") == "running" and run.get("accessPolicy"):
             # The approval token and session grants deliberately die with the
             # Runner. Stop this new-contract process before offering resume;

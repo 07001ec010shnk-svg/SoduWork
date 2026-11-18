@@ -64,6 +64,8 @@ The same section has a collapsed dispatch-instructions history. New desktop disp
 
 Conversation analysis and automatic acceptance include the saved requirement, dispatch supplements and review rejection notes. Conflicting business requirements follow the latest recorded time; unrelated requirements remain effective. Unknown or identical timestamps require explicit clarification rather than an invented priority. Generated drafts retain the original timestamps when resent. New reviewer notes are carried separately, and changed history invalidates a prepared review. The fixed delivery version, criterion identifiers and approval permissions remain authoritative. Client and Hub must both be updated to load this history; older services explicitly report missing history. Oversized history is rejected rather than silently truncated.
 
+Runner conversations distinguish queue waiting, execution-environment startup and actual execution. The queue shows its ordinal position and wait time; execution time starts from the native process acknowledgement. A slow startup displays guidance after 90 seconds without declaring the process stopped. Queued work remains cancellable, and missing historical timestamps are displayed as unrecorded. Run `node e2e/runner-queue-status.cjs /absolute/evidence/directory` for real Electron/Chromium controls using production adapters with synthetic Runner replies. This does not call a real model or remote Hub.
+
 ## Run and verify
 
 Ordinary new chats use a fresh private working directory; the previous chat's
