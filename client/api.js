@@ -1770,6 +1770,8 @@
         if (!localProvider) throw new Error('本地模型服务已不可用，请刷新目录后重试');
         var localModel = (localCatalog?.myModels || []).find(row => row.providerId === nativeId && row.name === String(body.model || '').trim());
         if (!localModel) throw new Error('本地模型不存在或已不可用，请刷新目录后重试');
+        if (body.expectedConfigRevision && body.expectedConfigRevision !== localModel.configRevision)
+          throw new Error('模型配置在检测期间已变更，请重新检测');
         if (typeof local?.checkCapabilities !== 'function') throw new Error('当前客户端尚未提供本机能力检测，请更新客户端');
         var report = await local.checkCapabilities({ modelRef: localModel.id,
           checks: Array.isArray(body.checks) ? body.checks : ['connection'],
@@ -1784,6 +1786,7 @@
       options?.signal?.throwIfAborted();
       var result = await jfetch('/my-models/capabilities/check', { method: 'POST',
         body: JSON.stringify({ providerId: body.providerId, model: body.model,
+          ...(body.expectedConfigRevision ? { expectedConfigRevision: body.expectedConfigRevision } : {}),
           ...(Array.isArray(body.checks) ? { checks: body.checks } : {}) }),
         signal: options?.signal ? AbortSignal.any([options.signal, _abortSignal(140000)]) : _abortSignal(140000) });
       await invalidateDomain('models', scope); return result;

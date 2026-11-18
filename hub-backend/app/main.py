@@ -204,7 +204,7 @@ app.add_middleware(
     allow_origins=settings.cors_list,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["X-Request-ID", "Server-Timing"],
+    expose_headers=["X-Request-ID", "Server-Timing", "X-Error-Code"],
     allow_credentials=False,
 )
 

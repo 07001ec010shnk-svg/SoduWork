@@ -39,6 +39,14 @@ const THINKING_FORMATS = localeMap(() => ([
 
 const KINDS = localeMap(() => ([['openai-compat', 'OpenAI 兼容'], ['anthropic', 'Anthropic']]))
 
+function canProbeProvider(provider) {
+  return provider?.enabled && provider.baseUrl && provider.keySet && (provider.kind ?? 'openai-compat') === 'openai-compat'
+}
+
+function checkRevision(provider, model) {
+  return JSON.stringify([provider.revision, model.revision, model.configRevision])
+}
+
 export default function ModelCatalog() {
   const viewportRef = useViewportHeight()
   const listRef = useRef(null)
@@ -59,11 +67,69 @@ export default function ModelCatalog() {
   const [newProviderId, setNewProviderId] = useState('')
   const pendingProviderFocus = useRef('')
 
+  const activeLoad = useRef(null)
+  const firstChecks = useRef(new Map())
+  const checkQueue = useRef(Promise.resolve())
   const load = () => {
     setError(null)
-    api.modelCatalog().then(setD).catch(setError)
+    const request = api.modelCatalog()
+    activeLoad.current = request
+    request.then(catalog => {
+      if (activeLoad.current !== request) return
+      for (const [id, target] of firstChecks.current) {
+        const model = catalog.models.find(row => row.id === id)
+        const provider = catalog.providers.find(row => row.id === target.providerId)
+        if (!model?.enabled || (model.modality || 'chat') !== 'chat' || model.capabilityCheck ||
+            model.providerId !== target.providerId || !canProbeProvider(provider) ||
+            target.key !== checkRevision(provider, model)) {
+          firstChecks.current.delete(id)
+        }
+      }
+      setD(catalog)
+      activeLoad.current = null
+    }).catch(e => {
+      if (activeLoad.current !== request) return
+      setError(e); activeLoad.current = null
+    })
   }
-  useEffect(() => { load() }, [])
+  useEffect(() => {
+    load()
+    return () => { activeLoad.current = null; firstChecks.current.clear() }
+  }, [])
+
+  const closeAddModel = () => setAddM(current => current === addM ? null : current)
+  const closeDiscovery = () => setDiscover(current => current === discover ? null : current)
+  function modelsSaved(provider, receipts) {
+    if (canProbeProvider(provider)) {
+      for (const saved of receipts) {
+        if (saved?.id && saved.revision && saved.configRevision && saved.providerRevision &&
+            saved.providerRevision === provider.revision) {
+          firstChecks.current.set(saved.id, { providerId: provider.id, key: checkRevision(provider, saved) })
+        }
+      }
+    }
+    load()
+  }
+  function scheduleFor(provider, model) {
+    const target = firstChecks.current.get(model.id)
+    if (!target || target.key !== checkRevision(provider, model)) return
+    return run => {
+      if (firstChecks.current.get(model.id) !== target) return
+      firstChecks.current.delete(model.id)
+      checkQueue.current = checkQueue.current.then(run)
+      return checkQueue.current
+    }
+  }
+  function applyCheck(provider, model, result) {
+    setD(current => {
+      const currentProvider = current.providers.find(row => row.id === provider.id)
+      if (currentProvider?.revision !== provider.revision) return current
+      return { ...current, models: current.models.map(row => row.id === model.id && checkRevision(currentProvider, row) === checkRevision(provider, model)
+        ? { ...row, capabilityProfile: result.capabilityProfile, capabilityCheck: result } : row) }
+    })
+    // A catalog read already in flight may predate this persisted report.
+    if (activeLoad.current) load()
+  }
   const models = d?.models || []
   const byP = (pid) => models.filter((m) => m.providerId === pid)
   // Keep the newly created service in view for this visit without changing the saved catalog order.
@@ -155,10 +221,10 @@ export default function ModelCatalog() {
                         <button type="button" className="admin-card-action" aria-label={tx("{0}模型 {1}", [m.enabled ? tx("停用") : tx("启用"), m.label || m.name])} title={m.enabled ? tx("停用后将不再供成员选择") : tx("启用模型")} onClick={() => toggleM(m)}>{m.enabled ? tx("停用") : tx("启用")}</button>
                         {!m.builtin && <span className="model-chip-danger"><button type="button" className="admin-card-action is-danger" aria-label={tx("删除模型 {0}", [m.label || m.name])} onClick={() => setDel({ kind: 'm', id: m.id, name: m.label || m.name, revision: m.revision })}>{tx("删除")}</button></span>}
                       </div>
-                      {(m.modality || 'chat') === 'chat' && <ModelCapabilityStatus key={p.revision + ':' + m.revision}
+                      {(m.modality || 'chat') === 'chat' && <ModelCapabilityStatus key={checkRevision(p, m)}
+                        scheduleFirstCheck={scheduleFor(p, m)}
                         model={m} disabled={!p.enabled || !m.enabled || !p.baseUrl || !p.keySet}
-                        onChecked={(result) => setD(current => ({ ...current, models: current.models.map(item => item.id === m.id
-                          ? { ...item, capabilityProfile: result.capabilityProfile, capabilityCheck: result } : item) }))} />}
+                        onChecked={result => applyCheck(p, m, result)} />}
                     </div>
                     ))}
                 </div>
@@ -168,8 +234,8 @@ export default function ModelCatalog() {
 
               <footer className="model-provider-actions admin-card-actions">
                 <div className="model-card-action-group">
-                  <button type="button" className="admin-card-action is-primary" onClick={() => setAddM({ providerId: p.id })}><Icon name="plus" />{tx("加模型")}</button>
-                  <button type="button" className="admin-card-action" onClick={() => setDiscover(p)}><Icon name="search" />{tx("发现模型")}</button>
+                  <button type="button" className="admin-card-action is-primary" onClick={() => setAddM({ providerId: p.id, provider: p })}><Icon name="plus" />{tx("加模型")}</button>
+                  <button type="button" className="admin-card-action" onClick={() => setDiscover({ ...p })}><Icon name="search" />{tx("发现模型")}</button>
                   <button type="button" className="admin-card-action" onClick={() => setEditP(p)}><Icon name="settings" />{tx("配置服务")}</button>
                   <button type="button" className="admin-card-action" onClick={() => toggleP(p)}>{p.enabled ? tx("停用服务") : tx("启用服务")}</button>
                 </div>
@@ -198,9 +264,9 @@ export default function ModelCatalog() {
           setEditP(null); load()
         }} />}
       {addM && <ModelForm providerId={addM.providerId} initial={addM.model || null}
-        onClose={() => setAddM(null)} onSaved={() => { setAddM(null); load() }} />}
+        onClose={closeAddModel} onSaved={receipts => { closeAddModel(); modelsSaved(addM.provider, receipts) }} />}
       {discover && <DiscoverForm provider={discover}
-        onClose={() => setDiscover(null)} onSaved={() => { setDiscover(null); load() }} />}
+        onClose={closeDiscovery} onSaved={receipts => { closeDiscovery(); modelsSaved(discover, receipts) }} />}
       {del && <Confirm title={del.kind === 'p' ? tx("删除模型服务") : tx("删除模型")} danger confirmText={tx("删除")}
         text={del.kind === 'p'
           ? tx("确定删除「{0}」？它底下的模型会一起删掉，正在用这些模型的人会挑不到。", [del.name])
@@ -373,7 +439,7 @@ function ModelForm({ providerId, initial, onClose, onSaved }) {
     }
     setBusy(true)
     try {
-      await api.saveModelDef({
+      const saved = await api.saveModelDef({
         expectedRevision: initial?.revision || 'new',
         providerId,
         name: name.trim(),
@@ -398,7 +464,7 @@ function ModelForm({ providerId, initial, onClose, onSaved }) {
         enabled: initial ? initial.enabled : true,
       })
       toast(editing ? tx("模型配置已更新") : tx("已加上"))
-      onSaved()
+      onSaved(!editing && modality === 'chat' ? [saved] : [])
     } catch (e) { toast(tx("保存失败：") + (e.message || e)) }
     setBusy(false)
   }
@@ -517,19 +583,20 @@ function DiscoverForm({ provider, onClose, onSaved }) {
     const picked = rows.filter((r) => r.checked)
     if (picked.length === 0) { toast(tx("先勾选要添加的模型")); return }
     setBusy(true)
-    let added = 0, failed = 0
+    const added = []
+    let failed = 0
     for (const row of picked) {
       try {
-        await api.saveModelDef({ providerId: provider.id, name: row.name,
+        const saved = await api.saveModelDef({ providerId: provider.id, name: row.name,
           label: row.name, expectedRevision: 'new', enabled: true })
-        added += 1
+        added.push(saved)
       } catch (e) { failed += 1 }
     }
     setBusy(false)
     toast(failed === 0
-      ? tx("已添加 {0} 个模型", [added])
-      : tx("添加了 {0} 个，{1} 个失败", [added, failed]))
-    if (added > 0) onSaved(); else onClose()
+      ? tx("已添加 {0} 个模型", [added.length])
+      : tx("添加了 {0} 个，{1} 个失败", [added.length, failed]))
+    if (added.length) onSaved(added); else onClose()
   }
 
   return (
