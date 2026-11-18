@@ -111,7 +111,6 @@ process.on('unhandledRejection', (reason) => {
   console.error('[SoduWork] unhandled rejection (kept alive):', reason && reason.stack || reason);
 });
 
-_deviceAuth.install({ app, ipcMain, safeStorage });
 require('./main/client-domain-cache.cjs').install({ app, ipcMain, webContents, deviceAuth: _deviceAuth,
   modelsChanged: () => _catalogChanges.changed() });
 require('./main/read-aloud.cjs').install({ app, ipcMain, BrowserWindow, getRendererRoot: rendererRoot });
@@ -645,7 +644,11 @@ if (!gotTheLock) {
 
   _fileOpen.fromCommand(process.argv, process.cwd());
   app.whenReady().then(() => {
-    if (_linuxStartup.showRecovery({ app, BrowserWindow, safeStorage })) return;
+    if (!_linuxStartup.showRecovery({ app, BrowserWindow, safeStorage, onUnlock: startDesktop })) startDesktop();
+  });
+
+  function startDesktop(credentials) {
+    _deviceAuth.install({ app, ipcMain, safeStorage, credentials });
     /*
      * Adopt the Runner-managed office engine so client probes and child processes use the same
      * installation. Missing engines must not block startup.
@@ -728,7 +731,7 @@ if (!gotTheLock) {
         _desktopOverlay.createWindow();
       }
     });
-  });
+  }
 }
 
 app.on('window-all-closed', () => {
