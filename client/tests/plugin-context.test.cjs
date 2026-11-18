@@ -34,6 +34,26 @@ test('plugin context is bounded, deduplicated and limited per turn', () => {
   assert.deepEqual(compact.map((item) => item.pluginId), ['p0', 'p1', 'p2']);
 });
 
+test('selected Plugin Developer owns authoring intent without changing visible feature requests', () => {
+  const request = '我给你区域范围、时间、人数、年龄和旅行偏好，你输出预算、路线和精美 HTML。';
+  const selected = [{ pluginId: 'local:plugin-builder', name: 'Plugin Developer', context: 'x'.repeat(20000) }];
+  const prompt = pluginContext.augment(request, selected);
+  const payload = JSON.parse(prompt.split(pluginContext.START)[1].split(pluginContext.END)[0]);
+  assert.equal(payload.authoring.intent, 'plugin-authoring');
+  assert.match(payload.authoring.instructions, /specification.*not as a request to perform/);
+  assert.match(payload.authoring.instructions, /changing values.*plugin inputs/);
+  assert.match(payload.authoring.instructions, /Ask only.*authoring decision/);
+  assert.match(payload.authoring.instructions, /soduwork-plugin-draft\.json/);
+  assert.match(payload.authoring.instructions, /install only after the user confirms/);
+  assert.equal(payload.plugins[0].context.length, pluginContext.MAX_CONTEXT);
+  assert.equal(pluginContext.parse(prompt).text, request);
+  assert.doesNotMatch(JSON.stringify(pluginContext.parse(prompt)), /authoring|changing values/);
+  for (const ordinary of [[], [{ pluginId: 'local:travel', name: 'Plugin Developer', context: 'Plan travel' }],
+    [{ pluginId: 'remote:plugin-builder', name: 'Plugin Developer', context: 'Plan travel' }]]) {
+    assert.doesNotMatch(pluginContext.augment(request, ordinary), /"authoring":|plugin-authoring/);
+  }
+});
+
 test('plugin capability declarations survive compaction in a bounded normalized shape', () => {
   const item = pluginContext.compact([{
     pluginId: 'p1', context: 'method',

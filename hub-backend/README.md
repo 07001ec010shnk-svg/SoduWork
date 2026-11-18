@@ -35,6 +35,26 @@ Direct development uses local configuration and data; keep it separate from real
 
 API documentation: **http://127.0.0.1:9080/docs**. Health check: `GET /healthz`.
 
+## Desktop-local Runner event recovery
+
+Desktop-local Runner executions persist their event destination separately from the
+conversation alias. Their history does not enter Hub task delivery, and Hub outbox
+pressure does not block local work; CPU, memory and execution concurrency still apply.
+Queued desktop turns display queue wording instead of model-processing wording.
+
+On upgrade, Runner recognizes old local chat streams only when their alias, runtime
+and deterministic execution reference agree. Recovery persists confirmed local routing;
+ambiguous records retain their original routing metadata. Confirmed local packets are copied to
+private `local-events-*.archive` recovery files before removal from the active outbox;
+Windows payloads retain DPAPI protection. Collection marks are preserved. Ambiguous
+streams and real Hub events remain untouched, and NACK is never treated as ACK.
+Recovery files are bounded to three times the configured outbox byte budget, including
+encoding overhead. Archive failures retain the original packets and emit a diagnostic;
+unrelated Hub delivery and collection continue subject to actual outbox capacity.
+Keep these recovery files private and retain them until their contents have been reviewed.
+Run `python3 -m unittest test_runner_event_scope test_runner_event_delivery` to verify
+routing, restart recovery, interrupted archive writes, and Hub delivery preservation.
+
 ## Managed Pi execution
 
 Managed Pi execution binds each Runner execution record to its own configuration and session directory under the Runner data root. Startup and follow-up turns use the same explicit path, independent of inherited desktop Pi settings or the operating system home-directory lookup. Model files contain an environment-variable reference for the credential; missing model configuration or failed file publication stops execution before Pi starts. Personal Pi and desktop-local model files are not modified. On upgrade, only the exact native session identified by the Runner record and matching workspace can be copied into the private directory; its original file remains unchanged. Established follow-up turns require an existing session rather than silently starting a new one.
@@ -43,7 +63,19 @@ After a Runner restart, recovery terminals bind the same owned history without r
 
 To verify this path with a real Runner and Pi subprocess against a disposable authenticated Hub and loopback model, install the client dependencies and run `python3 e2e_pi_dispatch_config.py --output /absolute/evidence/directory` from the backend test environment. The check covers dispatch, follow-up, output files, native terminal recovery after restart, and preservation of personal model configuration. It does not exercise a production model or native desktop UI.
 
+## Concurrent Runner conversations
+
+Desktop-private and Hub RPCs use bounded work, read, discovery and control lanes. A slow discovery or history read cannot occupy the workers reserved for stopping another conversation. Mutations of one execution reference remain ordered across both transports; stopping it invalidates older requests that have not reached durable admission. Requests rejected for transport capacity are explicitly unaccepted and may be retried with the same business ID. This does not change account authorization, local-model privacy or the adaptive CPU/memory execution budget.
+
+Process creation runs outside the shared session lock. Cancellation retains the exact launch identity until process-tree cleanup is confirmed; an unconfirmed exit does not free its execution slot or authorize a replacement. Event-retention failures preserve the unsaved batch and retry it before resuming Hub-bound admission. An empty current snapshot or an unrelated acknowledgement cannot discard that batch. Desktop-local admission remains independent of Hub event retention.
+
+Model metadata carries its privacy classification from snapshot capture to remote projection. Switching to a Hub model while a read is pending cannot expose an older local model identity or its token counts. Attachment reads and follow-up workers also retain cancellation ownership until the underlying operation finishes.
+
+Run `python3 -m unittest test_runner_local_rpc test_runner_remote_rpc test_runner_event_delivery test_runner_usage_receipts test_runner_input_cleanup test_local_process_cleanup test_task_goal_stop_races` in the backend test environment. The private-pipe test uses a real Runner process and durable queue with synthetic discovery; process-cleanup tests use isolated operating-system children. These checks do not establish real-provider or Windows acceptance when run on another platform.
+
 ## Offline quality gate
+
+Native requirement preparation can save `executionSubmissionChoice` independently of the effective `executionSubmissionMode`. For the `infer` choice, completed and validated primary artifacts resolve the mode to automatic review submission; explicit manual and ambiguous legacy manual values retain their behavior. Review remains a human action owned by the requirement creator. Current-turn delivery issues expose interrupted capture, invalid output or an unavailable creator without changing approval permissions. Upgrade desktop and Hub together for the new choice acknowledgment and issue receipts.
 
 Use the dedicated test environment, not a production service environment:
 
@@ -55,6 +87,10 @@ python3 quality_gate.py --profile extended --scope all
 ```
 
 The manifest in `quality_manifest.py` registers checks and their profiles. Unregistered checks block the gate. `live` checks connect to real Hubs, Runners, providers, or business data; they are not part of default offline acceptance.
+
+Manual acceptance submission commits its review request and notification job together. The HTTP receipt does not wait for device notification delivery, so slow connections cannot leave a successfully submitted requirement looking retryable. The existing notification worker retries failed delivery and projects each recipient's current permissions. Run `python3 -m unittest test_local_requirement_delivery` for receipt, idempotency and transaction rollback regressions.
+
+From `client/`, run `node e2e/run-requirements-isolated.cjs /absolute/evidence/directory /path/to/test/python requirements-manual-submit-race` for an isolated Electron/HTTP check using the production client timeout and synthetic slow notification recipients. The fixture has its own database and files; it does not use real accounts or send remote messages.
 
 Offline checks own their subprocess trees and finish cleanup before returning, including when a command exits before its descendants. On Windows, the gate uses the repository's Windows PowerShell Job helper and releases the command only after Job assignment succeeds. Output is captured in a private temporary file so inherited output handles cannot extend a timeout indefinitely; failure reports retain output produced before the timeout. Run `python3 -m unittest test_quality_gate_cleanup` for real process cleanup regressions on the current platform.
 
@@ -232,9 +268,9 @@ Native and ACP OpenCode executions preserve the current turn's provider finish r
 
 ## OpenCode installation and network diagnostics
 
-Runner archive downloads, model-gateway reachability checks and the macOS Runner's secure control connection share a strict TLS trust configuration. By default, they retain Python/OpenSSL system roots and add the packaged `certifi` public CA bundle, including in frozen executables whose build-time OpenSSL certificate paths do not exist on the user's machine. Certificate chains and hostnames remain verified. This does not change external native harnesses' own HTTPS configuration.
+Runner archive downloads, model-gateway reachability checks and secure control connections share one TLS configuration on macOS, Windows and Linux. By default, MIT-licensed `truststore` uses the installed operating system's trust: Security framework on macOS, CryptoAPI on Windows, and the system CA store through OpenSSL on Linux. No packaged public CA bundle is added. Missing native verification support or a rejected certificate fails without retrying under another trust policy. Certificate chains and hostnames remain verified. This does not change external native harnesses' own HTTPS configuration.
 
-Nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR` values explicitly replace that default trust selection; a missing or invalid path fails without falling back to public roots. Supply the complete required trust set when configuring a private CA. Empty values do not select an exclusive override; default path discovery still follows Python/OpenSSL environment semantics. Trust is loaded only for HTTPS requests, including redirects from HTTP; plain HTTP does not depend on certificate configuration. Existing download proxy selection and direct model-gateway routing are unchanged.
+Nonempty `SSL_CERT_FILE` or `SSL_CERT_DIR` values explicitly replace default system trust with the configured CA file or OpenSSL hashed CA directory. A missing or invalid path fails without falling back to system or bundled roots. Supply the complete required trust set when configuring this override. Empty values select default system trust. HTTP clients load trust only for HTTPS requests, including redirects from HTTP; plain HTTP does not depend on certificate configuration. Existing download proxy selection and direct model-gateway routing are unchanged.
 
 The managed installer tries an explicitly configured mirror, the connected Hub, then the official release. On macOS, archive downloads through the Python installer merge system HTTP/HTTPS proxy settings with environment overrides by scheme on every attempt. An explicitly empty proxy variable disables that scheme's system proxy. System-sourced proxies retain their system bypass rules alongside `NO_PROXY`; an empty `NO_PROXY` does not cancel the system exceptions. Explicit proxy overrides retain standard environment bypass behavior, and requests to the exact connected Hub origin stay direct. TLS certificate verification and pinned SHA-256 verification remain enabled. These download rules do not change npm dependency installation or model-gateway routing.
 
@@ -254,7 +290,7 @@ Verify the production network modules with real loopback HTTPS and a frozen PyIn
 python3 e2e_runner_tls.py --output /absolute/evidence/directory
 ```
 
-The check verifies the packaged CA resource, missing default roots, strict explicit overrides, and rejection of untrusted or mismatched certificates. `--source-only` exercises the same paths without freezing. These fixtures do not replace full desktop, production model or other operating-system verification.
+The check verifies the packaged native verifier, real TLS with a disposable trust anchor, strict explicit overrides, and rejection of untrusted or mismatched certificates. It does not modify the machine's trust store. `--source-only` exercises the same paths without freezing. These fixtures do not replace full desktop, production model or other operating-system verification.
 
 ## API and trust boundaries
 
