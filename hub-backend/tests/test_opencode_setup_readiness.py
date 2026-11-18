@@ -66,7 +66,10 @@ class OpenCodeSetupReadinessTests(unittest.TestCase):
 
     def test_other_cli_readiness_does_not_consume_opencode_dependency_state(self):
         with (patch.object(managed_agents, "runtime_issue", side_effect=AssertionError("Unrelated CLI check"),
-                           create=True)):
+                           create=True),
+              # Supply Qwen's independently verified package; this boundary
+              # test must not depend on software installed on the test machine.
+              patch.object(agent_setup, "_pkg_version", return_value=agent_setup._verified_version("qwen"))):
 
             for key in ("pi", "qwen", "custom"):
                 with self.subTest(key=key):

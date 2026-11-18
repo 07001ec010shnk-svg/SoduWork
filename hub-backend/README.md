@@ -214,6 +214,14 @@ Later administrator opt-outs persist across restarts, and new bundled skills
 default to available. Personal choices and imported-package approval remain
 independent. See the [skill loading guide](../skills/README.md).
 
+## OpenCode data isolation and existing conversations
+
+Managed OpenCode keeps its database, data, state and cache under the Runner data root's `agents/opencode/` directory. Inherited `OPENCODE_DB` and XDG paths cannot redirect managed execution into a personal OpenCode installation. The parent Runner and standalone ACP bridge select the same private database; the user's home directory and injected model configuration remain unchanged.
+
+When an archived SoduWork conversation resumes, its recorded native session ID and workspace identify the history to recover. Compatible v1 session, message, part and todo records are imported from a stable, read-only file snapshot into the private database, together with related child sessions. Personal accounts, credentials and project permissions are not imported, and the original database and sidecars are not modified. A missing session, unsupported v2-only history, active revert or remote workspace binding stops recovery with an explanation; it never silently starts a blank replacement session or downgrades the personal database. If the personal database is changing during the snapshot, close personal OpenCode and retry. Existing conversation archives and native IDs remain available.
+
+Run `SODUWORK_TEST_OPENCODE_BIN=/absolute/path/to/opencode python3 -m unittest test_opencode_native_config` with the pinned managed binary and prepared SDK dependencies for native/ACP isolation and resume checks against a loopback model. These checks use synthetic databases and do not access personal history or a production model.
+
 ## OpenCode turn completion
 
 Native and ACP OpenCode executions preserve the current turn's provider finish reason. An output-token limit is reported as incomplete even when partial text exists and the native process exits successfully; existing progress and the session remain available for manual continuation. The ACP adapter observes only native session/turn identifiers and stop reasons through an invocation-local plugin, and rejects missing completion evidence without retrying tools or changing permissions. Run `python3 e2e_opencode_turn_outcome.py --binary /path/to/opencode` for isolated loopback-provider acceptance using an explicitly selected installed binary.
