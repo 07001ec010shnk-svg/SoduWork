@@ -57,9 +57,30 @@ async function createEntries(entries) {
   for (const item of entries) prepared.push({ ...item, compressed: await deflate(item.bytes, { level: 3 }) });
   return encode(prepared);
 }
+function createEntriesSync(entries) {
+  return encode(entries.map(item => ({ ...item, compressed: zlib.deflateRawSync(item.bytes, { level: 6 }) })));
+}
+function readBounded(filename, remaining) {
+  const fd = fs.openSync(filename, 'r');
+  try {
+    const limitError = () => new Error('Folder is larger than 24 MB; remove dependencies or media files');
+    if (fs.fstatSync(fd).size > remaining) throw limitError();
+    const chunks = []; let size = 0;
+    // The file may grow even after fstat. Read at most the remaining input
+    // budget plus one overflow byte, before compression or ZIP allocation.
+    while (true) {
+      const chunk = Buffer.allocUnsafe(Math.min(64 * 1024, remaining - size + 1));
+      const read = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (!read) return Buffer.concat(chunks, size);
+      size += read;
+      if (size > remaining) throw limitError();
+      chunks.push(chunk.subarray(0, read));
+    }
+  } finally { fs.closeSync(fd); }
+}
 function createZip(root) {
-  const base = fs.realpathSync(root); const { result, total } = collect(base);
-  const archive = encode(result.map(item => { const bytes = fs.readFileSync(item.full); return {
+  const base = fs.realpathSync(root); const { result } = collect(base); let total = 0;
+  const archive = encode(result.map(item => { const bytes = readBounded(item.full, MAX_BYTES - total); total += bytes.length; return {
     name: item.name, bytes, st: item.st, compressed: zlib.deflateRawSync(bytes, { level: 6 }),
   }; }));
   if (archive.length > MAX_BYTES) throw new Error("ZIP archive is larger than 24 MB; remove large files");
