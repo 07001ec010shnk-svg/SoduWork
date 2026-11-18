@@ -5,15 +5,6 @@ const fs = require('node:fs');
 const path = require('node:path');
 const script = fs.readFileSync(path.join(__dirname, '../core/i18n.js'), 'utf8');
 
-test('website packaging guidance follows every existing renderer locale', () => {
-  const c = client(), catalogs = require('../core/locales/builtin-ui');
-  const phrases = ['文件夹包含超过12层的文件，请将文件移近所选文件夹后重试', '文件夹打包失败'];
-  for (const locale of ['zh-CN', 'en-US', 'ja-JP', 'ko-KR']) {
-    c.api.setLocale(locale);
-    for (const phrase of phrases) assert.equal(c.api.translateText(phrase), catalogs[locale][phrase], locale);
-  }
-});
-
 test('device and account history controls retain all four locale translations', () => {
   const c = client();
   const expected = {
@@ -278,6 +269,15 @@ test('localized slash actions resolve to the same work contract and preserve req
     assert.equal(result.text, '保存 this request');
   }
 });
+test('website packaging guidance follows every existing renderer locale', () => {
+  const c = client(), catalogs = require('../core/locales/builtin-ui');
+  const phrases = ['文件夹包含超过12层的文件，请将文件移近所选文件夹后重试', '文件夹打包失败'];
+  for (const locale of ['zh-CN', 'en-US', 'ja-JP', 'ko-KR']) {
+    c.api.setLocale(locale);
+    for (const phrase of phrases) assert.equal(c.api.translateText(phrase), catalogs[locale][phrase], locale);
+  }
+});
+
 function client(saved = {}, blocked = false, options = {}) {
   const storage = new Map(Object.entries(saved)), listeners = new Map(), sent = [];
   const context = vm.createContext({
