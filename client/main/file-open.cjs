@@ -12,11 +12,18 @@ const { createReadStream, createWriteStream } = require('node:fs');
 const MAX_BYTES = 256 * 1024 * 1024;
 const PREVIEW = /\.(?:html?|pdf|md|markdown|txt|csv|json|ya?ml|xml|js|jsx|ts|tsx|css|scss|py|java|go|rs|sql|sh|ps1|png|jpe?g|gif|webp|svg|mp4|m4v|webm|mov|ogv)$/i;
 
-function commandFiles(argv, cwd, packaged = true) {
+function commandFiles(argv, cwd, packaged = true, appPath) {
   const args = Array.isArray(argv) ? argv : [];
   const explicit = args.indexOf('--soduwork-open-file');
+  // An unpackaged launch may put switches before its entry. The loaded module
+  // identifies its application root and package-declared script; native callers
+  // can supply their exact entry without changing the launch-envelope format.
+  const root = path.resolve(__dirname, '..');
+  const entries = appPath ? [path.resolve(appPath)] : [root, path.resolve(root, require('../package.json').main)];
+  const sourceEntry = !packaged ? args.findIndex((value, index) =>
+    index > 0 && value && entries.includes(path.resolve(cwd || process.cwd(), String(value)))) : -1;
   const candidates = explicit >= 0 ? args.slice(explicit + 1, explicit + 2)
-    : args.slice(packaged ? 1 : 2).filter(value => path.isAbsolute(String(value)));
+    : args.slice(packaged ? 1 : sourceEntry >= 0 ? sourceEntry + 1 : 2).filter(value => path.isAbsolute(String(value)));
   return [...new Set(candidates.map(value => {
     let raw = String(value || '');
     if (!raw || /[\x00-\x1f]/.test(raw) || raw.startsWith('-')) return '';
@@ -26,13 +33,13 @@ function commandFiles(argv, cwd, packaged = true) {
   }).filter(Boolean))].slice(0, 20);
 }
 
-function instanceData(argv, cwd, packaged = true) {
+function instanceData(argv, cwd, packaged = true, appPath) {
   // Capture the original arguments in the launching process. Chromium can move
   // switches ahead of positional arguments before emitting second-instance.
-  return { soduworkOpenFiles: { version: 1, files: commandFiles(argv, cwd, packaged) } };
+  return { soduworkOpenFiles: { version: 1, files: commandFiles(argv, cwd, packaged, appPath) } };
 }
 
-function instanceFiles(argv, cwd, packaged = true, additionalData) {
+function instanceFiles(argv, cwd, packaged = true, additionalData, appPath) {
   if (additionalData && Object.prototype.hasOwnProperty.call(additionalData, 'soduworkOpenFiles')) {
     const request = additionalData.soduworkOpenFiles;
     if (request?.version !== 1 || !Array.isArray(request.files)) return [];
@@ -41,7 +48,7 @@ function instanceFiles(argv, cwd, packaged = true, additionalData) {
   }
   // Keep the legacy path conservative: never guess which trailing argument is
   // the user's file rather than an Electron entry point or a profile directory.
-  return commandFiles(argv, cwd, packaged);
+  return commandFiles(argv, cwd, packaged, appPath);
 }
 
 function create(deps) {
@@ -148,7 +155,7 @@ function create(deps) {
     return { ok: true };
   });
   app.on('open-file', (event, file) => { event.preventDefault(); enqueue([file]); });
-  return { enqueue, signal, fromCommand: (argv, cwd) => enqueue(commandFiles(argv, cwd, app.isPackaged)) };
+  return { enqueue, signal, fromCommand: (argv, cwd) => enqueue(commandFiles(argv, cwd, app.isPackaged, app.getAppPath?.())) };
 }
 
 module.exports = { create, commandFiles, instanceData, instanceFiles, PREVIEW, MAX_BYTES };

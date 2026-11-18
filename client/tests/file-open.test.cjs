@@ -29,6 +29,37 @@ test('launch arguments preserve Unicode, spaces and metacharacters without shell
   assert.deepEqual(commandFiles(['app.exe', 'https://example.com'], process.cwd()), []);
 });
 
+test('source launch switches before the known application entry never queue that entry as a file', () => {
+  const entry = path.resolve('source-app'), file = path.resolve('report.html');
+  assert.deepEqual(commandFiles(['electron', '--inspect=9222', entry], process.cwd(), false, entry), []);
+  assert.deepEqual(commandFiles(['electron', '--inspect=9222', entry, file], process.cwd(), false, entry), [file]);
+  assert.deepEqual(instanceData(['electron', '--inspect=9222', entry, file], process.cwd(), false, entry),
+    { soduworkOpenFiles: { version: 1, files: [file] } });
+  assert.deepEqual(instanceFiles(['electron', '--inspect=9222', entry, file], process.cwd(), false, undefined, entry), [file]);
+});
+
+test('source instance capture recognizes both loaded application entries without extra caller arguments', () => {
+  const root = path.resolve(__dirname, '..'), file = path.resolve('report.html');
+  for (const entry of [root, path.resolve(root, require('../package.json').main)]) {
+    assert.deepEqual(instanceData(['electron', '--inspect=9222', entry], process.cwd(), false),
+      { soduworkOpenFiles: { version: 1, files: [] } });
+    assert.deepEqual(instanceFiles(['electron', '--inspect=9222', entry, file], process.cwd(), false), [file]);
+  }
+});
+
+test('the installed source file broker uses its actual application entry when collecting cold requests', async t => {
+  const h = await setup(t), file = path.join(h.root, 'report.html');
+  h.app.getAppPath = () => h.root;
+  await fs.writeFile(file, '<h1>Exact user file</h1>');
+  assert.equal(h.broker.fromCommand(['electron', '--inspect=9222', h.root], process.cwd()), 0);
+  assert.equal(h.broker.fromCommand(['electron', '--inspect=9222', h.root, file], process.cwd()), 1);
+  const list = await h.call('list');
+  assert.deepEqual(list.items.map(row => row.name), ['report.html']);
+  const result = await h.call('claim', list.items[0].id);
+  assert.equal(result.ok, true);
+  assert.equal(await fs.readFile(result.file.path, 'utf8'), '<h1>Exact user file</h1>');
+});
+
 test('second-instance preserves the requested file when Chromium reorders switches', () => {
   const file = path.resolve('中文 页面 & one.html'), entry = path.resolve('main.js');
   const original = ['electron.exe', entry, '--soduwork-open-file', file];
