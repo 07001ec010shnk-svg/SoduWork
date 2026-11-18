@@ -2139,6 +2139,7 @@ class Runner:
         """
         from app.services import pty_term
         from app.services.terminal_environment import runner_environment
+        from app.services.opencode_session_migration import OpenCodeSessionMigrationError
         task = str(m.get("task") or "")
         okk, why = pty_term.available()
         if not okk:
@@ -2147,7 +2148,10 @@ class Runner:
         try:
             env = await asyncio.to_thread(
                 runner_environment, task, str(m.get("ref") or ""),
-                str(m.get("cli") or ""), self.work_root)
+                str(m.get("cli") or ""), self.work_root, str(m.get("mode") or "session"))
+        except OpenCodeSessionMigrationError as exc:
+            await self._send({"op": "reply", "id": m.get("id"), "ok": False, "error": str(exc)})
+            return
         except (ValueError, RuntimeError):
             await self._send({"op": "reply", "id": m.get("id"), "ok": False,
                               "error": "终端环境未就绪，请在原执行机重新连接会话"})

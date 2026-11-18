@@ -1,4 +1,4 @@
-"""Managed OpenCode config stays separate from personal config and native data."""
+"""Managed OpenCode configuration and native state stay separate from personal data."""
 from __future__ import annotations
 
 import json
@@ -46,8 +46,13 @@ class OpenCodeRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(list(expected.iterdir()), [])
         self.assertFalse(env.get("OPENCODE_CONFIG"))
         self.assertFalse(env.get("OPENCODE_CONFIG_DIR"))
-        for key in ("HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME", "OPENCODE_DB"):
-            self.assertEqual(env[key], self.environment[key], key)
+        self.assertEqual(env["HOME"], self.environment["HOME"])
+        base = expected.parent
+        for key, folder in (("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state"),
+                            ("XDG_CACHE_HOME", "cache")):
+            self.assertEqual(Path(env[key]), base / folder)
+            self.assertTrue(Path(env[key]).is_dir())
+        self.assertEqual(Path(env["OPENCODE_DB"]), base / "data" / "opencode" / "opencode.db")
         self.assertEqual(self.personal.read_bytes(), b"invalid personal config: PRIVATE-FIXTURE")
 
     def test_config_override_names_are_removed_case_insensitively(self):
@@ -60,7 +65,7 @@ class OpenCodeRuntimeConfigTests(unittest.TestCase):
         self.assertEqual(env["OPENCODE_CONFIG_CONTENT"], self.environment["OPENCODE_CONFIG_CONTENT"])
         self.assert_config(env)
 
-    def test_parent_environment_ignores_personal_config_and_keeps_native_state(self):
+    def test_parent_environment_isolates_personal_config_and_native_state(self):
         cfg = {"llm": {"base": "http://127.0.0.1/v1", "key": "fixture", "model": "fixture"},
                "runtimeSecrets": {"XDG_CONFIG_HOME": "FIXTURE_CONFIG_OVERRIDE"}}
         with patch.dict(os.environ, {**self.environment,
@@ -69,6 +74,43 @@ class OpenCodeRuntimeConfigTests(unittest.TestCase):
         self.assert_config(env)
         self.assertEqual(json.loads(env["OPENCODE_CONFIG_CONTENT"])["model"], "company/fixture")
         self.assertNotIn("agent", json.loads(env["OPENCODE_CONFIG_CONTENT"]))
+
+    def test_repeated_preparation_keeps_one_database_and_legacy_source(self):
+        from app.services.opencode_runtime_config import prepare_environment
+        env = dict(self.environment)
+        prepare_environment(env, str(self.root / "runner"))
+        prepared = dict(env)
+        # Simulate the ACP subprocess after the parent replaced its XDG paths.
+        with patch.dict(os.environ, env, clear=True):
+            prepare_environment(env)
+        self.assertEqual(env, prepared)
+        self.assertEqual(env["SODUWORK_OPENCODE_LEGACY_DB"], self.environment["OPENCODE_DB"])
+
+    def test_legacy_default_and_case_insensitive_overrides_are_isolated(self):
+        from app.services.opencode_runtime_config import prepare_environment
+        env = dict(self.environment)
+        del env["OPENCODE_DB"]
+        prepare_environment(env, str(self.root / "runner"))
+        self.assertEqual(Path(env["SODUWORK_OPENCODE_LEGACY_DB"]),
+                         Path(self.environment["XDG_DATA_HOME"]) / "opencode" / "opencode.db")
+        env = {**self.environment, "Opencode_Db": str(self.root / "override.db"),
+               "xdg_data_home": str(self.root / "override-data")}
+        prepare_environment(env, str(self.root / "runner"))
+        self.assertNotIn("Opencode_Db", env)
+        self.assertNotIn("xdg_data_home", env)
+        self.assertEqual(env["SODUWORK_OPENCODE_LEGACY_DB"], str(self.root / "override.db"))
+        self.assert_config(env)
+
+    def test_equivalent_private_path_does_not_become_its_own_legacy_source(self):
+        from app.services.opencode_runtime_config import prepare_environment
+        env = dict(self.environment)
+        prepare_environment(env, str(self.root / "runner"))
+        private = Path(env["OPENCODE_DB"])
+        alternate = str(private.parent / ".." / "opencode" / private.name)
+        env["OPENCODE_DB"] = alternate.replace("\\", "/").upper() if os.name == "nt" else alternate
+        prepare_environment(env, str(self.root / "runner"))
+        self.assertEqual(env["SODUWORK_OPENCODE_LEGACY_DB"], self.environment["OPENCODE_DB"])
+        self.assertEqual(env["OPENCODE_DB"], str(private))
 
     def child_environment(self, agent, *, guarded=False):
         keys = [*self.environment]
