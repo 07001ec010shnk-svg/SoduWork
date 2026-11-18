@@ -1,6 +1,8 @@
 """Local execution routing stays separate from Hub retention and pressure."""
 import unittest
 import tempfile
+import json
+from pathlib import Path
 from unittest.mock import patch, AsyncMock
 
 from app.services import dispatch_identity, runner_event_scope
@@ -103,6 +105,74 @@ class ScopeTests(unittest.TestCase):
             queue.submit("local", "synthetic-ref", INTERACTIVE, "comment", {"_eventDestination": "local"})
             restored = AdmissionQueue(journal=Journal(root, "synthetic-runner"))
             self.assertEqual(restored.claim_next(0, 2, True, hub_blocked=True).key, "local")
+
+    def test_legacy_reclaim_persists_proven_scope_before_later_runtime_changes(self):
+        from app.services import local_base
+        task_id = 'chat-legacy-upgrade-fixture'
+        ref = dispatch_identity.execution_ref('chat:' + task_id + ':qwen')
+        with tempfile.TemporaryDirectory() as root, patch.object(local_base, '_STORE', root), \
+                patch.dict(local_base._RUNS, {}, clear=True):
+            archive = Path(root, ref, 'meta.json')
+            archive.parent.mkdir()
+            archive.write_text(json.dumps({'cli': 'qwen', 'taskId': task_id, 'state': 'done',
+                                           'ws': root, 'seq': 0}), encoding='utf-8')
+            local_base.reclaim()
+            recovered = local_base._RUNS[ref]
+            self.assertEqual(recovered['eventDestination'], 'local')
+            self.assertEqual(json.loads(archive.read_text())['eventDestination'], 'local')
+            # A later executor change retains the recovered event owner.
+            recovered['cli'] = 'opencode'
+            local_base._save_meta(ref)
+            local_base._RUNS.clear()
+            local_base.reclaim()
+            self.assertTrue(runner_event_scope.is_local(local_base._RUNS[ref], ref))
+            self.assertEqual(local_base._RUNS[ref]['cli'], 'opencode')
+
+    def test_reclaim_never_promotes_ambiguous_or_explicit_nonlocal_routes(self):
+        from app.services import local_base
+        for destination in ('missing', 'hub', 'unknown', '', None, False):
+            with self.subTest(destination=destination), tempfile.TemporaryDirectory() as root, \
+                    patch.object(local_base, '_STORE', root), patch.dict(local_base._RUNS, {}, clear=True):
+                task_id = 'chat-nonlocal-upgrade-fixture'
+                ref = dispatch_identity.execution_ref('chat:' + task_id + ':qwen')
+                data = {'cli': 'qwen', 'taskId': task_id, 'state': 'done', 'ws': root, 'seq': 0}
+                if destination == 'missing':
+                    ref = 'ambiguous-runner-reference'
+                else:
+                    data['eventDestination'] = destination
+                archive = Path(root, ref, 'meta.json')
+                archive.parent.mkdir()
+                archive.write_text(json.dumps(data), encoding='utf-8')
+                local_base.reclaim()
+                recovered = local_base._RUNS[ref]
+                self.assertFalse(runner_event_scope.is_local(recovered, ref))
+                self.assertFalse(runner_event_scope.restore_destination(recovered, ref))
+                local_base._save_meta(ref)
+                saved = json.loads(archive.read_text())
+                if destination == 'missing':
+                    self.assertNotIn('eventDestination', recovered)
+                    self.assertNotIn('eventDestination', saved)
+                else:
+                    self.assertEqual(saved['eventDestination'], destination)
+
+    def test_snapshot_sources_keep_exact_routing_separate_from_model_privacy(self):
+        from app.services import ai_local, local_base, runner_usage_receipts
+        for destination in ('missing', 'local', 'hub', None, 'unknown'):
+            with self.subTest(destination=destination), tempfile.TemporaryDirectory() as root, \
+                    patch.object(local_base, '_STORE', root), patch.object(ai_local, '_STORE', root):
+                run = {'cli': 'opencode', 'taskId': 'chat-source-fixture', 'state': 'done', 'ws': root,
+                       'model': 'hub-model', 'modelLocalOnly': False, 'seq': 0, 'lines': []}
+                if destination != 'missing':
+                    run['eventDestination'] = destination
+                with patch.dict(local_base._RUNS, {'fixture': run}, clear=True):
+                    sources = [ai_local.console_list_sync({})['runs'][0], ai_local.session_sync({}, 'fixture')]
+                    run['eventDestination'] = 'changed-after-capture'
+                for source in sources:
+                    self.assertIs(source[runner_usage_receipts.PRIVACY_MARKER], False)
+                    if destination == 'missing':
+                        self.assertNotIn('eventDestination', source)
+                    else:
+                        self.assertEqual(source['eventDestination'], destination)
 
     def test_snapshots_skip_local_before_the_bounded_window(self):
         import runner_main

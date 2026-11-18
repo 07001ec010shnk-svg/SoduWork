@@ -43,7 +43,8 @@ pressure does not block local work; CPU, memory and execution concurrency still 
 Queued desktop turns display queue wording instead of model-processing wording.
 
 On upgrade, Runner recognizes old local chat streams only when their alias, runtime
-and deterministic execution reference agree. Confirmed local packets are copied to
+and deterministic execution reference agree. Recovery persists confirmed local routing;
+ambiguous records retain their original routing metadata. Confirmed local packets are copied to
 private `local-events-*.archive` recovery files before removal from the active outbox;
 Windows payloads retain DPAPI protection. Collection marks are preserved. Ambiguous
 streams and real Hub events remain untouched, and NACK is never treated as ACK.
@@ -61,6 +62,16 @@ Managed Pi execution binds each Runner execution record to its own configuration
 After a Runner restart, recovery terminals bind the same owned history without restoring model credentials or changing its model file. A new managed turn still requires its own model authorization.
 
 To verify this path with a real Runner and Pi subprocess against a disposable authenticated Hub and loopback model, install the client dependencies and run `python3 e2e_pi_dispatch_config.py --output /absolute/evidence/directory` from the backend test environment. The check covers dispatch, follow-up, output files, native terminal recovery after restart, and preservation of personal model configuration. It does not exercise a production model or native desktop UI.
+
+## Concurrent Runner conversations
+
+Desktop-private and Hub RPCs use bounded work, read, discovery and control lanes. A slow discovery or history read cannot occupy the workers reserved for stopping another conversation. Mutations of one execution reference remain ordered across both transports; stopping it invalidates older requests that have not reached durable admission. Requests rejected for transport capacity are explicitly unaccepted and may be retried with the same business ID. This does not change account authorization, local-model privacy or the adaptive CPU/memory execution budget.
+
+Process creation runs outside the shared session lock. Cancellation retains the exact launch identity until process-tree cleanup is confirmed; an unconfirmed exit does not free its execution slot or authorize a replacement. Event-retention failures preserve the unsaved batch and retry it before resuming Hub-bound admission. An empty current snapshot or an unrelated acknowledgement cannot discard that batch. Desktop-local admission remains independent of Hub event retention.
+
+Model metadata carries its privacy classification from snapshot capture to remote projection. Switching to a Hub model while a read is pending cannot expose an older local model identity or its token counts. Attachment reads and follow-up workers also retain cancellation ownership until the underlying operation finishes.
+
+Run `python3 -m unittest test_runner_local_rpc test_runner_remote_rpc test_runner_event_delivery test_runner_usage_receipts test_runner_input_cleanup test_local_process_cleanup test_task_goal_stop_races` in the backend test environment. The private-pipe test uses a real Runner process and durable queue with synthetic discovery; process-cleanup tests use isolated operating-system children. These checks do not establish real-provider or Windows acceptance when run on another platform.
 
 ## Offline quality gate
 

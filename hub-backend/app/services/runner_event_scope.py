@@ -34,6 +34,14 @@ def payload_destination(payload: dict) -> str:
                        payload.get("op") == "job.dispatch") else "hub"
 
 
+def restore_destination(run: dict, ref: str) -> bool:
+    """Freeze proven legacy ownership before a later runtime switch changes CLI."""
+    if "eventDestination" in run or not is_local(run, ref):
+        return False
+    run["eventDestination"] = "local"
+    return True
+
+
 def local_bindings(runs: dict[str, dict]) -> dict[str, str]:
     return {ref: str(run["taskId"]) for ref, run in runs.items()
             if run.get("taskId") and is_local(run, ref)}

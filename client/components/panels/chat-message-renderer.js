@@ -924,7 +924,7 @@
     else _updateScrollButton(scrollState);
 
     ChatTools.paintSendButton(el, busy, ctx._messageAttachments, ctx._stopState,
-      st === 'streaming' || execution.running === true || qualityBusy, ctx._sendState);
+      ['streaming', 'queued'].includes(st) || execution.running === true || qualityBusy, ctx._sendState);
 
     if (ctx._snap.modelSelection) ctx._model = ctx._snap.modelSelection.activeModel;
     if (ctx._composerControls) ctx._composerControls.render();

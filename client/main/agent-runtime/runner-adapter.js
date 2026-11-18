@@ -165,6 +165,13 @@ function _status(value) {
   return 'idle';
 }
 
+function _executionTime(value) {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return null;
+  // Native Runner metadata uses epoch seconds. Accept millisecond snapshots
+  // from existing callers, but publish one millisecond clock to the renderer.
+  return Math.min(Date.now(), value > 0 && value < 1e11 ? Math.round(value * 1000) : value);
+}
+
 function _localFiles(items) {
   return (Array.isArray(items) ? items : []).map((item) => {
     const source = String(item && (item.path || item.stagedPath) || '');
@@ -290,13 +297,21 @@ function _snapshot(state) {
   const validating = Boolean((state.pluginGenerationActive || state.pluginGenerationPreparing) &&
     !state.goalPaused && !state.cancelRequested && (state.status === 'idle' ||
       state.pluginGenerationPreparing && state.status === 'aborted'));
-  const executing = state.status === 'streaming' || validating;
-  const running = executing || state.status === 'queued' || Boolean(state.pendingPermissions?.length);
+  const waitingForStart = (state.status === 'streaming' || state.status === 'queued') &&
+    (state.status === 'queued' || state.executionStartedAt === 0);
+  const executing = state.status === 'streaming' && !waitingForStart || validating;
+  const running = executing || Boolean(state.pendingPermissions?.length);
+  const occupied = running || waitingForStart;
   const now = Date.now();
-  const elapsed = state.startedAt ? Math.max(0, (state.turnEndedAt || now) - state.startedAt) : 0;
+  const executionStart = state.executionStartedAt;
+  const elapsedStart = executionStart === null ? state.startedAt : executionStart;
+  const elapsed = elapsedStart ? Math.max(0, (state.turnEndedAt || now) - elapsedStart) : 0;
+  const queueWaitMs = state.submittedAt && executionStart !== null
+    ? Math.max(0, (executionStart || state.turnEndedAt || now) - state.submittedAt) : null;
   const active = state.tools.find((tool) => tool.state === 'running') || null;
   const latestProgressAt = Math.max(
-    Number(state.lastActivityAt || state.startedAt || now),
+    Number(state.lastActivityAt || elapsedStart || now),
+    Number(executionStart || 0),
     Number(active && (active.lastProgressAt || active.startedAt) || 0),
   );
   const idleMs = executing ? Math.max(0, now - latestProgressAt) : 0;
@@ -352,12 +367,18 @@ function _snapshot(state) {
     execution: {
       configured: state.goalVisible,
       visible: state.goalVisible,
-      active: running,
+      active: occupied,
       stopped: state.status === 'aborted' && !state.goalPaused,
       running,
       step: state.taskGoal?.steps ?? state.step,
       maxSteps: state.taskGoal?.maxSteps ?? Number(state.maxSteps || 0),
       elapsedMs: state.taskGoal?.elapsedMs ?? elapsed,
+      ...(state.taskGoal ? { elapsedObservedAt: state.taskGoalElapsedAt || null } : {}),
+      executionStartedAt: executionStart,
+      submittedAt: state.submittedAt || null,
+      waitingForStart,
+      queueWaitMs,
+      startupWaitSince: state.startupWaitSince || null,
       budgetMs: state.taskGoal?.budgetMs ?? Math.max(0, Number(state.budgetMinutes || 0) * 60000),
       paused: state.goalPaused,
       limitRequest: state.goalLimit ? { ...state.goalLimit,
@@ -373,7 +394,7 @@ function _snapshot(state) {
       queueClass: String(state.queueClass || ''),
       longRunning: Boolean(executing && active &&
         now - Number(active.startedAt || now) >= toolGuard.SOFT_NOTICE_MS),
-      stalled: Boolean(executing && state.startedAt &&
+      stalled: Boolean(executing && elapsedStart &&
         idleMs >= toolGuard.STALL_NOTICE_MS),
       idleMs,
       tool: active ? {
@@ -398,9 +419,9 @@ function _snapshot(state) {
       harness: {
         schemaVersion: 1,
         runId: state.runnerRef,
-        node: state.status === 'queued' ? 'queue' : (executing ? 'execute' : 'deliver'),
+        node: state.status === 'queued' ? 'queue' : (waitingForStart ? 'prepare' : (executing ? 'execute' : 'deliver')),
         phase: state.goalPaused ? 'paused' : state.goalVisible && state.taskGoal ? state.taskGoal.status : state.status === 'queued' ? 'queued' :
-          (executing ? 'working' : (state.status === 'idle' ? 'completed' : 'blocked')),
+          (waitingForStart ? 'starting' : (executing ? 'working' : (state.status === 'idle' ? 'completed' : 'blocked'))),
         state: state.status,
         decision: '', reason: state.statusText,
         attempts: state.round, iteration: state.taskGoal?.steps ?? state.step,
@@ -559,7 +580,8 @@ async function createRunnerHandle(request, defaults, initialSession) {
     completion: null,
     runtimeError: '',
     protocolIssue: null,
-    seq: 0, step: 0, round: 1, startedAt: 0, updatedAt: Date.now(), lastActivityAt: 0,
+    seq: 0, step: 0, round: 1, startedAt: 0, submittedAt: 0, executionStartedAt: null, startupWaitSince: 0,
+    updatedAt: Date.now(), lastActivityAt: 0,
     started: resumeNative, dispatchReady: resumeNative,
     cancelRequested: false, manualStopRequested: false, stopSent: false,
     queuePosition: 0, queueClass: '', turnSerial: 0,
@@ -1022,7 +1044,12 @@ async function createRunnerHandle(request, defaults, initialSession) {
       const recovered = state.recoveryRequired;
       state.reconnectSince = 0;
       state.reconnectAttempts = 0;
-      if (Number(data.executionStartedAt) > 0) void turnQueue.markStarted();
+      // A running admission can still be preparing the native process. Only
+      // the executor's timestamp starts model execution and its visible clock.
+      state.executionStartedAt = _executionTime(data.executionStartedAt) ?? (data.status === 'queued' ? 0 : null);
+      if (data.status === 'queued') state.startupWaitSince = 0;
+      else if (state.executionStartedAt === 0) state.startupWaitSince ||= Date.now();
+      if (state.executionStartedAt > 0) void turnQueue.markStarted();
       if (data.authorizationRequired && !readOnly) {
         const authorization = await runtime.rpc('job.authorize', {
           ref: state.runnerRef,
@@ -1157,7 +1184,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
         state.statusText = '等待权限确认';
       } else if (state.status === 'queued') {
         state.statusText = state.queuePosition > 0
-          ? '\u6392\u961f\u4e2d \u00b7 \u524d\u9762 ' + state.queuePosition + ' \u9879'
+          ? '\u6392\u961f\u4e2d \u00b7 \u7b2c ' + state.queuePosition + ' \u9879'
           : '\u6392\u961f\u4e2d';
       } else if (state.runtimeError && state.status !== 'streaming') {
         state.status = 'unreachable';
@@ -1277,6 +1304,10 @@ async function createRunnerHandle(request, defaults, initialSession) {
       ? displayName + ' 正在理解并开始工作…' : displayName + ' 正在理解你的问题…';
     messageStream.finish();
     state.startedAt = Date.now();
+    state.submittedAt = state.startedAt;
+    state.executionStartedAt = 0;
+    state.startupWaitSince = state.startedAt;
+    state.queuePosition = 0;
     state.turnEndedAt = 0;
     state.runtimeError = '';
     state.protocolIssue = null;
@@ -1351,7 +1382,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
       state.queueClass = String(data.queueClass || '');
       if (state.status === 'queued') {
         state.statusText = state.queuePosition > 0
-          ? '\u6392\u961f\u4e2d \u00b7 \u524d\u9762 ' + state.queuePosition + ' \u9879'
+          ? '\u6392\u961f\u4e2d \u00b7 \u7b2c ' + state.queuePosition + ' \u9879'
           : '\u6392\u961f\u4e2d';
       }
       poll();
@@ -1392,7 +1423,13 @@ async function createRunnerHandle(request, defaults, initialSession) {
       ? '已收到，' + displayName + ' 将按顺序继续…'
       : '已收到，' + displayName + ' 正在理解这句话…';
     messageStream.finish();
-    if (!repairing) state.startedAt = Date.now();
+    if (!repairing) {
+      state.startedAt = Date.now();
+      state.submittedAt = state.startedAt;
+      state.executionStartedAt = 0;
+      state.startupWaitSince = state.startedAt;
+      state.queuePosition = 0;
+    }
     state.turnEndedAt = 0;
     emit('started');
     state.runtimeError = '';
@@ -1450,7 +1487,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
         state.queueClass = String(data.queueClass || state.queueClass || '');
         if (state.status === 'queued') {
           state.statusText = state.queuePosition > 0
-            ? '\u6392\u961f\u4e2d \u00b7 \u524d\u9762 ' + state.queuePosition + ' \u9879'
+            ? '\u6392\u961f\u4e2d \u00b7 \u7b2c ' + state.queuePosition + ' \u9879'
             : '\u6392\u961f\u4e2d';
         }
         if (state.timer) clearTimeout(state.timer);

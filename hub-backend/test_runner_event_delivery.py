@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from test_handoff_target_diagnostics import TargetDiagnosticsTests as _Base
 from sqlalchemy import insert, select
@@ -473,7 +473,213 @@ class DurableDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((row.delivery_seq, len(events)), (1, 1))
 
 
+class CaptureRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    def machine(self, root, *, max_packets=4096):
+        machine = runner_main.Runner.__new__(runner_main.Runner)
+        machine._snap_lock, machine._session_marks = asyncio.Lock(), {}
+        machine._event_outbox = Outbox(root, "capture-recovery", max_packets=max_packets)
+        machine._outbox_blocked = False
+        machine._session_ack = True
+        machine._shutdown_event = asyncio.Event()
+        machine._session_snapshots = Mock(return_value=([], []))
+        return machine
+
+    async def capture(self, machine, attempts=1):
+        machine._shutdown_event.clear()
+        remaining = attempts
+
+        async def next_attempt(_delay):
+            nonlocal remaining
+            remaining -= 1
+            if not remaining:
+                machine._shutdown_event.set()
+
+        with patch.object(runner_main.asyncio, "sleep", side_effect=next_attempt):
+            await machine._capture_loop()
+
+    async def test_transient_collection_failure_recovers_even_without_new_events(self):
+        with tempfile.TemporaryDirectory() as root:
+            machine = self.machine(root)
+            machine._session_snapshots.side_effect = [OSError("temporary read failure"), ([], [])]
+            await self.capture(machine)
+            self.assertTrue(machine._outbox_blocked)
+            self.assertFalse(machine._event_outbox.at_capacity())
+            await self.capture(machine)
+            self.assertFalse(machine._outbox_blocked)
+            self.assertEqual(machine._event_outbox.pending(), [])
+
+    async def test_empty_collection_cannot_bypass_a_known_uncommitted_event(self):
+        with tempfile.TemporaryDirectory() as root:
+            machine = self.machine(root)
+            machine._session_snapshots.side_effect = [
+                ([snapshot()], [("fixture-ref", 1, "running")]), ([], []), ([], []), ([], [])]
+            with patch.object(machine._event_outbox, "append", side_effect=OSError("temporary write failure")):
+                await self.capture(machine, attempts=2)
+            self.assertTrue(machine._outbox_blocked)
+            self.assertFalse(machine._event_outbox.at_capacity())
+            self.assertEqual(machine._session_marks, {})
+            self.assertEqual(machine._event_outbox.pending(), [])
+            await self.capture(machine)
+            self.assertEqual([packet["snapshot"] for packet in machine._event_outbox.pending()], [snapshot()])
+            self.assertEqual(machine._session_marks, {"fixture-ref": (1, "running")})
+            self.assertFalse(machine._outbox_blocked)
+
+    async def test_partial_batch_retries_only_uncommitted_events_before_unblocking(self):
+        with tempfile.TemporaryDirectory() as root:
+            machine = self.machine(root)
+            first, second = snapshot(ref="first"), snapshot(ref="second")
+            machine._session_snapshots.side_effect = [
+                ([first, second], [("first", 1, "running"), ("second", 1, "running")]), ([], [])]
+            append = machine._event_outbox.append
+
+            def fail_second(item, mark):
+                if item["ref"] == "second":
+                    raise OSError("temporary second write failure")
+                append(item, mark)
+
+            with patch.object(machine._event_outbox, "append", side_effect=fail_second):
+                await self.capture(machine)
+            self.assertTrue(machine._outbox_blocked)
+            self.assertEqual(machine._session_marks, {"first": (1, "running")})
+            self.assertEqual([packet[1]["ref"] for packet in machine._event_outbox.replay_pending()], ["first"])
+            await self.capture(machine)
+            self.assertFalse(machine._outbox_blocked)
+            self.assertEqual(machine._session_marks, {"first": (1, "running"), "second": (1, "running")})
+            self.assertEqual([packet[1]["ref"] for packet in machine._event_outbox.replay_pending()],
+                             ["first", "second"])
+
+    async def test_capacity_probe_failure_recovers_without_repeating_a_committed_event(self):
+        with tempfile.TemporaryDirectory() as root:
+            machine = self.machine(root)
+            machine._session_snapshots.side_effect = [
+                ([snapshot()], [("fixture-ref", 1, "running")]), ([], [])]
+            with patch.object(machine._event_outbox, "at_capacity",
+                              side_effect=[OSError("temporary capacity read failure"), False]):
+                await self.capture(machine)
+                self.assertTrue(machine._outbox_blocked)
+                self.assertEqual(machine._session_marks, {"fixture-ref": (1, "running")})
+                await self.capture(machine)
+            self.assertFalse(machine._outbox_blocked)
+            self.assertEqual(len(machine._event_outbox.replay_pending()), 1)
+
+    async def test_failed_collection_or_full_outbox_keeps_admission_blocked(self):
+        with tempfile.TemporaryDirectory() as root:
+            machine = self.machine(root, max_packets=1)
+            machine._session_snapshots.side_effect = OSError("unresolved archive failure")
+            await self.capture(machine, attempts=2)
+            self.assertTrue(machine._outbox_blocked)
+            self.assertFalse(machine._event_outbox.at_capacity())
+            machine._session_snapshots.side_effect = None
+            machine._session_snapshots.return_value = ([], [])
+            machine._event_outbox.append(snapshot(), ("fixture-ref", 1, "running"))
+            await self.capture(machine)
+            self.assertTrue(machine._outbox_blocked)
+            self.assertTrue(machine._event_outbox.at_capacity())
+            self.assertEqual(len(machine._event_outbox.replay_pending()), 1)
+
+    async def test_ack_does_not_waive_an_unresolved_collection_or_append_failure(self):
+        for append_failure in (False, True):
+            with self.subTest(append_failure=append_failure), tempfile.TemporaryDirectory() as root:
+                machine = self.machine(root)
+                machine.id, machine.boot_id, machine.ws = "fixture-runner", "fixture-boot", object()
+                machine._delivery_attempts = {}
+                machine._admission_wake = asyncio.Event()
+                machine._event_outbox.append(snapshot(ref="retained"), ("retained", 1, "running"))
+                packet = machine._event_outbox.pending()[0]
+                if append_failure:
+                    machine._session_snapshots.return_value = (
+                        [snapshot()], [("fixture-ref", 1, "running")])
+                    with patch.object(machine._event_outbox, "append", side_effect=OSError("write failure")):
+                        await self.capture(machine)
+                else:
+                    machine._session_snapshots.side_effect = OSError("read failure")
+                    await self.capture(machine)
+                ack = {**packet, "op": "session.ack", "version": 1,
+                       "runnerId": machine.id, "bootId": machine.boot_id}
+                await machine._queue_message(ack, machine.ws)
+                self.assertFalse(machine._event_outbox.at_capacity())
+                self.assertEqual(machine._event_outbox.pending(), [])
+                self.assertTrue(machine._outbox_blocked)
+                machine._session_snapshots.side_effect = None
+                machine._session_snapshots.return_value = ([], [])
+                await self.capture(machine)
+                self.assertFalse(machine._outbox_blocked)
+                self.assertEqual([row[1]["ref"] for row in machine._event_outbox.replay_pending()],
+                                 ["fixture-ref"] if append_failure else [])
+
+    async def test_local_recovery_cannot_waive_unresolved_hub_retention(self):
+        from app.services import ai_local
+        for pending in (False, True):
+            with self.subTest(pending=pending), tempfile.TemporaryDirectory() as root:
+                machine = self.machine(root)
+                machine._admission_wake = asyncio.Event()
+                machine._event_outbox.append(snapshot("local", "chat-local"), ("local", 1, "done"))
+                machine._capture_failed = not pending
+                machine._capture_pending = ([(snapshot("hub", "real-task"), ("hub", 1, "running"))]
+                                            if pending else [])
+                machine._outbox_blocked = True
+                with patch.dict(ai_local._RUNS, {"local": {
+                        "taskId": "chat-local", "eventDestination": "local"}}, clear=True):
+                    await machine._recover_local_events()
+                self.assertEqual(machine._event_outbox.pending(), [])
+                self.assertTrue(machine._outbox_blocked)
+                self.assertEqual(len(machine._capture_pending), int(pending))
+
+    async def test_local_archive_error_during_delivery_cannot_clear_failed_hub_capture(self):
+        from app.services import ai_local
+        with tempfile.TemporaryDirectory() as root:
+            machine = self.machine(root)
+            machine._admission_wake = asyncio.Event()
+            machine._event_outbox.append(snapshot("local", "chat-local"), ("local", 1, "done"))
+            machine._capture_failed, machine._outbox_blocked = True, True
+            machine._delivery_attempts = {}
+            machine.id, machine.boot_id = "runner", "boot"
+            machine._send_strict = AsyncMock()
+            with patch.dict(ai_local._RUNS, {"local": {
+                    "taskId": "chat-local", "eventDestination": "local"}}, clear=True), \
+                    patch.object(machine._event_outbox, "archive_local", side_effect=OSError("archive unavailable")):
+                await machine._deliver_sessions()
+            self.assertTrue(machine._outbox_blocked)
+            self.assertTrue(machine._capture_failed)
+            self.assertEqual(len(machine._event_outbox.pending()), 1)
+            machine._send_strict.assert_not_awaited()
+
+
 class RunnerTransportTests(unittest.IsolatedAsyncioTestCase):
+    async def test_snapshot_scope_keeps_each_source_local_when_current_owner_changes(self):
+        from app.services import ai_local
+        for source in ("console", "session", "current", "hub"):
+            with self.subTest(source=source):
+                machine = runner_main.Runner.__new__(runner_main.Runner)
+                machine._agent_inventory, machine._session_marks = [], {}
+                run = {"ref": "scope-race", "taskId": "real-task", "cli": "opencode",
+                       "state": "done", "seq": 1, "eventDestination": "hub", "model": "hub-model",
+                       "modelLocalOnly": False,
+                       "cfg": {"llm": {"localOnly": False, "model": "hub-model"}}}
+                console = {**run, **({"eventDestination": "local"} if source == "console" else {})}
+
+                def read_session(*args):
+                    if source == "current":
+                        ai_local._RUNS[run["ref"]] = {**run, "eventDestination": "local"}
+                    return {"status": "done", "seq": 1,
+                            "eventDestination": "local" if source == "session" else "hub",
+                            "items": [{"kind": "say", "seq": 1, "text": "business text"}]}
+
+                with patch.dict(ai_local._RUNS, {run["ref"]: run}, clear=True), \
+                        patch.object(ai_local, "console_list_sync", return_value={"runs": [console]}), \
+                        patch.object(ai_local, "session_sync", side_effect=read_session) as read:
+                    snapshots, marks = machine._session_snapshots()
+                if source == "hub":
+                    self.assertEqual([row["ref"] for row in snapshots], [run["ref"]])
+                    self.assertEqual(snapshots[0]["items"][0]["text"], "business text")
+                    self.assertEqual(snapshots[0]["model"], "hub-model")
+                    self.assertEqual([mark[0] for mark in marks], [run["ref"]])
+                else:
+                    self.assertEqual(snapshots, [])
+                    self.assertEqual(marks, [])
+                    if source == "console":
+                        read.assert_not_called()
+
     async def test_restart_recovery_frees_local_packets_and_never_recaptures_them(self):
         from app.services import ai_local, dispatch_identity
         with tempfile.TemporaryDirectory() as root:

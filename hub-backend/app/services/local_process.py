@@ -12,13 +12,14 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import nullcontext
 from collections.abc import Callable
 
 from . import local_spool
 from .local_base import (
     _HARD_LIMIT_S,
     _IDLE_LIMIT_S,
+    _LAUNCH_TREE_UNCONFIRMED,
+    _LAUNCH_TREE_UNCONFIRMED_ERROR,
     _LOCK,
     _RUNS,
     _THREADS,
@@ -263,6 +264,101 @@ def spawn(
                 return
         original_finish(ref, code, term, hard_error)
 
+    def launch_cancelled(current) -> bool:
+        return bool(current.get('_workerIdentity') is not owner
+                    or current.get('state') != 'running' or current.get('stopping')
+                    or goal_guarded and goal_owned_turn and not local_task_goal.active(current))
+
+    def close_broker() -> None:
+        from . import access_broker
+        with _LOCK:
+            owned = (_RUNS.get(ref) or {}).get('_workerIdentity') is owner
+        # The broker takes its own condition locks and may publish run state.
+        # Never hold the global run lock while shutting its server down.
+        if owned:
+            access_broker.close(ref)
+
+    def complete_launch(launch_state, *, stopped=False) -> None:
+        with _LOCK:
+            current = _RUNS.get(ref) or {}
+            if current.get('_workerIdentity') is owner and current.get('_launchPending') is launch_state:
+                current.pop('_launchPending', None)
+                if current.get('_hostCleanup') is launch_state:
+                    current.pop('_hostCleanup', None)
+            launch_state['stopped'] = stopped
+            launch_state['done'].set()
+
+    def cancel_launched_process(proc, launch_state) -> None:
+        # Popen may block in the OS. A stop records intent while it is pending,
+        # then this worker owns cleanup of the exact process it finally returns.
+        from .local_stream import _kill_pid_tree
+        with _LOCK:
+            current = _RUNS.get(ref) or {}
+            owned = current.get('_workerIdentity') is owner
+            if owned:
+                current['_hostCleanup'] = launch_state
+        if owned:
+            try:
+                _save_meta(ref)
+            except Exception as exc:  # noqa: BLE001 - Persistence failure must not bypass process cleanup.
+                log.warning('Cancelled launch state could not be saved: %s', type(exc).__name__)
+        def terminate():
+            try:
+                with _LOCK:
+                    owned = (_RUNS.get(ref) or {}).get('_workerIdentity') is owner
+                if owned:
+                    killed = kill_tree(ref, expected_pid=proc.pid, expected_proc=proc)
+                    with _LOCK:
+                        owned = (_RUNS.get(ref) or {}).get('_workerIdentity') is owner
+                    if killed or owned:
+                        return bool(killed)
+                return _kill_pid_tree(proc.pid, proc)
+            except Exception as exc:  # noqa: BLE001 - A failed kill never establishes exit.
+                log.warning('Cancelled launch termination was not confirmed: %s', type(exc).__name__)
+                return False
+        launch_state['retry'].clear()
+        tree_stopped = terminate()
+        unconfirmed_saved = False
+        while True:
+            try:
+                exited = proc.poll() is not None
+                if tree_stopped and exited:
+                    break
+            except (OSError, subprocess.SubprocessError):
+                exited = False
+            if not tree_stopped and exited:
+                launch_state['unverifiable'] = True
+                launch_state['error'] = _LAUNCH_TREE_UNCONFIRMED_ERROR
+            with _LOCK:
+                current = _RUNS.get(ref) or {}
+                if current.get('_workerIdentity') is owner:
+                    current['error'] = launch_state.get('error') or 'Cancelled execution launch cleanup is still pending'
+                    if launch_state.get('unverifiable'):
+                        current['failureKind'] = _LAUNCH_TREE_UNCONFIRMED
+                elif launch_state.get('unverifiable'):
+                    return False
+            if launch_state.get('unverifiable') and not unconfirmed_saved:
+                try:
+                    _save_meta(ref)
+                except Exception as exc:  # noqa: BLE001 - Keep the in-memory fence even if archival fails.
+                    log.warning('Unconfirmed launch state could not be saved: %s', type(exc).__name__)
+                unconfirmed_saved = True
+            if launch_state['retry'].wait(.1):
+                launch_state['retry'].clear()
+                # Once the host is gone, a new PID-only check cannot reconstruct
+                # the subtree whose cleanup failed. Never promote that to exit.
+                if not launch_state.get('unverifiable'):
+                    tree_stopped = terminate() or tree_stopped
+        with _LOCK:
+            current = _RUNS.get(ref) or {}
+            if current.get('_workerIdentity') is owner and current.get('_hostCleanup') is launch_state:
+                current.pop('_hostCleanup', None)
+        try:
+            proc.stdin.close()
+        except (AttributeError, OSError, ValueError):
+            pass
+        return True
+
     def worker() -> None:
         gate_error = gate_check(prof or {}, cfg or {})
         if gate_error:
@@ -298,11 +394,12 @@ def spawn(
             return
 
         spool: dict = {}
+        launch_state = None
         try:
             spool, launch = local_spool.prepare(_store_dir(ref), argv, ws)
             with _LOCK:
                 prepared = _RUNS.get(ref)
-                if prepared is not None:
+                if prepared is not None and prepared.get('_workerIdentity') is owner:
                     prepared['stream'] = spool
                     prepared['terminal'] = {}
             _save_meta(ref)
@@ -310,47 +407,66 @@ def spawn(
             # own extraction lifetime instead of sharing the parent's _MEIPASS.
             if getattr(sys, 'frozen', False):
                 env['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
-            # Publish the new PID atomically with the last cancellation check.
-            # A stop during preparation must neither miss this process nor let
-            # a paused goal launch a replacement after killing the old PID.
-            with _LOCK if goal_guarded else nullcontext():
+            # Register a per-launch fence, not a global lock around an OS call.
+            # Stop can record cancellation without blocking unrelated sessions.
+            with _LOCK:
                 current = _RUNS.get(ref) or {}
-                cancelled = goal_guarded and (
-                    current.get('_workerIdentity') is not owner
-                    or current.get('state') != 'running' or current.get('stopping')
-                    or goal_owned_turn and not local_task_goal.active(current))
+                cancelled = launch_cancelled(current)
                 if cancelled:
                     if current.get('_workerIdentity') is owner and current.get('state') == 'running':
                         current['stopping'] = True
-                    proc = None
                 else:
-                    proc = subprocess.Popen(
-                        launch,
-                        stdin=subprocess.PIPE,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        cwd=ws,
-                        env=env,
-                        bufsize=0,
-                        **({} if _WIN else {'start_new_session': True}),
-                    )
-                    if goal_guarded:
+                    launch_state = {'owner': owner, 'done': threading.Event(),
+                                    'retry': threading.Event(), 'stopped': False}
+                    current['_launchPending'] = launch_state
+                    current['_hostCleanup'] = launch_state
+            proc = None
+            if not cancelled:
+                proc = subprocess.Popen(
+                    launch,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    cwd=ws,
+                    env=env,
+                    bufsize=0,
+                    **({} if _WIN else {'start_new_session': True}),
+                )
+                with _LOCK:
+                    current = _RUNS.get(ref) or {}
+                    if current.get('_workerIdentity') is owner:
                         current.update(pid=proc.pid, proc=proc)
+                    cancelled = launch_cancelled(current)
+                    if not cancelled:
+                        complete_launch(launch_state)
+                if cancelled:
+                    if not cancel_launched_process(proc, launch_state):
+                        complete_launch(launch_state)
+                        return
+                    close_broker()
+                    local_spool.cleanup(_store_dir(ref), spool)
+                    finish(ref, 0, {}, '')
+                    complete_launch(launch_state, stopped=True)
+                    return
             if proc is None:
-                access_broker.close(ref)
+                close_broker()
                 local_spool.cleanup(_store_dir(ref), spool)
                 finish(ref, 0, {}, '')
                 return
         except Exception as exc:  # noqa: BLE001
-            access_broker.close(ref)
+            close_broker()
             if spool:
                 local_spool.cleanup(_store_dir(ref), spool)
-            finish(ref, 1, {}, '跑不起来（%s）' % type(exc).__name__)
+            with _LOCK:
+                cancelled = launch_cancelled(_RUNS.get(ref) or {})
+            finish(ref, 0 if cancelled else 1, {}, '' if cancelled else '跑不起来（%s）' % type(exc).__name__)
+            if launch_state is not None:
+                complete_launch(launch_state, stopped=cancelled)
             return
 
         with _LOCK:
             run = _RUNS.get(ref)
-            if run is not None:
+            if run is not None and run.get('_workerIdentity') is owner:
                 run['pid'] = proc.pid
                 run['proc'] = proc
                 run['lastOut'] = time.time()
@@ -387,9 +503,9 @@ def spawn(
         )
         _capture_started(ref, spool, owner)
         if outcome == 'cancelled':
-            access_broker.close(ref)
+            close_broker()
             return
-        access_broker.close(ref)
+        close_broker()
         hard_error = '' if code is not None else '执行进程退出了，但没有写回可靠的退出状态'
         if (cfg or {}).get('accessPolicy'):
             # A policy change may follow immediately. Join the trusted sidecar
