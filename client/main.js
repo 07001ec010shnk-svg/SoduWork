@@ -592,7 +592,10 @@ function _trayMenu() {
   ];
 }
 
+const _quitRelaunch = require('./main/quit-relaunch.cjs').create(app);
+
 function _quitSoduWork(reason) {
+  _quitRelaunch.markQuitting();
   if (tray) { tray.destroy(); tray = null; }
   _lifecycleDiagnostics.setExitReason(reason);
   app.quit();
@@ -631,6 +634,8 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv, workingDirectory, additionalData) => {
+    // A window opened now would close with this exiting process.
+    if (_quitRelaunch.deferLaunch()) return;
     if (_linuxStartup.focusRecovery(app)) return;
     if (_fileOpen.enqueue(_fileOpenModule.instanceFiles(
       argv, workingDirectory, app.isPackaged, additionalData))) return;
