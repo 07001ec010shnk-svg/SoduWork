@@ -401,7 +401,7 @@ export const api = {
   devFlow: () => call('GET', '/admin/dev-flow'),
   previewDevFlow: (b) => call('POST', '/admin/dev-flow/preview', b),
   automationTemplates: () => call('GET', '/admin/automation-templates'),
-  saveAutomationTemplates: (items) => call('PUT', '/admin/automation-templates', { items }),
+  saveAutomationTemplates: (items, revision) => call('PUT', '/admin/automation-templates', { items, revision }),
   // Integrations and bindings.
   integrations: () => call('GET', '/admin/integrations'),
   createIntegration: (b) => call('POST', '/admin/integrations', b),
