@@ -23,16 +23,36 @@ def runner_data_root() -> str:
 
 
 def prepare_environment(env: dict, data_root: str | None = None) -> None:
-    """Keep personal global config out; preserve native data and injected config."""
-    root = Path(data_root or runner_data_root())
-    config_home = root / "agents" / "opencode" / "config"
-    config_home.mkdir(parents=True, exist_ok=True)
+    """Isolate managed state, retaining only a read-only legacy migration source."""
+    # Pin the root before replacing XDG_DATA_HOME. The standalone ACP child must
+    # use exactly the parent's database, including on Linux with a custom XDG root.
+    root = Path(data_root or env.get("SODUWORK_OPENCODE_DATA_ROOT") or runner_data_root()).absolute()
+    base = root / "agents" / "opencode"
+    database = base / "data" / "opencode" / "opencode.db"
+    names = {key.upper(): value for key, value in env.items()}
+    previous = str(names.get("OPENCODE_DB") or "").strip()
+    same_database = (os.path.isabs(previous) and
+                     os.path.normcase(os.path.normpath(previous)) == os.path.normcase(os.path.normpath(database)))
+    if not same_database:
+        home = str((env.get("USERPROFILE") if os.name == "nt" else env.get("HOME")) or "").strip()
+        home = home or os.path.expanduser("~")
+        legacy = previous or str(Path(names.get("XDG_DATA_HOME") or Path(home) / ".local" / "share")
+                                 / "opencode" / "opencode.db")
+        env["SODUWORK_OPENCODE_LEGACY_DB"] = legacy
+    env["SODUWORK_OPENCODE_DATA_ROOT"] = str(root)
     # Explicit native overrides bypass XDG_CONFIG_HOME. Managed turns must not
     # merge personal providers, plugins, or settings into their injected config.
     for key in list(env):
-        if key.upper() in {"OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR"}:
+        if key.upper() in {"OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_DB",
+                           "XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"}:
             del env[key]
-    env["XDG_CONFIG_HOME"] = str(config_home)
+    for key, folder in (("XDG_CONFIG_HOME", "config"), ("XDG_DATA_HOME", "data"),
+                        ("XDG_STATE_HOME", "state"), ("XDG_CACHE_HOME", "cache")):
+        path = base / folder
+        path.mkdir(parents=True, exist_ok=True)
+        env[key] = str(path)
+    database.parent.mkdir(parents=True, exist_ok=True)
+    env["OPENCODE_DB"] = str(database)
 
 
 def config_error_message(message: str) -> str:

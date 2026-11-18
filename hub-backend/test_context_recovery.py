@@ -274,6 +274,10 @@ class ContextRecoveryTests(unittest.TestCase):
     def test_opencode_cleanup_does_not_override_success(self):
         ref, row, _ = self.runtime
         import urllib.request
+        from app.services import opencode_session_migration
+        # This test isolates compaction cleanup; history migration has its own
+        # launch-boundary and native-history regressions.
+        self.mock_attr(opencode_session_migration, "migrate_session", Mock())
         self.mock_attr(ctx, "_opencode_bin", lambda: "fixture")
         self.mock_attr(ctx, "_env_for", lambda *a: {})
         self.mock_attr(ctx.time, "sleep", lambda *a: None)
