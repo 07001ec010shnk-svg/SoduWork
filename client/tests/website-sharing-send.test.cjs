@@ -121,6 +121,51 @@ function otherOutputs(t, documentOnly = false) {
   return { root, api, context: { ref: 'fixture', api } };
 }
 
+for (const failedPosition of [3, 4]) {
+  test('default teammate send excludes a failed website at position ' + failedPosition + ' and delivers every healthy file', async t => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-multiple-websites-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const sites = ['site-a', 'site-b', 'site-c', 'site-d'];
+    const deliverables = sites.map((site, index) => {
+      const directory = path.join(root, site);
+      const script = index + 1 === failedPosition
+        ? path.join(...Array.from({ length: 13 }, (_, i) => 'level-' + i), 'required.js') : 'app.js';
+      fs.mkdirSync(path.dirname(path.join(directory, script)), { recursive: true });
+      fs.writeFileSync(path.join(directory, 'index.html'), '<script src="' + script.replaceAll('\\', '/') + '"></script>');
+      fs.writeFileSync(path.join(directory, script), 'window.fixtureLoaded=' + JSON.stringify(site) + ';');
+      return { path: site + '/index.html', kind: 'website', title: site };
+    });
+    fs.writeFileSync(path.join(root, 'report.csv'), 'name,value\ncomplete,42\n');
+    fs.mkdirSync(path.join(root, '.soduwork'));
+    fs.writeFileSync(path.join(root, '.soduwork/delivery.json'), JSON.stringify({ schemaVersion: 1,
+      deliverables: [...deliverables, { path: 'report.csv', kind: 'document', title: 'Report' }] }));
+    const session = { cwd: root, outputSnapshot: () => outputs.scan(root, 0, 0) };
+    const api = { outputs: async () => ({ ok: true, artifacts: artifacts.decorate('fixture', { items: session.outputSnapshot().delivery.items }) }),
+      artifactAction: (ref, id, action) => artifacts.action(session, ref, id, action, {}) };
+    assert.deepEqual((await api.outputs()).artifacts.filter(row => row.kind === 'website').map(row => row.relative),
+      sites.map(site => site + '/index.html'));
+    const ui = await sharingCard(t, { root, api });
+    const failed = ui.results().children.find(row => row.tag === 'label' && row.children[1].textContent === 'index.html');
+    assert.ok(failed, 'The failed website must remain visible in the card');
+    assert.equal(failed.children[0].disabled, true);
+    assert.equal(failed.children[0].checked, false);
+    assert.match(ui.results().children.map(row => row.textContent).join('\n'), /nested more than 12 levels/);
+    await ui.send.dispatchEvent({ type: 'click' });
+    assert.equal(ui.sent.length, 1, 'One default send must deliver one message without manual deselection');
+    const healthy = sites.filter((_site, index) => index + 1 !== failedPosition);
+    assert.deepEqual(Array.from(ui.sent[0].files, file => file.name).sort(), [...healthy.map(site => site + '.zip'), 'report.csv'].sort());
+    for (const attachment of ui.sent[0].files) {
+      const bytes = Buffer.from(attachment.data, 'base64');
+      if (attachment.name === 'report.csv') assert.deepEqual(bytes, fs.readFileSync(path.join(root, attachment.name)));
+      else {
+        const extracted = entries(bytes), site = attachment.name.slice(0, -4);
+        assert.deepEqual([...extracted.keys()].sort(), ['app.js', 'index.html']);
+        for (const [name, original] of extracted) assert.deepEqual(original, fs.readFileSync(path.join(root, site, name)));
+      }
+    }
+  });
+}
+
 for (const fromApp of [false, true]) {
   const entry = fromApp ? 'prefilled card' : 'teammate mention';
   for (const selected of ['text', 'csv']) {

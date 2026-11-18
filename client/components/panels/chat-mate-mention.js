@@ -73,15 +73,19 @@
     // Websites are directories, not lone index.html files. The trusted main
     // process packages sibling CSS/JS/assets into one bounded ZIP.
     const websites = files.filter(websiteOutput);
-    for (const website of websites.slice(0, 3)) {
+    for (const [index, website] of websites.entries()) {
       try {
         if (typeof context.api.artifactAction !== 'function') throw Error(uiText('文件夹打包失败'));
         const bundled = await context.api.artifactAction(context.ref, website.artifactId, 'share-related');
         if (!bundled || !bundled.ok || typeof bundled.data !== 'string') throw Error(uiText(bundled?.reason || '文件夹打包失败'));
         const parent = String(website.relative || website.name || '').replace(/[^/]+$/, '');
         files = files.filter(file => file !== website && (!parent || !String(file.relative || '').startsWith(parent)));
+        // Check every website before selecting files, while retaining at most
+        // three ZIP payloads. Later selected websites are packaged again at send.
         files.unshift({ key: 'bundle:' + website.artifactId, name: bundled.name, size: bundled.size,
-          at: bundled.at, inlineData: bundled.data, website: bundled.preview || null, kind: 'website-bundle' });
+          at: bundled.at, website: bundled.preview || null,
+          ...(index < 3 ? { inlineData: bundled.data, kind: 'website-bundle' }
+            : { artifactId: website.artifactId, kind: 'website' }) });
       } catch (error) {
         // A failed website cannot become a bare HTML attachment, but its error
         // must not prevent sharing text or independent healthy outputs.
@@ -115,7 +119,7 @@
       if (file.attachmentId) { prepared.push({ attachmentId: file.attachmentId }); bytes += Number(file.size || 0); continue; }
       if (typeof file.inlineData === 'string') { prepared.push({ name: file.name, data: file.inlineData }); bytes += Number(file.size || 0);
         if (bytes > 24 * 1024 * 1024) throw Error('\u6210\u679c\u5408\u8ba1\u4e0d\u80fd\u8d85\u8fc7 24 MB'); continue; }
-      // Legacy rows and websites beyond the eager packaging shortlist must
+      // Legacy rows and websites beyond the cached packaging shortlist must
       // still use the website action; ordinary sharing would send bare HTML.
       const action = websiteOutput(file) ? 'share-related' : 'share';
       const result = await context.api.artifactAction(context.ref, file.artifactId, action);

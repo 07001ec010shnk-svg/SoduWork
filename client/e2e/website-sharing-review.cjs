@@ -254,6 +254,66 @@ api.pickShareFolder=()=>sharingReviewBridge.pick();outputMode='none';`);
       pickedFolder = null; save();
     }
   }
+  for (const failedPosition of [3, 4]) {
+    folderOnly = false;
+    selected = path.join(scratch, 'default-send-failed-' + failedPosition);
+    const sites = ['site-a', 'site-b', 'site-c', 'site-d'];
+    const deliverables = sites.map((site, index) => {
+      const directory = path.join(selected, site);
+      const script = index + 1 === failedPosition
+        ? path.join(...Array.from({ length: 13 }, (_, i) => 'level-' + i), 'required.js') : 'app.js';
+      fs.mkdirSync(path.dirname(path.join(directory, script)), { recursive: true });
+      fs.writeFileSync(path.join(directory, 'index.html'), '<script src="' + script.replaceAll('\\', '/') + '"></script>');
+      fs.writeFileSync(path.join(directory, script), 'window.fixtureLoaded=' + JSON.stringify(site) + ';');
+      return { path: site + '/index.html', kind: 'website', title: site };
+    });
+    fs.writeFileSync(path.join(selected, 'report.csv'), 'name,value\ncomplete,42\n');
+    fs.mkdirSync(path.join(selected, '.soduwork'));
+    fs.writeFileSync(path.join(selected, '.soduwork/delivery.json'), JSON.stringify({ schemaVersion: 1,
+      deliverables: [...deliverables, { path: 'report.csv', kind: 'document', title: 'Report' }] }));
+    assert.deepEqual(artifacts.decorate('chat-a', { items: session().outputSnapshot().delivery.items })
+      .filter(row => row.kind === 'website').map(row => row.relative), sites.map(site => site + '/index.html'));
+    const before = new Set((await events()).map(event => event.messageId || event.id));
+    await js(`document.getElementById('status').textContent='';input.value='@林';input.selectionStart=input.value.length;input.dispatchEvent(new Event('input',{bubbles:true}));`);
+    await until(`Boolean(document.querySelector('.nmate-menu .nplugin-option'))`);
+    await js(`document.querySelector('.nmate-menu .nplugin-option').click()`);
+    await until(`!document.querySelector('.nmate-card-send').disabled`);
+    assert.equal(await js(`Boolean(document.querySelector('.nmate-results [role="alert"]'))`), true);
+    assert.equal(await js(`Array.from(document.querySelectorAll('.nmate-result-row')).some(row=>
+      row.querySelector('span').textContent==='index.html'&&row.querySelector('input').disabled&&!row.querySelector('input').checked)`), true);
+    assert.equal(await js(`document.querySelectorAll('.nmate-results input:checked').length`), 4);
+    await js(`document.querySelector('.nmate-card-send').click()`);
+    await until(`document.querySelector('.nmate-card').hidden`);
+    const outgoing = (await events()).filter(event => !before.has(event.messageId || event.id));
+    assert.equal(outgoing.length, 1); assert.equal(outgoing[0].attachments.length, 4);
+    const healthy = sites.filter((_site, index) => index + 1 !== failedPosition), names = [];
+    for (const attachment of outgoing[0].attachments) {
+      const metadata = await fetch(base + '/api/v1/team/message-files/' + attachment.id, { headers: { 'X-Test-User': 'recipient' } });
+      assert.equal(metadata.status, 200);
+      const file = await metadata.json(); names.push(file.filename);
+      const denied = await fetch(base + '/api/v1/team/message-files/' + attachment.id, { headers: { 'X-Test-User': 'other' } });
+      assert.equal(denied.status, 404);
+      const response = await fetch(base + file.url); assert.equal(response.status, 200);
+      const bytes = Buffer.from(await response.arrayBuffer());
+      if (file.filename === 'report.csv') assert.deepEqual(bytes, fs.readFileSync(path.join(selected, file.filename)));
+      else {
+        const extracted = unpack(bytes), site = file.filename.slice(0, -4);
+        assert.deepEqual([...extracted.keys()].sort(), ['app.js', 'index.html']);
+        for (const [name, original] of extracted) assert.deepEqual(original, fs.readFileSync(path.join(selected, site, name)));
+        const received = path.join(scratch, 'received-' + failedPosition + '-' + site);
+        fs.mkdirSync(received);
+        for (const [name, original] of extracted) fs.writeFileSync(path.join(received, name), original);
+        recipient = new BrowserWindow({ show: false, webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false } });
+        await recipient.loadFile(path.join(received, 'index.html'));
+        assert.equal(await recipient.webContents.executeJavaScript('window.fixtureLoaded'), site);
+        recipient.destroy(); recipient = null;
+      }
+    }
+    assert.deepEqual(names.sort(), [...healthy.map(site => site + '.zip'), 'report.csv'].sort());
+    report.cases.push({ entry: 'default-mention', scenario: 'failed-website-position-' + failedPosition,
+      attachments: names, messages: 1, exactBytes: true, recipientPagesExecuted: true, failedWebsiteExcluded: true, status: 'passed' });
+    save();
+  }
   report.status = 'passed';
 }
 main().catch(error => { report.status = 'failed'; report.error = String(error.stack || error); })
