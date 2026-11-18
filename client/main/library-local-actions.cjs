@@ -1,6 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
-const { safeFilename } = require('./attachment-files.js');
+const { safeFilename, canOpenWithSystem } = require('./attachment-files.js');
 const { error, clone, ITEM, FOLDER, MAX_BYTES } = require('./library-local-store.cjs');
 const has = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 const now = () => new Date().toISOString();
@@ -36,6 +36,30 @@ const nameKey = value => String(value || '').normalize('NFC').toLowerCase();
 function visibleFilename(row) {
   const title = name(row.title, row.filename), suffix = row.filename.match(/(\.[^./\\]+)$/)?.[1] || '';
   return name(title.toLowerCase().endsWith(suffix.toLowerCase()) ? title : title + suffix, row.filename);
+}
+function validCompleteFilename(value) {
+  return typeof value === 'string' && !!value && value === value.trim() && value.length <= 160 &&
+    Buffer.byteLength(value, 'utf8') <= 180 && value.isWellFormed() && safeFilename(value, '') === value;
+}
+function filenameIssues(index) {
+  // Report legacy damage without changing the index or guessing a lost extension.
+  // Count destinations once, including folders, even when the list is filtered.
+  const counts = new Map(), keys = new Map(), issues = new Map();
+  const key = (folderId, filename) => JSON.stringify([folderId || null, nameKey(filename)]);
+  const add = value => counts.set(value, (counts.get(value) || 0) + 1);
+  for (const row of index.folders) add(key(row.parentId, row.name));
+  for (const row of index.items) if (!row.deletedAt && typeof row.filename === 'string') {
+    const value = key(row.folderId, visibleFilename(row)); keys.set(row.id, value); add(value);
+  }
+  for (const row of index.items) {
+    const filename = row.filename;
+    // Conversation revisions may intentionally share a visible name.
+    if (!row.deletedAt && row.sourceType !== 'conversation' && counts.get(keys.get(row.id)) > 1) issues.set(row.id, 'duplicate');
+    else if (!validCompleteFilename(filename)) issues.set(row.id, 'invalid');
+    else if (filename.length === 160 && !canOpenWithSystem(filename) &&
+      !/\.(pdf|txt|md|markdown|csv|png|jpe?g|gif|webp|svg|bmp|avif|mp3|mp4|wav|webm|json|xml|ya?ml|log|css|js|ts|py|ini|toml|bin)$/i.test(filename)) issues.set(row.id, 'check');
+  }
+  return issues;
 }
 function checkItemName(index, row) {
   const key = nameKey(visibleFilename(row));
@@ -152,7 +176,10 @@ async function execute(store, index, action, payload) {
       (scope !== 'favorites' || x.favorite) && (scope !== 'images' || x.kind === 'image') &&
       (!query || (x.title + ' ' + x.filename).toLowerCase().includes(query)));
     items = items.sort((a, b) => ['recommended', 'images', 'trash'].includes(scope) ? String(b.deletedAt || b.updatedAt).localeCompare(a.deletedAt || a.updatedAt) : a.title.localeCompare(b.title));
-    return { ok: true, scope, storage: 'local', folder: current ? publicRow(current) : null, folders, items: items.map(publicRow), trashCount: index.items.filter(x => x.deletedAt).length };
+    const issues = items.length ? filenameIssues(index) : new Map();
+    return { ok: true, scope, storage: 'local', folder: current ? publicRow(current) : null, folders,
+      items: items.map(row => ({ ...publicRow(row), ...(issues.has(row.id) ? { filenameIssue: issues.get(row.id) } : {}) })),
+      trashCount: index.items.filter(x => x.deletedAt).length };
   }
   if (action === 'createFolder' || action === 'updateFolder') {
     const row = action === 'createFolder' ? { id: 'local-folder-' + crypto.randomUUID(), parentId: folder(index, body.parentId)?.id || null,
@@ -259,6 +286,18 @@ async function execute(store, index, action, payload) {
     // Conversation revisions intentionally keep independent same-name versions.
     if (row.sourceType !== 'conversation') checkItemName(index, row);
   } else if (action === 'associateSource') Object.assign(row, source(body));
+  else if (action === 'repairFilename') {
+    if (!validCompleteFilename(body.filename)) throw error('LOCAL_LIBRARY_INVALID', '文件名无效或过长，请缩短名称，不要包含路径。');
+    const old = row._object, previousFilename = row.filename;
+    row.filename = body.filename; row.title = body.filename;
+    checkItemName(index, row);
+    if (row.kind === 'file') row.kind = classify(row.filename, row.contentType);
+    if (row.filename !== previousFilename) {
+      // Use the same staged-copy commit as a normal rename; never edit source bytes.
+      row._object = await store.write(await store.read(row), row.filename, index);
+      index.garbage.push(old);
+    }
+  }
   else if (action === 'updateItem') {
     let filenameChanged = false;
     if (has(body, 'folderId')) row.folderId = folder(index, body.folderId)?.id || null;
@@ -287,7 +326,7 @@ async function execute(store, index, action, payload) {
   row.updatedAt = now(); await store.save(index);
   // A failed old-version cleanup must not turn a successful content commit
   // into a failed save. Its garbage entry remains for a later explicit purge.
-  if (action === 'updateItem' && (has(body, 'content') || has(body, 'title'))) await store.garbageCollect(index).catch(() => {});
+  if (action === 'repairFilename' || (action === 'updateItem' && (has(body, 'content') || has(body, 'title')))) await store.garbageCollect(index).catch(() => {});
   store.guard();
   return { ok: true, item: publicRow(row), ...(action === 'deleteItem' ? { trashed: true } : action === 'restoreItem' ? { restored: true } : {}) };
 }

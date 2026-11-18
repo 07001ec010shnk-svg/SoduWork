@@ -31,6 +31,179 @@ function fixture(t) {
 const create = (f, body = {}) => f.call('createItem', { kind: 'document', title: body.filename ? body.filename.replace(/\.[^.]+$/, '') : '说明', content: '原始内容', format: 'txt', ...body });
 const data = value => Buffer.from(value).toString('base64');
 
+async function legacyItem(f, filename, content, patch = {}) {
+  const { item } = await f.call('upload', { name: require('node:crypto').randomUUID() + '.bin', dataBase64: data(content) });
+  const indexPath = path.join(f.account(), 'index.json'), index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+  const row = index.items.find(row => row.id === item.id), oldPath = path.join(f.account(), row._object);
+  const target = path.join(path.dirname(oldPath), filename);
+  fs.renameSync(oldPath, target);
+  row._object = row._object.slice(0, row._object.lastIndexOf('/') + 1) + filename;
+  Object.assign(row, { filename, title: filename, kind: 'file' }, patch);
+  fs.writeFileSync(indexPath, JSON.stringify(index));
+  return { ...row };
+}
+
+test('legacy extension loss is identified without writes and explicit repair preserves identity, source and bytes', async t => {
+  const f = fixture(t);
+  for (const [legacyName, repaired] of [['a'.repeat(160), 'restored.txt'], ['b'.repeat(158) + '.p', 'restored.pdf']]) {
+    const contents = Buffer.from([0, 1, 255, 13, 10, 42]);
+    const original = await legacyItem(f, legacyName, contents, { sourceType: 'conversation', sessionId: 'old-session',
+      conversationTitle: 'Original work', sourceSessionId: 'old-session', sourceConversationTitle: 'Original work',
+      favorite: true, extra: { outputKeys: ['old-output'], important: 'retained' } });
+    const indexPath = path.join(f.account(), 'index.json'), before = fs.readFileSync(indexPath, 'utf8');
+    const listed = (await f.call('list', { scope: 'all' })).items.find(row => row.id === original.id);
+    assert.equal(listed.filenameIssue, 'check');
+    assert.equal(fs.readFileSync(indexPath, 'utf8'), before, 'diagnosis must not migrate or rewrite the index');
+    await assert.rejects(f.call('openExternal', { id: original.id }), /格式/);
+    const result = (await f.call('repairFilename', { id: original.id, filename: repaired })).item;
+    for (const key of ['id', 'folderId', 'favorite', 'sourceType', 'sourceLabel', 'sessionId', 'conversationTitle',
+      'sourceSessionId', 'sourceConversationTitle', 'extra', 'createdAt', 'size', 'contentType']) {
+      assert.deepEqual(result[key], original[key], key);
+    }
+    assert.equal(result.filename, repaired); assert.equal(result.title, repaired); assert.equal(result.kind, 'document');
+    f.install();
+    const binary = await f.call('readBinary', { id: original.id });
+    assert.equal(binary.name, repaired); assert.deepEqual(Buffer.from(binary.data, 'base64'), contents);
+    await f.call('openExternal', { id: original.id });
+    assert.equal(path.basename(f.opened.at(-1)), repaired);
+    assert.deepEqual(fs.readFileSync(f.opened.at(-1)), contents);
+    const reloaded = (await f.call('list', { scope: 'all' })).items.find(row => row.id === original.id);
+    assert.equal(reloaded.filenameIssue, undefined);
+    assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(indexPath, 'utf8'))).includes('filenameIssue'), false);
+  }
+});
+
+test('ordinary rename still retains the extension, while explicit repair replaces a truncated extension', async t => {
+  const f = fixture(t), original = await legacyItem(f, 'a'.repeat(158) + '.p', 'unchanged');
+  const renamed = (await f.call('updateItem', { id: original.id, title: 'correct.pdf' })).item;
+  assert.equal(renamed.filename, 'correct.pdf.p');
+  assert.equal(renamed.contentType, 'application/octet-stream');
+  const repaired = (await f.call('repairFilename', { id: original.id, filename: 'correct.pdf' })).item;
+  assert.equal(repaired.filename, 'correct.pdf');
+  assert.equal((await f.call('readBinary', { id: original.id })).name, 'correct.pdf');
+  const note = (await create(f, { kind: 'note', filename: 'note.txt' })).item;
+  assert.equal((await f.call('repairFilename', { id: note.id, filename: 'note.md' })).item.kind, 'note');
+});
+
+test('legacy duplicate filenames keep independent bytes and can be repaired one at a time', async t => {
+  const f = fixture(t), filename = 'c'.repeat(156) + '（1）.txt', rows = [];
+  for (let number = 0; number < 2; number++) rows.push(await legacyItem(f, filename, 'version-' + number));
+  let listed = (await f.call('list', { scope: 'all' })).items;
+  assert.ok(listed.every(row => row.filenameIssue === 'duplicate'));
+  for (let number = 0; number < 2; number++) {
+    const binary = await f.call('readBinary', { id: rows[number].id });
+    assert.equal(Buffer.from(binary.data, 'base64').toString(), 'version-' + number);
+    const result = (await f.call('repairFilename', { id: rows[number].id, filename: 'copy-' + number + '.txt' })).item;
+    assert.equal(result.id, rows[number].id);
+  }
+  f.install(); listed = (await f.call('list', { scope: 'all' })).items;
+  assert.ok(listed.every(row => !row.filenameIssue));
+  assert.equal(new Set(listed.map(row => row.filename)).size, 2);
+  for (let number = 0; number < 2; number++) {
+    await f.call('openExternal', { id: rows[number].id });
+    assert.equal(fs.readFileSync(f.opened.at(-1), 'utf8'), 'version-' + number);
+  }
+});
+
+test('filename diagnostics preserve normal extensionless files and intentional conversation revisions', async t => {
+  const f = fixture(t);
+  for (const filename of ['README', '.gitignore', 'unknown.foo', 'a'.repeat(156) + '.txt', '报'.repeat(58) + 'ab.txt']) {
+    await f.call('upload', { name: filename, dataBase64: data('normal') });
+  }
+  await legacyItem(f, 'conversation.txt', 'revision-1', { sourceType: 'conversation' });
+  await legacyItem(f, 'conversation.txt', 'revision-2', { sourceType: 'conversation' });
+  assert.ok((await f.call('list', { scope: 'all' })).items.every(row => !row.filenameIssue));
+  const folder = (await f.call('createFolder', { name: 'taken.txt' })).folder;
+  const conflict = await legacyItem(f, 'TAKEN.txt', 'file conflict');
+  const otherFolder = (await f.call('createFolder', { name: 'separate' })).folder;
+  const separate = await legacyItem(f, 'taken.txt', 'separate', { folderId: otherFolder.id });
+  const removed = await legacyItem(f, 'deleted.txt', 'deleted', { deletedAt: new Date().toISOString(), isDeleted: true });
+  await f.call('upload', { name: 'deleted.txt', dataBase64: data('replacement') });
+  const all = (await f.call('list', { scope: 'recommended' })).items;
+  assert.equal(all.find(row => row.id === conflict.id).filenameIssue, 'duplicate');
+  assert.equal(all.find(row => row.id === separate.id).filenameIssue, undefined);
+  assert.equal(all.find(row => row.filename === 'deleted.txt').filenameIssue, undefined);
+  assert.equal((await f.call('list', { scope: 'trash' })).items.find(row => row.id === removed.id).filenameIssue, undefined);
+  assert.ok(folder.id);
+});
+
+test('legacy invalid names are reported even without duplicates and Unicode-equivalent destinations conflict', async t => {
+  const f = fixture(t), long = await legacyItem(f, 'x'.repeat(161) + '.txt', 'long name');
+  const unicode = await legacyItem(f, 'unicode.bin', 'preserved Unicode bytes');
+  const indexPath = path.join(f.account(), 'index.json'), index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+  Object.assign(index.items.find(row => row.id === unicode.id), { filename: 'broken\ud83d.txt', title: 'broken\ud83d.txt' });
+  fs.writeFileSync(indexPath, JSON.stringify(index));
+  const before = fs.readFileSync(indexPath, 'utf8'), listed = (await f.call('list', { scope: 'all' })).items;
+  assert.equal(listed.find(row => row.id === long.id).filenameIssue, 'invalid');
+  assert.equal(listed.find(row => row.id === unicode.id).filenameIssue, 'invalid');
+  assert.equal(fs.readFileSync(indexPath, 'utf8'), before);
+  await f.call('upload', { name: 'Café.pdf', dataBase64: data('occupied') });
+  await assert.rejects(f.call('repairFilename', { id: long.id, filename: 'CAFÉ.pdf'.normalize('NFD') }), error => error.code === 'LIBRARY_NAME_CONFLICT');
+  const repaired = (await f.call('repairFilename', { id: unicode.id, filename: '完整😀.txt' })).item;
+  assert.equal(repaired.filename, '完整😀.txt');
+  assert.equal(Buffer.from((await f.call('readBinary', { id: unicode.id })).data, 'base64').toString(), 'preserved Unicode bytes');
+});
+
+test('strict filename repair rejects invalid names and collisions without changing disk or cached metadata', async t => {
+  const f = fixture(t), original = await legacyItem(f, 'a'.repeat(158) + '.p', 'protected bytes');
+  await f.call('upload', { name: 'taken.pdf', dataBase64: data('other bytes') });
+  await f.call('createFolder', { name: 'folder.pdf' });
+  const indexPath = path.join(f.account(), 'index.json'), before = fs.readFileSync(indexPath, 'utf8');
+  await f.call('list', { scope: 'all' }); // Populate the read-only index cache.
+  for (const filename of ['', ' ', '../escaped.pdf', 'sub\\file.pdf', 'C:\\file.pdf', 'CON.txt', 'trailing.',
+    'trailing ', 'bad\u0000name', 'bad\ud83d.txt', 'a'.repeat(157) + '.txt', '报'.repeat(59) + '.txt']) {
+    await assert.rejects(f.call('repairFilename', { id: original.id, filename }), error => error.code === 'LOCAL_LIBRARY_INVALID');
+    assert.equal(fs.readFileSync(indexPath, 'utf8'), before);
+  }
+  for (const filename of ['TAKEN.pdf', 'folder.pdf']) {
+    await assert.rejects(f.call('repairFilename', { id: original.id, filename }), error => error.code === 'LIBRARY_NAME_CONFLICT');
+    assert.equal(fs.readFileSync(indexPath, 'utf8'), before);
+  }
+  const listed = (await f.call('list', { scope: 'all' })).items.find(row => row.id === original.id);
+  assert.equal(listed.filename, original.filename); assert.equal(listed.title, original.title);
+  assert.equal(Buffer.from((await f.call('readBinary', { id: original.id })).data, 'base64').toString(), 'protected bytes');
+  for (const filename of ['a'.repeat(156) + '.txt', '报'.repeat(58) + 'ab.txt', '.gitignore']) {
+    const repaired = (await f.call('repairFilename', { id: original.id, filename })).item;
+    assert.equal(repaired.filename, filename, 'accepted input must be preserved exactly');
+  }
+});
+
+test('repair commit failure reclaims only the staged file and keeps the legacy record and bytes', async t => {
+  const f = fixture(t), original = await legacyItem(f, 'a'.repeat(158) + '.p', 'original bytes');
+  const indexPath = path.join(f.account(), 'index.json'), before = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+  const rename = fsp.rename; let writes = 0;
+  fsp.rename = async (from, to) => {
+    if (to === indexPath && ++writes === 2) { const error = Error('repair commit failed'); error.code = 'ENOSPC'; throw error; }
+    return rename(from, to);
+  };
+  try { await assert.rejects(f.call('repairFilename', { id: original.id, filename: 'repaired.pdf' }), /repair commit failed/); }
+  finally { fsp.rename = rename; }
+  f.install();
+  assert.deepEqual(JSON.parse(fs.readFileSync(indexPath, 'utf8')), before);
+  assert.equal(fs.readFileSync(path.join(f.account(), original._object), 'utf8'), 'original bytes');
+  assert.equal(fs.readdirSync(path.join(f.account(), 'objects')).length, 1);
+  assert.equal((await f.call('list', { scope: 'all' })).items[0].filename, original.filename);
+});
+
+test('repair cannot cross owners or continue after an account switch during source read', async t => {
+  const f = fixture(t), original = await legacyItem(f, 'a'.repeat(158) + '.p', 'owner A bytes');
+  const indexPath = path.join(f.account(), 'index.json'), before = fs.readFileSync(indexPath, 'utf8');
+  f.setOwner(OWNER_B);
+  await assert.rejects(f.call('repairFilename', { id: original.id, filename: 'stolen.pdf' }), /不存在|账号/);
+  f.setOwner(OWNER_A);
+  const read = fsp.readFile;
+  fsp.readFile = async (target, ...args) => {
+    const bytes = await read(target, ...args);
+    if (target === path.join(f.account(), original._object)) f.setOwner(OWNER_B);
+    return bytes;
+  };
+  try { await assert.rejects(f.call('repairFilename', { id: original.id, filename: 'stale.pdf' }), /账号/); }
+  finally { fsp.readFile = read; f.setOwner(OWNER_A); }
+  assert.equal(fs.readFileSync(indexPath, 'utf8'), before);
+  assert.equal(fs.readFileSync(path.join(f.account(), original._object), 'utf8'), 'owner A bytes');
+});
+
+
 test('output receipts survive restart, deduplicate legacy bytes and respect deletion and account boundaries', async t => {
   const f = fixture(t), upload = { name: 'result.html', dataBase64: data('<html>result</html>') };
   const legacy = (await f.call('upload', upload)).item;
