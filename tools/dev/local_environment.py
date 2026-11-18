@@ -303,6 +303,52 @@ def prepare_environment(state: Path) -> dict[str, str]:
     return env
 
 
+def venv_interpreter_error(python: Path, venv: Path, log: Path) -> StartupError:
+    """Explain a missing venv interpreter, and record the same reason in the log.
+
+    A venv command can report success while producing a layout this launcher cannot
+    use. Every later step only names this log file, so the diagnosis has to be there
+    too, not just on the terminal.
+    """
+    posix = next((candidate for candidate in (venv / "bin" / "python.exe", venv / "bin" / "python")
+                  if candidate.is_file()), None)
+    facts = [
+        f"expected interpreter: {python}",
+        f"interpreter that created the venv: {sys.executable}",
+        f"os.name={os.name}",
+    ]
+    if posix is not None:
+        facts.append(f"interpreter found in a POSIX layout: {posix}")
+    # Claim an MSYS2/Cygwin layout only when the POSIX interpreter is really there,
+    # so other platforms get the actual missing path instead of Windows advice.
+    if os.name == "nt" and posix is not None:
+        message = (
+            f"独立环境没有生成 {python}，但在 {posix} 找到了 POSIX 布局的解释器。当前解释器 "
+            f"{sys.executable} 可能是 MSYS2/Cygwin 版本，它创建的 venv 使用 bin/ 而不是 Scripts/。"
+            "请改用 python.org 的官方 Windows 版（或 py -3.12）后重跑同一入口；"
+            "已经创建的数据目录会直接复用，不需要删除。\n"
+            f"The private environment does not contain {python}, but a POSIX-layout interpreter exists at "
+            f"{posix}. {sys.executable} looks like an MSYS2/Cygwin build, whose venv uses bin/ instead of "
+            "Scripts/. Use a native python.org Windows build (or py -3.12) and run the same launcher again; "
+            "the existing data directory is reused.")
+    else:
+        message = (
+            f"独立环境没有生成 {python}。创建 venv 的解释器是 {sys.executable}（os.name={os.name}）。"
+            "请确认这个解释器可以正常执行 `-m venv`，修复后重跑同一入口；"
+            "已经创建的数据目录会直接复用，不需要删除。\n"
+            f"The private environment does not contain {python}. The interpreter that created it was "
+            f"{sys.executable} (os.name={os.name}). Check that this interpreter can run `-m venv`, then run "
+            "the same launcher again; the existing data directory is reused.")
+    details = "\n".join(facts)
+    try:
+        with log.open("ab") as output:
+            output.write(("\n--- 独立环境诊断 / private environment diagnosis ---\n"
+                          + details + "\n" + message + "\n").encode("utf-8"))
+    except OSError:
+        pass  # A diagnosis must never mask the original failure.
+    return StartupError(message + "\n" + details)
+
+
 def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     _, npm = check_dependencies()
     cache_env = prepare_environment(state)
@@ -327,6 +373,8 @@ def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     if not python.is_file():
         run([sys.executable, "-m", "venv", str(venv)], cwd=state, log=log, env=cache_env,
             label="[1/4] 创建独立环境 / Creating a private Python environment")
+        if not python.is_file():
+            raise venv_interpreter_error(python, venv, log)
     requirements = [ROOT / "hub-backend" / name for name in ("requirements.txt", "requirements-runner.txt")]
     py_stamp = state / "python-dependencies.sha256"
     wanted = digest_files(requirements, ROOT)

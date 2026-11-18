@@ -1275,6 +1275,21 @@ class LocalStartupTests(unittest.TestCase):
                             ('electron_config_cache', 'electron')):
             self.assertEqual(lowered[key], str(self.state / 'cache' / folder))
 
+    def fake_venv_run(self, state):
+        """Stand in for run() and materialize the interpreter a venv command would create.
+
+        The launcher verifies the interpreter after creating the environment, so a
+        double that only records commands would look like a failed venv creation.
+        """
+        interpreter = state / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+
+        def run(command, **kwargs):
+            if '-m' in command and 'venv' in command:
+                interpreter.parent.mkdir(parents=True, exist_ok=True)
+                interpreter.write_text('', encoding='utf-8')
+
+        return run
+
     def test_prepare_passes_isolated_caches_to_every_install_command(self):
         state = Path(self.temp.name) / 'prepare-state'
         state.mkdir()
@@ -1283,7 +1298,7 @@ class LocalStartupTests(unittest.TestCase):
                 patch.object(build, 'source_files', return_value=[]), \
                 patch.object(build, 'digest_files', return_value='digest'), \
                 patch.object(build, 'read_stamp', return_value=None), \
-                patch.object(build, 'run') as run:
+                patch.object(build, 'run', side_effect=self.fake_venv_run(state)) as run:
             build.prepare(state, state / 'startup.log')
         installs = run.call_args_list
         self.assertEqual(len(installs), 5)  # venv, pip, Runner probe, npm ci, build
@@ -1298,10 +1313,73 @@ class LocalStartupTests(unittest.TestCase):
                 patch.object(build, 'digest_files', return_value='digest'), \
                 patch.object(build, 'read_stamp', return_value='digest'), \
                 patch.object(build, 'verify_runner_environment', side_effect=build.DiskFullError('Disk full')), \
-                patch.object(build, 'run') as run:
+                patch.object(build, 'run', side_effect=self.fake_venv_run(self.state)) as run:
             with self.assertRaises(build.DiskFullError):
                 build.prepare(self.state, self.state / 'startup.log')
         self.assertFalse(any('pip' in call.args[0] for call in run.call_args_list))
+
+    def test_venv_command_success_without_interpreter_is_reported_and_logged(self):
+        """创建命令返回成功、解释器仍缺失：必须报错，而且原因要写进 startup.log。"""
+        state = Path(self.temp.name) / 'missing-interpreter'
+        state.mkdir()
+        log = state / 'startup.log'
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value='digest'), \
+                patch.object(build, 'run') as run:
+            with self.assertRaises(build.StartupError) as raised:
+                build.prepare(state, log)
+        # 创建命令确实被执行过，然后才因为产物缺失退出
+        self.assertTrue(any('-m' in call.args[0] and 'venv' in call.args[0] for call in run.call_args_list))
+        expected = state / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+        message = str(raised.exception)
+        self.assertIn(str(expected), message)
+        self.assertIn('interpreter that created the venv', message)
+        logged = log.read_text(encoding='utf-8') if log.exists() else ''
+        self.assertIn('--- 独立环境诊断 / private environment diagnosis ---', logged)
+        self.assertIn('expected interpreter: ' + str(expected), logged)
+        self.assertIn('interpreter that created the venv: ' + sys.executable, logged)
+
+    def test_missing_interpreter_without_posix_layout_does_not_claim_msys2(self):
+        """没有 POSIX 布局解释器时，不能提示用户去装 Windows 版 Python。"""
+        state = Path(self.temp.name) / 'generic-missing'
+        state.mkdir()
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value='digest'), \
+                patch.object(build, 'run'):
+            with self.assertRaises(build.StartupError) as raised:
+                build.prepare(state, state / 'startup.log')
+        message = str(raised.exception)
+        self.assertNotIn('MSYS2', message)
+        self.assertNotIn('python.org', message)  # 非 Windows 不该给装 Windows Python 的建议
+        self.assertIn('-m venv', message)        # 恢复办法仍然给出
+        self.assertIn('os.name=' + os.name, message)
+
+    @unittest.skipUnless(os.name == 'nt', 'MSYS2 布局只能在 Windows 上出现')
+    def test_posix_venv_layout_on_windows_reports_msys2(self):
+        """Windows 上 Scripts/python.exe 缺失而 venv/bin/python.exe 存在，才判定为 MSYS2 布局。"""
+        state = Path(self.temp.name) / 'posix-layout'
+        state.mkdir()
+        posix = state / 'venv' / 'bin' / 'python.exe'
+
+        def run(command, **kwargs):
+            if '-m' in command and 'venv' in command:
+                posix.parent.mkdir(parents=True, exist_ok=True)
+                posix.write_text('', encoding='utf-8')
+
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value='digest'), \
+                patch.object(build, 'run', side_effect=run):
+            with self.assertRaises(build.StartupError) as raised:
+                build.prepare(state, state / 'startup.log')
+        message = str(raised.exception)
+        self.assertIn('MSYS2/Cygwin', message)
+        self.assertIn(str(posix), message)
 
     def test_cached_nonwindows_desktop_does_not_prepare_windows_shell(self):
         with patch.object(sys, 'platform', 'darwin'):
