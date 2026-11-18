@@ -3,6 +3,7 @@
 // Run with: npx electron e2e/workspace-startup-recovery.cjs -- <loopback Hub URL> <absolute evidence directory>
 // Use a disposable Hub and set SODUWORK_TEST_ACCOUNT and SODUWORK_TEST_PASSWORD for its test user.
 const assert = require('node:assert/strict');
+const { randomUUID } = require('node:crypto');
 const { once } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -283,6 +284,53 @@ app.whenReady().then(async () => {
     assert.equal(await js('performance.timeOrigin'), origin);
     await checkOwner();
     return { reloaded: false };
+  });
+
+  await record('legacy approval details do not trigger workspace recovery', async () => {
+    const task = { id: randomUUID(), kind: 'requirement', title: '审批入口回归验证',
+      note: '隔离 Hub 中的合成测试任务', status: 'todo', visibility: 'related', triageStage: 'intake',
+      source: '工作区回归测试', createdAt: Date.now() };
+    assert.equal(await js(`(async () => {
+      const task = ${JSON.stringify(task)};
+      tasks.push(task);
+      save();
+      if (!await Store.persistTask(task.id)) throw Error('The Hub did not persist the test task');
+      return (await SoduWorkAPI.getTask(task.id)).title;
+    })()`), task.title);
+
+    const overlay = await until(() => findWindow('index.html'), 'desktop overlay');
+    const oldWindow = win.id;
+    const closed = once(win, 'closed');
+    win.close();
+    await closed;
+    const route = { panel: 'workspace', view: 'approvals', taskId: task.id };
+    await overlay.webContents.executeJavaScript(`soduWorkAPI.openDeskWindow(${JSON.stringify(route)})`);
+    win = await until(() => findWindow('desk.html', 'workspace'), 'native legacy approval workspace');
+    assert.notEqual(win.id, oldWindow);
+    const query = new URL(win.webContents.getURL()).searchParams;
+    assert.equal(query.get('view'), route.view);
+    assert.equal(query.get('taskId'), route.taskId);
+    await checkOwner();
+
+    const correctTitle = `document.querySelector('#rqDetailTitle')?.textContent === ${JSON.stringify(task.title)}`;
+    const detailRetry = '#rqLoadRetry';
+    await until(() => js(`${correctTitle} || ${visible(detailRetry)}`), 'task title or detail retry');
+    if (await js(visible(detailRetry))) await click(detailRetry);
+    await until(() => js(correctTitle), 'task title from the Hub');
+    await until(() => js('performance.now() >= 16500'), 'real startup deadline with task details open');
+    const checkedAfterMs = await js('Math.round(performance.now())');
+    assert.equal(await js(correctTitle), true);
+    assert.equal(await js(visible(retry)), false, 'recovery must stay hidden behind the open detail drawer');
+    await shot('05-approval-detail-after-deadline');
+
+    await click('[data-rq-dismiss]');
+    await until(() => js('!document.querySelector(".rq-detail-backdrop")'), 'closed task details');
+    assert.equal(await js(visible(retry)), false, 'closing details must not expose startup recovery');
+    await click(notices);
+    await until(() => js(`${opened('notices')} && ${visible('#noticePanel.show')}`), 'notifications after closing details');
+    await shot('06-approval-detail-closed-sidebar');
+    await checkOwner();
+    return { checkedAfterMs, nativeWindowReopened: true, titleLoaded: true, navigationAfterClose: true };
   });
 
   exitCode = report.cases.every(row => row.passed) ? 0 : 1;

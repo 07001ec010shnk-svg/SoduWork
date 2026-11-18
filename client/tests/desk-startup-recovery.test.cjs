@@ -10,7 +10,7 @@ const read = name => fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
 const html = read('desk.html');
 const boot = read('desk-boot.js');
 
-function fixture({ failMount = false, failOpen = false, view = 'create', initData = async () => {},
+function fixture({ failMount = false, failOpen = false, view = 'create', taskId, openApproval, initData = async () => {},
   navigate = (_view, payload, open) => open(_view, payload) } = {}) {
   const events = new EventTarget();
   const classes = new Set();
@@ -18,17 +18,19 @@ function fixture({ failMount = false, failOpen = false, view = 'create', initDat
   const hint = { textContent: '正在载入…' };
   const retry = Object.assign(new EventTarget(), { hidden: true, textContent: '' });
   const elements = { deskBlank: blank, deskBlankHint: hint, deskBlankRetry: retry };
-  let deadline, start, reloads = 0;
+  let deadline, start, detailDrawer, reloads = 0;
   const scope = {
-    __deskPanel: 'workspace', __deskArgs: { view }, navigator: { language: 'zh-CN' },
+    __deskPanel: 'workspace', __deskArgs: { view, taskId }, navigator: { language: 'zh-CN' },
     addEventListener: events.addEventListener.bind(events),
     dispatchEvent: events.dispatchEvent.bind(events), Event, initData,
     setTimeout: (callback, ms) => { deadline = { callback, ms }; },
     location: { reload: () => { reloads++; } },
     document: { readyState: 'loading', getElementById: id => elements[id], querySelectorAll: () => [],
+      querySelector: selector => selector === '.rq-detail-backdrop' ? detailDrawer : null,
       documentElement: { setAttribute() {} },
       addEventListener(type, listener) { if (type === 'DOMContentLoaded') start = listener; } },
     openComposePanel() { if (failOpen) throw Error('fixture open failure'); },
+    openApprovalsEntry(payload) { return openApproval(payload, () => { detailDrawer = {}; }); },
     WorkspaceShell: {
       mount() { if (failMount) throw Error('fixture mount failure'); },
       setTasks() {}, setConnected() {}, setActive() {},
@@ -121,4 +123,27 @@ test('a rejected restored route exposes reload without waiting for the deadline'
   await new Promise(setImmediate);
   assert.equal(f.retry.hidden, false);
   assert.notEqual(f.blank.style.display, 'none');
+});
+
+test('a legacy approval opens the workspace as soon as its detail drawer mounts', async () => {
+  let finish;
+  const f = fixture({ view: 'approvals', taskId: 'task-1', openApproval(payload, mount) {
+    assert.equal(payload.taskId, 'task-1');
+    mount();
+    return new Promise(resolve => { finish = resolve; });
+  } });
+  f.start();
+  assert.equal(f.host.view, '');
+  f.deadline.callback();
+  assert.equal(f.retry.hidden, true);
+  finish();
+  await new Promise(setImmediate);
+  assert.equal(f.blank.style.display, 'none');
+});
+
+test('a legacy approval that opens no detail still allows startup recovery', () => {
+  const f = fixture({ view: 'approvals', taskId: 'task-1', openApproval: () => false });
+  f.start();
+  f.deadline.callback();
+  assert.equal(f.retry.hidden, false);
 });

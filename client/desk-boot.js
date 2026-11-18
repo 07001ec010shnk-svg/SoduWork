@@ -280,7 +280,13 @@
     if (view === 'detail') return openWorkspace('history', {requirementId: payload?.taskId});
     // Old deep links remain compatible, but no longer open a second approval page.
     if (view === 'approvals') {
-      if (payload && payload.taskId) return window.openApprovalsEntry(payload);
+      if (payload?.taskId) {
+        const opened = window.openApprovalsEntry(payload);
+        // A detail drawer can be the first usable surface without a host view.
+        // It owns its loading and retry UI, so the workspace timer can stop once it mounts.
+        if (opened !== false && document.querySelector('.rq-detail-backdrop')) pageOpened();
+        return opened;
+      }
       return openWorkspace('history', {approvalInbox: true});
     }
     if (view === 'history' && payload?.requirementId) {
