@@ -201,6 +201,7 @@
   "当前对话尚未接入插件依赖的连接器：{names}。请在插件或连接器设置中完成连接并启用后重试": "This chat is missing connectors required by the plugin: {names}. Connect and enable them in plugin or connector settings, then retry.",
   "当前对话底座不支持插件声明的能力：{names}": "This chat's agent does not support capabilities required by the plugin: {names}.",
   "这一轮没发出去（{reason}）": "This run was not sent ({reason})",
+  "这一轮没跑成（{reason}）": "This turn failed ({reason})",
   "打不开对话（{reason}）": "Could not open chat ({reason})",
   "开不了对话（{reason}）": "Could not open chat ({reason})",
   "需求执行失败（{reason}）": "Issue execution failed ({reason})",
