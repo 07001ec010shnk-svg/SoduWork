@@ -285,6 +285,8 @@ async function open(opts) {
     args.customTools = [prepared[1],
       require('./vision-read-tool').create(sdk, args.cwd, identity, () => prep.model)];
     created = await require('./background-process').run(() => sdk.createAgentSession(args));
+    require('../access-control/pi-tool-selection').restore(created.session, sdk,
+      resources.settingsManager, effectiveCwd, accessPolicy);
     _openTiming('agent-created', openStarted);
   } catch (e) {
     return { ok: false, reason: '起会话失败：' + String((e && e.message) || e) };
@@ -411,6 +413,8 @@ async function open(opts) {
           require('./vision-read-tool').create(sdk, effectiveCwd, identity, () => prep.model)],
       }));
       try {
+        require('../access-control/pi-tool-selection').restore(next.session, sdk,
+          nextResources.settingsManager, effectiveCwd, policy, accessPolicy);
         await initializeExtensions(next.session, nextResources);
         return { session: next.session, resources: nextResources };
       } catch (error) { next.session.dispose(); throw error; }
@@ -630,6 +634,8 @@ async function open(opts) {
           require('./vision-read-tool').create(sdk, effectiveCwd, identity, () => prep.model)],
       }));
       try {
+        require('../access-control/pi-tool-selection').restore(next.session, sdk,
+          nextResources.settingsManager, effectiveCwd, previous.policy);
         const nextAccess = require('../access-control/pi').install(next.session, previous.policy, effectiveCwd, accessChanged, { readScope });
         try {
           await initializeExtensions(next.session, nextResources);

@@ -62,6 +62,8 @@ Windows 上运行 `npm run test:e2e:user:isolated`，使用全新的 Electron �
 
 Windows 执行服务在工具初始化前加入原生 Job Object。专用 Windows PowerShell 辅助进程持有该对象，退出时确认其中的进程全部结束，包括中间 Windows 父进程已经退出的 Git Bash 后代进程。这是生命周期清理机制，不是安全沙箱；Linux 和 macOS 继续使用现有的进程树清理。
 
+Pi 会话从只读切换为默认或完全访问时，会按已配置的默认工具重建工具选择，并保留原会话历史。默认权限下的命令仍需审批，切回只读后会移除写入和命令工具。运行 `node --test tests/access-readonly-upgrade.test.cjs`，通过本机模拟模型服务、真实文件写入和命令执行验证生产会话链路。
+
 验收摘要的隔离验证命令为 `node e2e/acceptance-summary-export.cjs /absolute/evidence/directory /path/to/test/python`。Python 环境需要后端测试依赖。该脚本验证真实原生 IPC、设备认证与保存字节，保存框选择由测试注入，不使用真实模型或生产账号。
 
 未显式配置最大输出预算时，桌面、Hub 和 Runner 使用 16384 Token，并受已配置的上下文窗口约束。这是默认值，不是检测出的服务上限。请在“我的模型”中设置“最大输出 Token”；组织模型在“模型目录”中设置，数值应符合部署服务的实际限制。思考模型可能需要显式配置更高预算，才能完成工具调用或最终回答。上下文窗口与输出上限应分别填写，不要通过缩小真实上下文窗口来绕过输出预算错误。能力检测和连接检查使用小请求，不会测出最大输出上限。输出超限错误会提示调整对应配置，不会自动重试。
