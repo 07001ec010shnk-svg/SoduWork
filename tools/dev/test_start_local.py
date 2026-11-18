@@ -22,6 +22,16 @@ from tools.dev import verify_desktop_fixture as desktop_fixture
 
 
 class LocalStartupTests(unittest.TestCase):
+    def test_requirement_diagnostics_opt_in_reaches_only_desktop(self):
+        destination = str(self.state / 'diagnostic-records')
+        with patch.dict(os.environ, {'SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR': destination}), \
+                patch.object(start.subprocess, 'Popen') as popen:
+            env = start.runtime_environment(self.state, {'adminUser':'test','authSecret':'synthetic-test'}, 'synthetic-test', '127.0.0.1', 18991)
+            self.assertNotIn('SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR', env)
+            start.launch_desktop(self.state, self.state / 'application/client', env,
+                                 'http://127.0.0.1:18991', io.BytesIO())
+            self.assertEqual(popen.call_args.kwargs['env'].get('SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR'), destination)
+
     def test_linux_root_desktop_fails_before_initialization_password_or_downloads(self):
         for options in ([], ['--prepare-only'], ['--check']):
             with self.subTest(options=options), patch.object(sys, 'platform', 'linux'), \

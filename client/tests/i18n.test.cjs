@@ -5,6 +5,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const script = fs.readFileSync(path.join(__dirname, '../core/i18n.js'), 'utf8');
 
+test('delivery recovery guidance is translated in every supported locale', () => {
+  const c = client(), R = require('../core/requirements.js');
+  for (const code of ['capture_pending','capture_failed','sync_pending','review_unassigned']) {
+    const {guidance} = R.deliveryProgress({status:'doing',workRouting:{conversationTurn:{deliveryIssue:{code}}}});
+    const variants = ['zh-CN','en-US','ja-JP','ko-KR'].map(locale => c.api.translateText(guidance,locale));
+    assert.equal(new Set(variants).size,4,code);
+  }
+});
+
 test('installation verification guidance is available in every supported locale', () => {
   const c = client();
   for (const phrase of ['验证范围',

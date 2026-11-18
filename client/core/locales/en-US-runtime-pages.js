@@ -1,5 +1,14 @@
 (function (global) {
   const messages = {
+    '正在整理本轮成果，请等待同步完成。': 'Preparing this turn’s results. Wait for synchronization to finish.',
+    '成果尚未同步完成，请恢复连接后重试同步。': 'Results have not finished syncing. Restore the connection and retry synchronization.',
+    '成果整理失败，请查看执行记录，修正文件后重试交付。': 'Preparing results failed. Check the execution records, correct the files, and retry delivery.',
+    '请恢复需求创建人账号后重试验收；创建人归属缺失时，请联系管理员核实。': 'Restore the requirement creator’s account and retry acceptance. If creator ownership is missing, contact an administrator to verify it.',
+    '成果待同步': 'Results awaiting synchronization',
+    '交付待处理': 'Delivery awaiting follow-up',
+    '交付受阻': 'Delivery blocked',
+    '验收受阻': 'Acceptance blocked',
+    '待提交验收': 'Awaiting submission for acceptance',
     "请先保存模型服务，再添加模型。": "Save the model service before adding a model.",
     "检测使用已保存的服务配置。": "This check uses the saved service settings.",
     "添加中…": "Adding…",

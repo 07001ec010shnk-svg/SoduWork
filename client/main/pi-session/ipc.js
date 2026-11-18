@@ -1056,6 +1056,10 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
     if (debugBlocked) return { ok: false, reason: debugBlocked };
     let taskTurn = null;
     const taskId = String(rawOptions && rawOptions.taskId || '').trim().slice(0, 120);
+    require('../requirement-diagnostics.cjs').record('native.send', {taskId,conversationId:s.sessionId,
+      turnId:rawOptions?.submissionId,hasTaskBinding:!!taskId,selectedMode:rawOptions?.taskExecution?.submissionMode,
+      runtimeKey:s.adapterId,modelKey:typeof s.model==='string'?s.model:(s.model?.id || s.model?.name),workspaceKey:s.cwd,
+      hubKey:currentIdentity?.hub,accountKey:require('../device-auth-request').accountScopeKey(currentIdentity)});
     const followUpTurn = !!(rawOptions && rawOptions.taskExecution && rawOptions.taskExecution.followUp === true);
     if (taskId) {
       try {
@@ -1072,6 +1076,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       } catch (error) {
         // Only an explicitly finished task permits an ordinary follow-up without a receipt.
         // Active receipts, permission failures and network errors must not lose task delivery silently.
+        require('../requirement-diagnostics.cjs').record('native.error',{taskId,conversationId:s.sessionId,
+          turnId:rawOptions?.submissionId,httpStatus:Number(error.status)||0,errorKey:String(error.message || error)});
         if (!followUpTurn || error.code !== 'TASK_FINISHED' || rawOptions.taskExecution?.executionChoice === 'native') return { ok: false, reason: String(error.message || error) };
         console.warn('[task-input] 续轮收据未挂上，按普通会话发送：' + String((error && error.message) || error));
         taskTurn = null;

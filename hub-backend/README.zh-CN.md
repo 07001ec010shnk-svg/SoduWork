@@ -22,6 +22,22 @@ python3 -m venv .venv
 
 打开 http://127.0.0.1:9080/docs 查看 API 文档，健康检查为 `GET /healthz`。
 
+## 桌面本地 Runner 事件恢复
+
+桌面本地 Runner 执行会将事件去向与会话别名分别持久化。本地历史不会进入 Hub
+任务回传通道，Hub outbox 阻塞也不会阻止本地执行；CPU、内存和执行并发限制仍然生效。
+桌面排队中的轮次显示排队文案，不再显示模型处理中的文案。
+
+升级后，Runner 仅在旧聊天的别名、底座与确定性执行引用一致时确认其本地归属。
+恢复时会持久化已确认的本地路由归属；无法确认的记录保留原有路由元数据。
+确认属于本地的事件包会先写入私有 `local-events-*.archive` 恢复文件，再从活跃
+outbox 移除；Windows 载荷保留 DPAPI 保护，采集标记保持不变。归属不明的事件流及
+真实 Hub 事件均保持原状，NACK 不会被当成 ACK。恢复文件总量限制为配置的 outbox
+字节预算的三倍，包含编码开销。归档失败时保留原事件并输出诊断；无关 Hub 事件的
+投递与采集仍可继续，但受实际 outbox 容量限制。恢复文件应保持私有，在完成核查前保留。
+运行 `python3 -m unittest test_runner_event_scope test_runner_event_delivery` 可验证
+归属路由、重启恢复、归档写入中断和 Hub 事件保留。
+
 ## 受管 Pi 执行
 
 受管 Pi 执行为每条 Runner 执行记录绑定独立的配置与会话目录，目录位于 Runner 数据根目录下。启动及后续轮次使用同一个明确路径，不依赖继承的桌面 Pi 设置或操作系统主目录解析。模型文件只保存凭据的环境变量引用；模型配置缺失或文件发布失败时，会在 Pi 启动前停止执行。个人 Pi 与桌面本地模型配置保持不变。升级时，只允许将 Runner 记录中明确标识且工作目录匹配的原生会话复制到私有目录，原文件保持不变。已有执行历史的后续轮次必须找到原生会话，不会静默新建会话。
@@ -30,7 +46,19 @@ Runner 重启后，恢复终端仍绑定原执行的会话历史，不恢复模�
 
 安装客户端依赖后，可在后端测试环境运行 `python3 e2e_pi_dispatch_config.py --output /absolute/evidence/directory`，通过隔离鉴权 Hub、真实 Runner 和 Pi 子进程及本机回环模型验证派发、后续轮次、文件产物、重启后的原生终端恢复与个人模型配置保护。该验证不覆盖生产模型或原生桌面界面。
 
+## Runner 多会话并发
+
+桌面私有通道与 Hub RPC 分别为工作、读取、底座检测和控制保留有上限的处理能力。慢检测或历史读取不会占用停止其他会话所需的工作线程。同一执行引用的变更操作在两个通道间保持顺序；停止会使更早收到、但尚未进入持久化准入的请求失效。因通道容量拒绝的请求会明确标为未接收，可以使用原业务编号重试。这不改变账号授权、本地模型隐私或根据 CPU、内存调整的执行并发预算。
+
+创建进程时不持有会话全局锁。取消操作保留本次启动的准确归属，直到确认进程树清理完成；未确认退出不会释放该执行名额或允许替代执行。事件保存失败会保留尚未保存的批次，成功重试后才恢复 Hub 执行准入；当前快照为空或其他事件收到确认，都不能丢弃该批次。桌面本地执行的准入仍独立于 Hub 事件保存状态。
+
+模型元数据从快照采集到远程投影始终携带当时的隐私分类。在读取期间切换到 Hub 模型，不会使旧本地模型标识或 token 统计被上传。附件读取和补充消息的后台线程也会保留取消归属，直到实际操作结束。
+
+在后端测试环境运行 `python3 -m unittest test_runner_local_rpc test_runner_remote_rpc test_runner_event_delivery test_runner_usage_receipts test_runner_input_cleanup test_local_process_cleanup test_task_goal_stop_races`。私有管道测试使用真实 Runner 进程和持久队列，底座检测为模拟；进程清理测试使用隔离的操作系统子进程。在其他平台运行这些检查，不代表已完成真实模型或 Windows 验收。
+
 ## 质量门禁
+
+本机需求准备阶段将 `executionSubmissionChoice` 与实际的 `executionSubmissionMode` 分开保存。选择自动判断时，本轮完成且校验通过的正式成果会触发自动提交验收；明确手动及来源不明的历史手动值保持原行为。验收仍由需求创建人执行。本轮交付问题会显示采集中断、成果无效或创建人不可用，不改变审批权限。新的策略确认和问题回执需要桌面与 Hub 一起更新。
 
 所有后端冒烟都登记在 `quality_manifest.py`，新增脚本未登记会直接阻断发布：
 
@@ -49,6 +77,10 @@ python3 quality_gate.py --list
 ```
 
 `live` 层可能连接真实 Hub、Runner、代码平台、模型或业务库，默认拒绝执行，不能用来替代离线发布门禁。详细口径见 [`../docs/release-scope.md`](../docs/release-scope.md)。
+
+人工提交验收将验收请求与通知任务放在同一事务中提交。HTTP 回执不等待设备通知发送，避免慢连接让已经成功提交的需求仍显示为可重试。现有通知工作进程会重试发送失败，并按接收人当前权限重新生成通知内容。运行 `py -m unittest test_local_requirement_delivery` 可验证回执、幂等与事务回滚。
+
+在 `client/` 目录运行 `node e2e/run-requirements-isolated.cjs /绝对路径/证据目录 /测试环境/python路径 requirements-manual-submit-race`，可通过隔离 Electron 与 HTTP 验证生产客户端超时和合成慢通知接收端的组合。测试使用独立数据库和文件，不使用真实账号，也不发送外部消息。
 
 离线检查拥有各自的子进程树，并在清理完成后返回，包括命令先于后代进程退出的情况。在 Windows 上，门禁复用仓库中的 Windows PowerShell Job 辅助程序，确认 Job 分配成功后才允许命令执行。输出采集到私有临时文件，避免后代继承输出句柄导致超时后无限等待；失败报告保留超时前产生的输出。运行 `py -m unittest test_quality_gate_cleanup` 可验证当前平台上的真实进程清理回归。
 
@@ -158,9 +190,9 @@ OpenCode 原生和 ACP 执行均保留当前回合的模型停止原因。达到
 
 ## OpenCode 安装与网络诊断
 
-Runner 归档下载、模型网关连通性预检与 macOS Runner 的安全控制连接共用严格的 TLS 信任配置。默认保留 Python/OpenSSL 的系统根证书，同时加载随包提供的 `certifi` 公共 CA 文件，避免冻结可执行文件依赖用户机器上不存在的构建时 OpenSSL 证书路径。证书链与主机名仍须通过校验。这不改变外部原生底座自身的 HTTPS 配置。
+macOS、Windows 和 Linux 上的 Runner 归档下载、模型网关连通性预检与安全控制连接共用一套 TLS 配置。默认通过 MIT 许可的 `truststore` 使用安装机的系统信任：macOS 使用 Security framework，Windows 使用 CryptoAPI，Linux 通过 OpenSSL 使用系统 CA 存储。不追加随包提供的公共 CA 文件。原生验证能力缺失或证书被拒绝时直接失败，不换另一套信任策略重试。证书链与主机名仍须通过校验。这不改变外部原生底座自身的 HTTPS 配置。
 
-非空的 `SSL_CERT_FILE` 或 `SSL_CERT_DIR` 会明确替换上述默认信任范围；路径缺失或无效时直接失败，不回退到公共根证书。配置私有 CA 时应提供完整的所需信任集合。空值不会启用独占的显式信任覆盖，默认路径发现仍遵循 Python/OpenSSL 的环境变量语义。仅在 HTTPS 请求时加载证书，包括从 HTTP 跳转到 HTTPS；普通 HTTP 不依赖证书配置。现有下载代理选择和模型网关直连策略保持不变。
+非空的 `SSL_CERT_FILE` 或 `SSL_CERT_DIR` 会用指定的 CA 文件或 OpenSSL 哈希 CA 目录明确替换默认系统信任。路径缺失或无效时直接失败，不回退到系统或随包根证书。配置此覆盖时应提供完整的所需信任集合。空值使用默认系统信任。HTTP 客户端仅在 HTTPS 请求时加载证书，包括从 HTTP 跳转到 HTTPS；普通 HTTP 不依赖证书配置。现有下载代理选择和模型网关直连策略保持不变。
 
 受管安装器依次尝试明确配置的镜像、当前连接的 Hub 和官方发行源。macOS 上通过 Python 安装器下载归档时，每次尝试都会按协议合并系统 HTTP/HTTPS 代理与环境变量覆盖值。明确设为空的代理变量会禁用对应协议的系统代理。来自系统的代理同时保留系统绕过规则和 `NO_PROXY`；空 `NO_PROXY` 不会取消系统例外。显式代理覆盖仍采用标准环境绕过行为，当前 Hub 的精确来源（协议、主机、端口）保持直连。TLS 证书校验和固定 SHA-256 校验始终启用。这些下载规则不改变 npm 依赖安装或模型网关的连接策略。
 
@@ -180,7 +212,7 @@ python3 fetch_opencode_assets.py darwin-arm64 darwin-x64 darwin-x64-baseline
 python3 e2e_runner_tls.py --output /absolute/evidence/directory
 ```
 
-检查覆盖随包 CA 资源、默认根证书缺失、显式信任覆盖，以及拒绝不可信证书和主机名不匹配的证书。`--source-only` 可不打包执行同一调用路径。这些测试不能替代完整桌面、生产模型或其他操作系统验证。
+检查覆盖随包原生验证模块、使用临时信任锚的真实 TLS 握手、显式信任覆盖，以及拒绝不可信证书和主机名不匹配的证书；不修改机器的证书信任存储。`--source-only` 可不打包执行同一调用路径。这些测试不能替代完整桌面、生产模型或其他操作系统验证。
 
 ## API 概览
 

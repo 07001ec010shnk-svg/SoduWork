@@ -89,6 +89,30 @@ test('Runner plugin preprocessing preserves the full original request for dispat
   assert.ok(comment.promptText.includes('【用户原话】\n' + raw + '继续'));
 });
 
+for (const spec of catalog.runnerRuntimes()) test(spec.id + ' separates selected plugin authoring from future business inputs', async t => {
+  const h = harness(t, { spec, open: { resolvePlugins: async ids => ({
+    items: ids.map(id => plugin(id)), grant: { servers: [] },
+  }) } });
+  const session = await h.open(), handle = getRunnerSessionDetails(session).handle;
+  const original = '我提供区域、时间、人数和偏好，输出预算路线与 HTML 旅行计划。';
+  assert.equal((await session.send({ text: original, options: { pluginIds: ['local:plugin-builder'] } }).completion).ok, true);
+  await until(() => !handle.inFlight());
+  assert.equal((await session.send({ text: '再支持随机推荐' }).completion).ok, true);
+  await until(() => !handle.inFlight());
+  const turns = h.calls.filter(row => ['job.dispatch', 'job.comment'].includes(row.op));
+  for (const row of turns) {
+    const prompt = row.op === 'job.dispatch' ? row.payload.task.note : row.payload.promptText;
+    assert.match(prompt, /"authoring":\{"intent":"plugin-authoring"/);
+    assert.match(prompt, /changing values.*plugin inputs/);
+    assert.match(prompt, /soduwork-plugin-draft\.json/);
+  }
+  assert.equal(turns[0].payload.ctx.conversationUserText, original);
+  assert.equal(turns[1].payload.text, '再支持随机推荐');
+  assert.equal((await session.send({ text: '现在聊旅行', options: { clearPluginSelection: true } }).completion).ok, true);
+  assert.doesNotMatch(h.calls.filter(row => row.op === 'job.comment').at(-1).payload.promptText, /"authoring":/);
+  assert.doesNotMatch(JSON.stringify(session.snapshot().messages), /"authoring":|changing values/);
+});
+
 test('Runner rejects over-limit requests before dispatch instead of silently cutting the request', async t => {
   const h = harness(t), session = await h.open();
   const result = session.send({ text: 'A'.repeat(50000) + 'MUST_NOT_DISAPPEAR' });
