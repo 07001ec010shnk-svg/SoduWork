@@ -85,7 +85,7 @@ function _mdApplyServiceDeletion(plan, result, latest) {
   for (const type of ['image', 'video']) if (_mdData.mediaUsable?.[type])
     _mdData.mediaUsable[type] = _mdData.mediaUsable[type].filter(row => row.providerId !== pid);
   delete _mdKeyEdits[pid]; delete _mdTest[pid]; _mdDrafts.delete(pid); _mdLocalKeyIds.delete(pid);
-  for (const key of _mdChecks.keys()) if (JSON.parse(key)[0] === pid) _mdChecks.delete(key);
+  _mdClearProviderChecks(pid);
   if (_mdNew?.id === pid) _mdNew = null;
   if (_mdValidation?.providerId === pid) _mdValidation = null;
   if (plan.local) {

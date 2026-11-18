@@ -51,13 +51,21 @@ def check_source_checkout(root: Path) -> None:
 
 def default_state() -> Path:
     if os.name == "nt":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+        # os.environ.get() substitutes the default only for an absent variable: an empty
+        # value becomes Path('.') and a relative value stays relative. The launcher then
+        # resolves the default data directory beneath whatever directory it was started
+        # from, and its own safety guard rejects that with advice the user cannot act on.
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData/Local")
+        if not base.is_absolute():
+            base = Path.home() / "AppData/Local"
         current, previous = base / "SoduWork/source-service", base / "SoduWork/source-service"
     elif sys.platform == "darwin":
         base = Path.home() / "Library/Application Support"
         current, previous = base / "SoduWork/source-service", base / "SoduWork/source-service"
     else:
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+        if not base.is_absolute():
+            base = Path.home() / ".local/share"
         current, previous = base / "soduwork/source-service", base / "soduwork/source-service"
     # Preserve existing source-service data in place; only fresh installs use the new name.
     return previous if not current.exists() and (previous / "local-service.json").is_file() else current

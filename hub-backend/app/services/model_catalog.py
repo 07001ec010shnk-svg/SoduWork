@@ -358,6 +358,25 @@ def _clear_provider_cache(session, _flush_context):
             session.info.pop(key, None)
 
 
+def _organization_provider(p) -> dict:
+    return {
+        "id": p.id, "name": p.name, "kind": p.kind or "openai-compat",
+        "baseUrl": p.base_url or "", "defaultBaseUrl": p.base_url or "",
+        "builtin": bool(p.builtin), "enabled": bool(p.enabled), "note": p.note or "",
+        "personal": False, "addressOverridden": False, "authMode": "key",
+        "apiKey": p.api_key or "",
+    }
+
+
+async def creation_receipt(session: AsyncSession, provider, model) -> dict:
+    # Flush defaults and target generations while the catalog edit lock is held.
+    await session.flush()
+    row = _m_api(model)
+    await model_capabilities.enrich(session, [row], {provider.id: _organization_provider(provider)})
+    return {"revision": row["revision"], "configRevision": row["configRevision"],
+            "providerRevision": model_config_guard.revision(provider)}
+
+
 async def effective_provider_map(session: AsyncSession, client=None) -> dict[str, dict]:
     """Resolve effective personal services without inheriting organization secrets into personal
     endpoints.
@@ -381,17 +400,8 @@ async def effective_provider_map(session: AsyncSession, client=None) -> dict[str
     org_rows = (await session.execute(select(models.ModelProvider)
                                      .execution_options(populate_existing=True))).scalars().all()
     personal = _personal_provider_rows(client)
-    out: dict[str, dict] = {}
-    for p in org_rows:
-        # Old per-device overrides remain stored for recovery, but a managed
-        # service's endpoint and credential are always administrator-owned.
-        out[p.id] = {
-            "id": p.id, "name": p.name, "kind": p.kind or "openai-compat",
-            "baseUrl": p.base_url or "", "defaultBaseUrl": p.base_url or "",
-            "builtin": bool(p.builtin), "enabled": bool(p.enabled), "note": p.note or "",
-            "personal": False, "addressOverridden": False, "authMode": "key",
-            "apiKey": p.api_key or "",
-        }
+    # A managed service's endpoint and credential are always administrator-owned.
+    out = {p.id: _organization_provider(p) for p in org_rows}
     for row in personal:
         if not row.get("personal"):
             continue
@@ -545,7 +555,7 @@ def probe_sync(base: str, key: str, model: str, kind: str = "openai-compat") -> 
         body = error.read(16000).decode("utf-8", "replace")
         billing = model_errors.billing_diagnostic(body)
         detail = (model_errors.billing_message(billing) + f"（HTTP {status}）"
-                  if billing else model_errors.public_failure(f"HTTP {status}"))
+                  if billing else model_errors.public_failure(f"HTTP {status} {body}"))
         return {"ok": False, "detail": detail,
                 **(billing or {})}
 

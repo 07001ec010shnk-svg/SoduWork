@@ -49,6 +49,7 @@ from ..services import work_catalog
 from ..services import device_auth
 from ..services import device_connections
 from ..services import environment_service
+from .input_validation import parse_integer
 
 log = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -416,7 +417,8 @@ async def create_domain(
     user: User = Depends(require_perm("user.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    r = await rbac.create_domain(session, (body.get("name") or "").strip(), int(body.get("sort") or 0))
+    sort = parse_integer(body.get("sort"), field="sort", default=0)
+    r = await rbac.create_domain(session, (body.get("name") or "").strip(), sort)
     await audit.log(session, user, "domain.create", "domain", r["id"], r["name"], {})
     return r
 
@@ -428,7 +430,12 @@ async def update_domain(
     user: User = Depends(require_perm("user.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    r = await rbac.update_domain(session, did, body.get("name"), body.get("sort"))
+    # Omitted/null sort retains the previous rank; a supplied value must be
+    # validated before the service can mutate either name or sort.
+    sort = body.get("sort")
+    if sort is not None:
+        sort = parse_integer(sort, field="sort")
+    r = await rbac.update_domain(session, did, body.get("name"), sort)
     if r is None:
         raise HTTPException(status_code=404, detail="领域不存在")
     await audit.log(session, user, "domain.update", "domain", did, r["name"], {})
@@ -1326,9 +1333,11 @@ async def put_model_def(
     # Keep those exact rows editable; never truncate or rename their identities.
     if m is None and len(mid) > 64:
         raise HTTPException(status_code=400, detail="模型服务标识加模型标识共超过 64 个字符，请缩短模型标识")
-    if await session.get(ModelProvider, pid, populate_existing=True) is None:
+    provider = await session.get(ModelProvider, pid, populate_existing=True)
+    if provider is None:
         raise HTTPException(status_code=400, detail="这个模型服务不存在")
-    if m is None:
+    created = m is None
+    if created:
         m = ModelDef(id=mid, provider_id=pid, name=name, builtin=False)
         session.add(m)
     if "label" in body:
@@ -1352,6 +1361,9 @@ async def put_model_def(
         m.ctx_window = validate_limits(body.get("ctxWindow", m.ctx_window), m.config or {})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    receipt = {}
+    if created and model_catalog.normalize_modality(m.modality) == "chat":
+        receipt = await model_catalog.creation_receipt(session, provider, m)
     await session.commit()
     from ..services.client_domain_events import models_changed
     await models_changed(session)
@@ -1359,7 +1371,7 @@ async def put_model_def(
         session, user, "model.def", "setting", mid, m.label or name,
         {"enabled": m.enabled, "modality": m.modality},
     )
-    return {"ok": True, "id": mid}
+    return {"ok": True, "id": mid, **receipt}
 
 
 @router.delete("/model-defs/{mid:path}")

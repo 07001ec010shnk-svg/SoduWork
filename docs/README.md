@@ -7,6 +7,7 @@
 | Install the desktop client and start a conversation | [Desktop quickstart](desktop-quickstart.en.md) |
 | Run the desktop and management UI for the first time | [Run from source](getting-started.en.md) |
 | Configure a model endpoint or investigate billing/protocol errors | [Model services](model-services.en.md) |
+| Connect CodeBuddy Code with your own account | [Local ACP setup](codebuddy-acp.en.md) |
 | Understand the layout and change code | [Developer guide](development.en.md) |
 | Submit a change or translation | [Contributing](../CONTRIBUTING.md) |
 | Deploy for a team | [Docker self-hosting](../ops/self-host/README.md) |

@@ -117,7 +117,7 @@
   // Expose endpoint editing only when the main process permits it; refresh when policy is restored.
   var runtimeEditable = false;
   function legacyHubConfig() {
-    var row;
+    var row, credentialHub;
     try { row = JSON.parse(readLocal(HUB_CONNECTIONS_KEY)); } catch (_) {}
     if (!row || !['production', 'development'].includes(row.environment)) {
       var previous = readLocal(HUB_ENV_KEY), legacy = safeHub(readLocal(LEGACY_HUB_KEY), '');
@@ -128,6 +128,7 @@
       var production = !existed ? runtimeForm() !== 'local-code' :
         previous === 'production' || (previous !== 'development' &&
           (legacy === LEGACY_PRODUCTION_HUB || (!legacy && existed)));
+      credentialHub = (production ? legacy : dev || legacy) || LEGACY_PRODUCTION_HUB;
       row = { environment: production ? 'production' : 'development',
         productionHub: existed ? (legacy || LEGACY_PRODUCTION_HUB) : DEFAULT_PRODUCTION_HUB,
         developmentHub: dev || (!production && legacy) ||
@@ -137,7 +138,8 @@
     var team = safeHub(row.productionHub, ''), local = safeHub(row.developmentHub, DEFAULT_DEVELOPMENT_HUB);
     var environment = row.environment === 'production' && team ? 'production' : 'development';
     var hub = environment === 'production' ? team : local;
-    if (readLocal('soduwork_work_device_secret') && !readLocal(LEGACY_AUTH_HUB_KEY)) writeLocal(LEGACY_AUTH_HUB_KEY, hub);
+    if (readLocal('soduwork_work_device_secret') && !readLocal(LEGACY_AUTH_HUB_KEY))
+      writeLocal(LEGACY_AUTH_HUB_KEY, credentialHub || safeHub(row.environment === 'production' ? row.productionHub : row.developmentHub, LEGACY_PRODUCTION_HUB));
     return { environment: environment, hub: hub, productionHub: team, developmentHub: local, editable: true };
   }
   function hubConfig() {
@@ -205,6 +207,22 @@
     return hubConfig();
   }
   var _savedHubRestore = null;
+  async function migrateLegacyCredential(bridge) {
+    var key = 'soduwork_work_device_secret', legacySecret = readLocal(key);
+    if (!legacySecret || !bridge.deviceAuthMigrateLegacy) return;
+    var origin = readLocal(LEGACY_AUTH_HUB_KEY);
+    if (!origin) { legacyHubConfig(); origin = readLocal(LEGACY_AUTH_HUB_KEY); }
+    function legacyDevice() { return readLocal('soduwork_work_user_id') || (typeof User !== 'undefined' && User?.id); }
+    var clientId = legacyDevice();
+    if (!clientId || clientId === 'u-unknown' || !origin || origin === LEGACY_PRODUCTION_HUB || safeHub(origin, '') !== origin) return;
+    try {
+      var receipt = await bridge.deviceAuthMigrateLegacy({hub:origin, clientId, legacySecret});
+      if (receipt?.stored === true && receipt.hub === origin && receipt.clientId === clientId &&
+          readLocal(LEGACY_AUTH_HUB_KEY) === origin && readLocal(key) === legacySecret &&
+          legacyDevice() === clientId)
+        localStorage.removeItem(key);
+    } catch (_) { /* Keep the original until secure storage acknowledges this exact identity. */ }
+  }
   // Resolve the trusted main-process policy before enrollment. Saved environment
   // selection is consulted only by explicitly enabled internal fixtures.
   function restoreSavedHub() {
@@ -225,6 +243,7 @@
             !(connection && connection.editable === true)) throw new Error('客户端服务配置无效');
         runtimeHub = target;
         runtimeEditable = !!(connection && connection.editable === true);
+        return migrateLegacyCredential(fixedBridge);
       }).catch(function (error) { _savedHubRestore = null; throw error; });
       return _savedHubRestore;
     }
@@ -1751,6 +1770,8 @@
         if (!localProvider) throw new Error('本地模型服务已不可用，请刷新目录后重试');
         var localModel = (localCatalog?.myModels || []).find(row => row.providerId === nativeId && row.name === String(body.model || '').trim());
         if (!localModel) throw new Error('本地模型不存在或已不可用，请刷新目录后重试');
+        if (body.expectedConfigRevision && body.expectedConfigRevision !== localModel.configRevision)
+          throw new Error('模型配置在检测期间已变更，请重新检测');
         if (typeof local?.checkCapabilities !== 'function') throw new Error('当前客户端尚未提供本机能力检测，请更新客户端');
         var report = await local.checkCapabilities({ modelRef: localModel.id,
           checks: Array.isArray(body.checks) ? body.checks : ['connection'],
@@ -1765,6 +1786,7 @@
       options?.signal?.throwIfAborted();
       var result = await jfetch('/my-models/capabilities/check', { method: 'POST',
         body: JSON.stringify({ providerId: body.providerId, model: body.model,
+          ...(body.expectedConfigRevision ? { expectedConfigRevision: body.expectedConfigRevision } : {}),
           ...(Array.isArray(body.checks) ? { checks: body.checks } : {}) }),
         signal: options?.signal ? AbortSignal.any([options.signal, _abortSignal(140000)]) : _abortSignal(140000) });
       await invalidateDomain('models', scope); return result;
@@ -3210,7 +3232,11 @@
              * After secure storage takes ownership, remove long-lived secrets from the renderer even
              * before device activation.
              */
-            try { if (readLocal(LEGACY_AUTH_HUB_KEY) === base()) localStorage.removeItem('soduwork_work_device_secret'); } catch (e) {}
+            if (window.soduWorkAPI.deviceAuthMigrateLegacy) {
+              if (secret()) await registration.step(function () { return migrateLegacyCredential(window.soduWorkAPI); });
+            } else {
+              try { if (readLocal(LEGACY_AUTH_HUB_KEY) === base()) localStorage.removeItem('soduwork_work_device_secret'); } catch (e) {}
+            }
             // Existing signed-in profiles may predate the explicit account preference.
             if (secure.ok && secure.session && secure.user?.id && !secure.activationRequired && !SoduWorkAPI.rememberedLoginAccount()) {
               rememberLoginAccount(loginAccount(secure.user.email) || loginAccount(secure.user.username), secure);
@@ -3261,7 +3287,7 @@
       try { root = typeof workRoot === 'function' ? String(workRoot() || '').trim() : ''; } catch (e) {}
       checkLogin();
       var result = await window.soduWorkAPI.deviceAuthLogin({
-        hub: loginHub, clientId: device(),
+        hub: loginHub, clientId: device(), preserveLegacyIdentity: !!secret(),
         account: String(credentials && credentials.account || '').trim(),
         password: String(credentials && credentials.password || ''),
         displayName: String(credentials && credentials.displayName || '').trim(),
@@ -3301,7 +3327,7 @@
       }
       if (epoch !== _registrationEpoch || hub !== base()) throw staleTaskScope();
       var result = await window.soduWorkAPI.deviceAccountAction(Object.assign({}, payload || {}, {
-        action: action, hub: hub, clientId: device(), version: version, workRoot: root,
+        action: action, hub: hub, clientId: device(), version: version, workRoot: root, preserveLegacyIdentity: !!secret(),
         name: [info && info.username, info && info.hostname].filter(Boolean).join(' · '),
         platform: info && info.platform || ''
       }));

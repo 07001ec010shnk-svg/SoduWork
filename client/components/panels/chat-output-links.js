@@ -427,6 +427,13 @@
       }
       card.append(mark, copy);
       if (installable) card.append(install);
+      if (!file.skillPackage) {
+        const note = root.ownerDocument.createElement('p'); note.className = 'nplugin-verification-note';
+        const text = '安装检查仅验证包结构与声明，不代表真实 AI 或业务功能已验证。';
+        note.setAttribute('data-i18n', text); note.setAttribute('data-i18n-source', text);
+        note.textContent = global.SoduWorkI18n?.translateText?.(text) || text;
+        note.setAttribute('role', 'note'); card.append(note);
+      }
       card.append(error); target.appendChild(card);
     }
   }

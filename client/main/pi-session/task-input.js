@@ -68,8 +68,12 @@ function latestDeliveryAttachments(rows) {
     .filter(file => String(file?.role || '') !== 'rework_input');
   const hasVersion = delivery.some(file => attachmentRound(file) > 0 || attachmentBatch(file) !== 'legacy');
   if (!hasVersion) return delivery;
+  const isRequirementInput = file => attachmentRound(file) === 0 &&
+    attachmentBatch(file) === 'legacy' && String(file?.role || '') === 'input';
   const batches = new Map();
   delivery.forEach((file, index) => {
+    // Later requirement uploads remain context, but cannot select a delivery batch.
+    if (isRequirementInput(file)) return;
     const key = attachmentBatch(file);
     const previous = batches.get(key) || {key, stamp: -1, index: -1, round: 0};
     previous.stamp = Math.max(previous.stamp, attachmentStamp(file, index));
@@ -84,8 +88,7 @@ function latestDeliveryAttachments(rows) {
     /* Human supplied requirement material has no delivery batch. Keep it as
        context for a correction, while old unversioned outputs must not leak
        into a versioned rework session. */
-    const legacyInput = round === 0 && batch === 'legacy' && String(file?.role || '') === 'input';
-    return legacyInput || (batch === latest.key && (round === latest.round || round === 0));
+    return isRequirementInput(file) || (batch === latest.key && (round === latest.round || round === 0));
   });
 }
 
