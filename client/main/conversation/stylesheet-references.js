@@ -16,14 +16,7 @@ function references(source) {
     }
     return '';
   }
-  function whitespace() {
-    while (i < text.length) {
-      if (/\s/.test(text[i])) { i++; continue; }
-      if (!text.startsWith('/*', i)) break;
-      const end = text.indexOf('*/', i + 2);
-      i = end < 0 ? text.length : end + 2;
-    }
-  }
+  function whitespace() { while (/\s/.test(text[i] || '') && i < text.length) i++; }
   while (i < text.length) {
     if (text.startsWith('/*', i)) { const end = text.indexOf('*/', i + 2); i = end < 0 ? text.length : end + 2; continue; }
     if (text[i] === '"' || text[i] === "'") { string(); continue; }
@@ -31,6 +24,11 @@ function references(source) {
     if (!token || /[\w$.-]/.test(text[i - 1] || '')) { i++; continue; }
     i += token[0].length; whitespace();
     if (token[0][0] === '@') {
+      while (text.startsWith('/*', i)) {
+        const end = text.indexOf('*/', i + 2);
+        i = end < 0 ? text.length : end + 2;
+        whitespace();
+      }
       if (text[i] === '"' || text[i] === "'") result.push(string());
       continue;
     }
