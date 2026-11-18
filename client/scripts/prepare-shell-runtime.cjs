@@ -195,7 +195,16 @@ async function prepare({ platform = process.platform, environment = process.env,
   const archive = await archiveOf(selectRelease(arch, environment), { cache, environment, download, log });
 
   ensureInside(runtimeRoot, root);
-  fs.rmSync(runtimeRoot, { recursive: true, force: true });
+  try {
+    fs.rmSync(runtimeRoot, { recursive: true, force: true });
+  } catch (error) {
+    if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
+    // Interrupted extraction can leave an undeletable reparse point.
+    const stale = runtimeRoot + '.stale-' + crypto.randomUUID();
+    ensureInside(stale, root);
+    fs.renameSync(runtimeRoot, stale);
+    log('[SoduWork shell runtime] retained an unremovable previous runtime at ' + stale);
+  }
   fs.mkdirSync(runtimeRoot, { recursive: true });
   const extracted = run(archive, ['-y', '-o' + runtimeRoot], {
     cwd: root, encoding: 'utf8', timeout: 10 * 60 * 1000, windowsHide: true,
