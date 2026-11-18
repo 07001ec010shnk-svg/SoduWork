@@ -48,7 +48,7 @@
       select('imageRouting', '图片处理方式', { auto: '自动选择', native: '模型原生识图', 'vision-fallback': '独立视觉服务' }, config.imageRouting || 'auto') +
       '<label class="md-cap-field"><span>上下文窗口</span><input class="md-in" data-mdfield="ctxWindow" type="number" min="1024" max="10000000" step="1" placeholder="自动" value="' +
         e(model.contextWindowKnown === false ? '' : model.ctxWindow || model.contextWindow || '') + '"></label>' +
-      '<label class="md-cap-field"><span>最大输出 Token</span><input class="md-in" data-mdfield="maxOutputTokens" type="number" min="1024" max="262144" step="1" placeholder="16384" value="' + e(config.maxOutputTokens || '') + '"></label>' +
+      '<label class="md-cap-field"><span>最大输出 Token</span><input class="md-in" data-mdfield="maxOutputTokens" type="number" min="1024" max="262144" step="1" placeholder="16384" value="' + e(config.maxOutputTokens || '') + '"><small>留空时使用 16384 Token。请按服务实际限制填写；能力检测不验证最大输出上限。</small></label>' +
       select('thinkingFormat', '思考协议格式', { '': '自动识别（按模型名）', openai: 'OpenAI reasoning_effort',
         deepseek: 'DeepSeek thinking', qwen: 'Qwen enable_thinking', 'qwen-chat-template': 'Qwen chat_template_kwargs',
         'chat-template': '自定义 chat_template_kwargs', zai: 'Z.ai thinking', openrouter: 'OpenRouter reasoning',

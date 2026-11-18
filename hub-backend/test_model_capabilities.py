@@ -565,6 +565,16 @@ class CapabilityTests(IsolatedDatabase):
 
 
 class ContractTests(unittest.TestCase):
+    def test_output_default_is_separate_from_context_and_small_capability_probe(self):
+        for config, expected in (({}, 16384), ({"maxOutputTokens": 32768}, 32768),
+                                 ({"maxOutputTokens": 65536}, 65536)):
+            cleaned = caps.clean_config(config)
+            caps.validate_limits(131072, cleaned)
+            fields = caps.runtime_fields(cleaned)
+            self.assertEqual(fields["maxOutputTokens"], expected)
+            body, _ = probe._payload({"model": "fixture", "contextWindow": 131072, **fields}, "connection")
+            self.assertEqual(body["max_tokens"], 512)
+
     def test_saved_target_generation_keys_fit_the_mapped_database_column(self):
         from app.services.model_capability_generations import generation_key
         key = generation_key("personal-provider", "synthetic-device", "synthetic-provider")

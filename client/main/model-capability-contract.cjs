@@ -2,6 +2,8 @@
 
 // Trusted host-side projection. Renderer writes contain declarations, never evidence.
 const crypto = require('node:crypto');
+// A fallback, not a discovered provider limit. Explicit output budgets take precedence.
+const DEFAULT_OUTPUT_TOKENS = 16384;
 const CAPABILITIES = ['imageInput', 'toolCalling', 'streaming'];
 const CHECKS = ['connection', ...CAPABILITIES];
 const STATES = ['unknown', 'supported', 'unsupported'];
@@ -78,7 +80,7 @@ function runtimeFields(config = {}, evidence) {
   }
   return { capabilityProfile, imageRouting,
     input: imageRouting === 'native' && capabilityProfile.imageInput.state === 'supported' ? ['text', 'image'] : ['text'],
-    visionFallbackAvailable: false, maxOutputTokens: config.maxOutputTokens || 65536,
+    visionFallbackAvailable: false, maxOutputTokens: config.maxOutputTokens || DEFAULT_OUTPUT_TOKENS,
     compatibility: compatibility(evidence?.apiFamily && evidence.apiFamily !== API_FAMILY ? {} : evidence?.compatibility),
   };
 }
@@ -122,5 +124,5 @@ function assertRequired(model, required) {
   const reason = incompatibility(model, required);
   if (reason) throw Object.assign(Error(reason), { code: 'MODEL_CAPABILITY_INCOMPATIBLE' });
 }
-module.exports = { CAPABILITIES, CHECKS, API_FAMILY, profile, runtimeFields, mergeEvidence, publicEvidence,
+module.exports = { DEFAULT_OUTPUT_TOKENS, CAPABILITIES, CHECKS, API_FAMILY, profile, runtimeFields, mergeEvidence, publicEvidence,
   runtimeRevision, compatibility, piCompatibility, stable, validate, incompatibility, assertRequired };

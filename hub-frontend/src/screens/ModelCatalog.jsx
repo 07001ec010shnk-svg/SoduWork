@@ -442,7 +442,8 @@ function ModelForm({ providerId, initial, onClose, onSaved }) {
                 placeholder={tx('自动')} value={ctxWindow} onChange={event => setCtxWindow(event.target.value)} /></div>
             <div><label className="f-lbl" htmlFor="model-max-output">{tx('最大输出 Token')}</label>
               <input id="model-max-output" className="f-in" type="number" min="1024" max="262144" step="1"
-                placeholder="16384" value={maxOutputTokens} onChange={event => setMaxOutputTokens(event.target.value)} /></div>
+                aria-describedby="model-max-output-hint" placeholder="16384" value={maxOutputTokens} onChange={event => setMaxOutputTokens(event.target.value)} />
+              <p id="model-max-output-hint" className="model-config-hint">{tx('留空时使用 16384 Token。请按服务实际限制填写；能力检测不验证最大输出上限。')}</p></div>
           </div><p className="model-config-hint">{tx('自动选择优先使用已确认的原生视觉能力；兼容识图需要配置独立视觉服务。')}</p>
       {modality === 'chat' && <div className="model-thinking-config" style={{ marginTop: 14 }}>
         <div className="f-lbl">{tx("思考能力")}</div>

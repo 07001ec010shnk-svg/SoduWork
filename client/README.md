@@ -80,6 +80,8 @@ On Windows, the execution runtime joins a native Job Object before tools initial
 
 To verify summary export against a disposable authenticated Hub, run `node e2e/acceptance-summary-export.cjs /absolute/evidence/directory /path/to/test/python`. The Python environment needs the backend test dependencies. This exercises native IPC and saved bytes with injected save-dialog choices, not a real model or production account.
 
+For models without an explicit maximum output budget, the desktop, Hub and Runner use 16384 tokens, further bounded by the configured context window. This fallback is not a detected provider limit. Set **Maximum output tokens** in **My Models**, or **Model Catalog** for organization models, to match the deployed service. Reasoning models may need a larger explicit budget to reach tool calls or a final answer. Keep the real context window separate from the output limit; do not shrink it to work around an output-budget rejection. Capability and connection tests use small requests and do not determine the maximum output limit. Output-limit errors identify the setting to adjust and do not trigger automatic retries.
+
 ## Packaging
 
 Before distributing native installers, complete the outstanding [distribution materials](../third-party/README.md) and platform acceptance.
