@@ -158,8 +158,11 @@ def initialized(state: Path) -> bool:
     try:
         with closing(sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)) as conn:
             return bool(conn.execute("SELECT COUNT(*) FROM app_user").fetchone()[0])
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc):
+    except sqlite3.DatabaseError as exc:
+        # OperationalError ("no such table") is a subclass of DatabaseError, so this
+        # also covers a damaged/non-SQLite file, which raises DatabaseError directly
+        # (for example "file is not a database") instead of an OperationalError.
+        if isinstance(exc, sqlite3.OperationalError) and "no such table" in str(exc):
             return False
         raise StartupError("Cannot inspect the local database. See the data directory; no data was reset.") from exc
 
