@@ -118,3 +118,7 @@ Use the relative language links at the top of each page on GitHub. The same path
 - Keep commands, prerequisites, data handling, and permission guidance synchronized in both languages. Preserve reciprocal language links and a navigation link at the top.
 - Use an explicit suffix for another language, such as `.ja.md`, and register completed pages in the overview and index. Label untranslated references with their actual language; do not add empty translations or label Chinese destinations as English.
 - Use relative documentation links without hardcoded GitHub repository addresses or private development branch names so forks and source archives remain usable.
+
+## Automation template catalog concurrency
+
+GET `/api/admin/automation-templates` returns `items` and an opaque `revision`. PUT must send both fields. Missing revisions return 428; stale revisions return 409 without replacing the catalog. Deploy the management UI with the backend and refresh old browser tabs. On conflict, retain the draft, load the latest catalog, review concurrent changes, and explicitly save again. Deleted templates are not silently recreated. Internal maintenance callers must read the current catalog before modifying it.

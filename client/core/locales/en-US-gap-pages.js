@@ -6,6 +6,9 @@
   // Product localization uses the same app concept in Chinese and English.
   // This is intentional, not a literal translation; keep app/jiyong IDs stable.
   const messages = {
+    '验证范围': 'Verification scope',
+    '安装检查仅验证包结构与声明，不代表真实 AI 或业务功能已验证。': 'Installation checks validate package structure and declarations only, not live AI or business functionality.',
+    '请查看交付总结中的未测项，在实际使用前确认关键功能。': 'Review the untested items in the delivery summary and verify key functions before use.',
     '按设定时间创建普通会话，发送提示词并在对话中查看过程与结果。': 'Start a chat at the scheduled time, send the prompt, and view progress and results in the conversation.',
     '记录目标与完成标准，保存到需求池或交办给同事': 'Record the goal and completion criteria, then save the issue or assign it to a teammate',
     '阶段：': 'Stage: ',

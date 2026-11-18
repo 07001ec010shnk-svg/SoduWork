@@ -1333,9 +1333,11 @@ async def put_model_def(
     # Keep those exact rows editable; never truncate or rename their identities.
     if m is None and len(mid) > 64:
         raise HTTPException(status_code=400, detail="模型服务标识加模型标识共超过 64 个字符，请缩短模型标识")
-    if await session.get(ModelProvider, pid, populate_existing=True) is None:
+    provider = await session.get(ModelProvider, pid, populate_existing=True)
+    if provider is None:
         raise HTTPException(status_code=400, detail="这个模型服务不存在")
-    if m is None:
+    created = m is None
+    if created:
         m = ModelDef(id=mid, provider_id=pid, name=name, builtin=False)
         session.add(m)
     if "label" in body:
@@ -1359,6 +1361,9 @@ async def put_model_def(
         m.ctx_window = validate_limits(body.get("ctxWindow", m.ctx_window), m.config or {})
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    receipt = {}
+    if created and model_catalog.normalize_modality(m.modality) == "chat":
+        receipt = await model_catalog.creation_receipt(session, provider, m)
     await session.commit()
     from ..services.client_domain_events import models_changed
     await models_changed(session)
@@ -1366,7 +1371,7 @@ async def put_model_def(
         session, user, "model.def", "setting", mid, m.label or name,
         {"enabled": m.enabled, "modality": m.modality},
     )
-    return {"ok": True, "id": mid}
+    return {"ok": True, "id": mid, **receipt}
 
 
 @router.delete("/model-defs/{mid:path}")

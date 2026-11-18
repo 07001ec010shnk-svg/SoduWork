@@ -77,6 +77,23 @@ def schedule_dates(s) -> tuple[date | None, date | None]:
     return start_date, end_date
 
 
+def retry_within_dates(s, pending: datetime | None, now: datetime | None = None) -> bool:
+    """A retry must belong to the date range and still be allowed when dispatched."""
+    if pending is None:
+        return False
+    if getattr(s, "every", "") not in ("hourly", "daily", "weekly", "monthly"):
+        return True
+    start, end = schedule_dates(s)
+    if start is None and end is None:
+        return True
+    from .schedules import schedule_zone
+    zone = schedule_zone(s)
+    instants = (pending, now) if now is not None else (pending,)
+    return all((start is None or utc(instant).astimezone(zone).date() >= start)
+               and (end is None or utc(instant).astimezone(zone).date() <= end)
+               for instant in instants)
+
+
 def validate(s) -> None:
     every = getattr(s, "every", "") or "daily"
     if every not in EVERY:
@@ -284,6 +301,9 @@ def settle(s, run, out: dict, *, outcome_of=None) -> dict:
     if getattr(s, "every", "") == "once" and run.trigger == "timer" and not bool(getattr(s, "once_fired", False)):
         s.retry_count, s.next_retry_at = 0, None  # Manual failures never consume the timer's retry budget.
     retry = outcome_of(s, out)
+    if getattr(s, "next_retry_at", None) is not None and not retry_within_dates(s, s.next_retry_at):
+        s.retry_count, s.next_retry_at = 0, None
+        retry = {"retrying": False}
     if getattr(s, "every", "") != "once":
         return retry
     if run.trigger == "timer":

@@ -18,8 +18,9 @@
     const detail = http ? http[1] : source;
     // Only our finite, sanitized model diagnostics have this catalog prefix.
     // Unknown provider text must not be translated as an ordinary UI label.
-    const key = 'model.detail.' + detail, translated = tx(key);
-    if (translated === key) return source;
+    const key = 'model.detail.' + detail;
+    const translated = global.SoduWorkI18n?.t?.(key, '');
+    if (!translated || translated === key) return source;
     return http ? tx('{reason}（HTTP {status}）').replace('{reason}', () => translated)
       .replace('{status}', () => http[2]) : translated;
   }
@@ -28,6 +29,8 @@
     const source = String(value || '');
     const locale = global.SoduWorkI18n?.getLocale?.() || 'zh-CN';
     if (locale === 'zh-CN') return source;
+    const diagnostic = modelDiagnostic(source);
+    if (diagnostic !== source) return diagnostic;
     // Localize system-owned status envelopes only; model replies and user names stay untouched.
     const interrupted = source.match(/^模型服务在回答过程中中断了这一轮(?:（([\s\S]*)）)?。(?:已自动重试 (\d+) 次。)?已有内容和工具结果已保留，(可恢复这一轮继续|请检查模型服务或配置后再继续)。$/);
     if (interrupted) return [
@@ -36,7 +39,7 @@
       interrupted[2] ? tx('已自动重试 {count} 次。').replace('{count}', () => interrupted[2]) : '',
       tx('已有内容和工具结果已保留，' + interrupted[3] + '。'),
     ].filter(Boolean).join(' ');
-    const wrapped = source.match(/^(这一轮没发出去|打不开对话|开不了对话|需求执行失败)（([\s\S]*)）$/);
+    const wrapped = source.match(/^(这一轮没发出去|这一轮没跑成|打不开对话|开不了对话|需求执行失败)（([\s\S]*)）$/);
     if (wrapped) return tx(wrapped[1] + '（{reason}）').replace('{reason}', () => notice(wrapped[2]));
     const patterns = [
       ['当前会话没有授权', '请新建会话并开启对应能力后再使用这个插件', true],

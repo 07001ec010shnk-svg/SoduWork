@@ -154,7 +154,7 @@ async function run() {
     ['evidence-unavailable', null]
   ]) {
     await js(`_mdChecks.clear();_mdMyModels[0].capabilityEvidenceError=${state==='evidence-unavailable'};
-      ${result ? `_mdChecks.set(_mdCheckKey('personal','business-review-model'),${JSON.stringify(result)});` : ''}
+      ${result ? `_mdChecks.set(_mdCheckKey('personal','business-review-model'),${JSON.stringify({ ...result, usesSavedService: true })});` : ''}
       _mdRender();document.querySelector('.md-cap-report')?.setAttribute('open','');
       document.querySelector('.md-model-report').scrollIntoView({block:'center'});`);
     await wait(100);

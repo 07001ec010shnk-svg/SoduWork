@@ -168,6 +168,26 @@ test('model interruption notices translate their system envelope and safe diagno
   assert.equal(status.notice(transient), transient);
 });
 
+test('repair failure banners localize only catalog model diagnostics and retain unknown text', () => {
+  const status = require('../components/panels/panels-chat-status');
+  const reason = require('../main/pi-session/model-errors').describe('HTTP 403').publicText;
+  const unknown = 'Provider-specific text $&';
+  for (const [locale, expected] of [['en-US', 'The model request was rejected.'],
+    ['ja-JP', 'モデルへのリクエストが拒否されました。'], ['ko-KR', '모델 요청이 거부되었습니다.']]) {
+    loadI18n(locale);
+    for (const value of [reason, '这一轮没跑成（' + reason + '）']) {
+      assert.ok(status.notice(value).includes(expected), locale);
+      assert.match(status.notice(value), /HTTP 403/);
+      assert.doesNotMatch(status.notice(value), /这一轮没跑成|模型请求被拒绝|model\.detail/);
+    }
+    assert.equal(status.notice(unknown), unknown);
+    assert.ok(status.notice('这一轮没跑成（' + unknown + '）').includes(unknown));
+  }
+  loadI18n('zh-CN');
+  assert.equal(status.notice(reason), reason);
+  assert.equal(status.notice('这一轮没跑成（' + reason + '）'), '这一轮没跑成（' + reason + '）');
+});
+
 const EXPECT = {
   'ja-JP': { pending: 'ご要望を理解しています…', explain: '結果を分かりやすくまとめています…', busy: '処理中' },
   'ko-KR': { pending: '요청을 이해하는 중…', explain: '결과를 명확히 정리하는 중…', busy: '처리 중' },

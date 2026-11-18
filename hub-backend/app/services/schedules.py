@@ -266,7 +266,7 @@ def due(s, now: datetime | None = None) -> bool:
         return target is not None and target <= current
     retry_at = getattr(s, "next_retry_at", None)
     if retry_at is not None:
-        return _utc(retry_at) <= current
+        return schedule_timing.retry_within_dates(s, retry_at, current) and _utc(retry_at) <= current
 
     base = s.last_run_at or s.created_at
     if base is None:
