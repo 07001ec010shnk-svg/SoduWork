@@ -15,6 +15,7 @@ import subprocess
 import sys
 import platform
 import re
+import tempfile
 import time
 
 
@@ -26,6 +27,9 @@ BACKEND_FILES = (
     "full_backup.py", "pack_plugin.py", "client-update-trust.json",
 )
 ELECTRON_DOWNLOAD_TIMEOUT = 600
+NPM_PROBE_TIMEOUT = 15
+NPM_VERSION = re.compile(rb"v?\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+                         rb"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?")
 
 
 class StartupError(RuntimeError):
@@ -126,6 +130,30 @@ def run(command: list[str], *, cwd: Path, log: Path, label: str,
     print(f"  完成 / Done ({time.monotonic() - started:.1f}s)", flush=True)
 
 
+def _check_npm_version(npm: str) -> None:
+    command = [npm, "--version"]
+    try:
+        # A Windows npm.cmd can leave a child holding stdout. A temporary file
+        # lets us wait for the command with a deadline without waiting for pipe EOF.
+        with tempfile.TemporaryFile() as output:
+            with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output,
+                                  stderr=subprocess.DEVNULL, **spawn_options()) as child:
+                try:
+                    code = child.wait(timeout=NPM_PROBE_TIMEOUT)
+                except BaseException:
+                    stop_child(child)
+                    raise
+            output.seek(0)
+            # Banners can use a different encoding from the terminal.
+            if code == 0 and any(NPM_VERSION.fullmatch(line.strip()) for line in output):
+                return
+    except subprocess.TimeoutExpired as exc:
+        raise StartupError(f"npm --version timed out after {NPM_PROBE_TIMEOUT}s. Check the npm command on PATH.") from exc
+    except OSError as exc:
+        raise StartupError("Cannot run npm --version. Check the npm command on PATH.") from exc
+    raise StartupError("npm --version failed or returned no version. Check the npm command on PATH.")
+
+
 def _probe_dependencies() -> tuple[str, str, str]:
     if sys.version_info < (3, 12):
         raise StartupError("Python 3.12 or newer is required: https://www.python.org/downloads/")
@@ -141,14 +169,7 @@ def _probe_dependencies() -> tuple[str, str, str]:
             raise ValueError(version)
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         raise StartupError("Node.js 22.19 or newer is required. Check node --version.") from exc
-    # which() only proves the npm entry exists on PATH; a corrupt or
-    # non-runnable npm would pass this check and fail later during npm install.
-    # Probe it the same way node is probed, so --check is truthful.
-    try:
-        subprocess.check_output([npm, "--version"], text=True, timeout=15, **spawn_options())
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        raise StartupError("npm is not runnable. Reinstall Node.js 22.19+ (which includes npm) "
-                           "and reopen this terminal.") from exc
+    _check_npm_version(npm)
     return node, npm, version
 
 
