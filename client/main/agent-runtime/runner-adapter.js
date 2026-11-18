@@ -1488,6 +1488,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     let gate;
     try {
       gate = await pluginGeneration.begin({ handle, app, identity, cancelled,
+        selectedPluginIds: pluginTurn.requestedIds(options),
         // The gate compares content revisions against its pre-dispatch baseline.
         // Filesystem clocks can lag the conversation clock, so time filtering
         // here could let a newly generated invalid draft bypass validation.

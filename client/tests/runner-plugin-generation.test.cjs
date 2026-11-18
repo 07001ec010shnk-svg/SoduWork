@@ -19,7 +19,15 @@ async function fixture(t, fixes, options = {}) {
     calls.push({ op, value });
     if (op === 'job.dispatch') {
       fs.writeFileSync(path.join(root, 'requested-report.txt'), 'Requested report');
-      if (!options.leaveDraftUntouched) write(Boolean(options.validFirst));
+      if (options.htmlOnly) {
+        fs.writeFileSync(path.join(root, 'report.html'), '<!doctype html><h1>Preview</h1>');
+        if (options.htmlOnly === 'manifest') {
+          fs.mkdirSync(path.join(root, '.soduwork'));
+          fs.writeFileSync(path.join(root, '.soduwork/delivery.json'), JSON.stringify({
+            schemaVersion: 1, deliverables: [{ path: 'report.html' }],
+          }));
+        }
+      } else if (!options.leaveDraftUntouched) write(Boolean(options.validFirst));
       return { ok: true, data: { ok: true, ref: _uuidV5('9af442c8-cd1d-4b91-a668-22da2b2635bf', value.dispatchId) } };
     }
     if (op === 'job.comment') { round++; write(options.goalScenario && round === 2 ? false : fixes); if (options.switchOwnerOnRepair) handle.deliveryOwner = 'changed-owner'; return { ok: true, data: { ok: true, state: 'running' } }; }
@@ -32,7 +40,10 @@ async function fixture(t, fixes, options = {}) {
   const model = { ok: true, model: { id: 'fixture', key: 'fixture', input: ['text'] } }, app = { getPath: () => root };
   const adapter = createRunnerRuntimeAdapter({ app, runnerRuntime: runtime, runtimeSpec: { ...catalog.runtime('opencode'), goalMode: 'native' },
     modelConfig: { fetchModel: async () => model, fetchSelection: async () => model } });
-  const session = await adapter.createSession({ identity: {}, native: { runner: { openOptions: { app, cwd: root, ref: 'chat-plugin-gate', intent: options.goalScenario ? 'goal' : '' } } } });
+  const session = await adapter.createSession({ identity: {}, native: { runner: { openOptions: {
+    app, cwd: root, ref: 'chat-plugin-gate', intent: options.goalScenario ? 'goal' : '',
+    resolvePlugins: async ids => ({ items: ids.map(pluginId => ({ pluginId, name: 'Plugin Developer', context: 'Create a reusable plugin package.' })) }),
+  } } } });
   const handle = getRunnerSessionDetails(session).handle;
   handle.on((_event, snapshot) => {
     if (snapshot.status === 'idle' && fs.existsSync(file)) {
@@ -40,9 +51,21 @@ async function fixture(t, fixes, options = {}) {
     }
   });
   t.after(async () => { await session.dispose(); await delay(20); fs.rmSync(root, { recursive: true, force: true }); });
-  const turn = handle.submit('Make a plugin', [], { afterTurn: (state, result) => observed.push({ state, result }) });
+  const turn = handle.submit('Make a plugin', [], { pluginIds: options.htmlOnly ? ['local:plugin-builder'] : [],
+    afterTurn: (state, result) => observed.push({ state, result }) });
   return { turn, handle, calls, observed, file, invalidCompletion: () => exposedInvalidCompletion };
 }
+
+for (const source of ['manifest', 'inferred']) test('Runner selected authoring plugin cannot complete with only ' + source + ' HTML', async t => {
+  const f = await fixture(t, true, { htmlOnly: source }), result = await f.turn.completion;
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(f.calls.filter(row => row.op === 'job.comment').length, 1);
+  assert.equal(f.calls.find(row => row.op === 'job.comment').value.recordUser, false);
+  assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).key, 'draft-check');
+  assert.equal(f.handle.outputSnapshot().pluginValidation[0].state, 'ready');
+  assert.equal(f.observed.length, 1);
+  assert.match(fs.readFileSync(path.join(path.dirname(f.file), 'report.html'), 'utf8'), /Preview/);
+});
 test('Runner repairs the final draft before logical success and without a duplicate user message', async t => {
   const f = await fixture(t, true), result = await f.turn.completion;
   assert.equal(result.ok, true);
