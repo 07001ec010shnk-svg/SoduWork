@@ -57,8 +57,14 @@ async function createEntries(entries) {
   for (const item of entries) prepared.push({ ...item, compressed: await deflate(item.bytes, { level: 3 }) });
   return encode(prepared);
 }
-function createEntriesSync(entries) {
-  return encode(entries.map(item => ({ ...item, compressed: zlib.deflateRawSync(item.bytes, { level: 6 }) })));
+function createZip(root) {
+  const base = fs.realpathSync(root); const { result } = collect(base); let total = 0;
+  const archive = encode(result.map(item => { const bytes = readBounded(item.full, MAX_BYTES - total); total += bytes.length; return {
+    name: item.name, bytes, st: item.st, compressed: zlib.deflateRawSync(bytes, { level: 6 }),
+  }; }));
+  if (archive.length > MAX_BYTES) throw new Error("ZIP archive is larger than 24 MB; remove large files");
+  return { data: archive, name: path.basename(base) + ".zip", size: archive.length, files: result.length, total,
+    website: result.some(file => /(?:^|\/)index\.(?:html?|xhtml)$/i.test(file.name)) };
 }
 function readBounded(filename, remaining) {
   const fd = fs.openSync(filename, 'r');
@@ -77,15 +83,6 @@ function readBounded(filename, remaining) {
       chunks.push(chunk.subarray(0, read));
     }
   } finally { fs.closeSync(fd); }
-}
-function createZip(root) {
-  const base = fs.realpathSync(root); const { result } = collect(base); let total = 0;
-  const archive = encode(result.map(item => { const bytes = readBounded(item.full, MAX_BYTES - total); total += bytes.length; return {
-    name: item.name, bytes, st: item.st, compressed: zlib.deflateRawSync(bytes, { level: 6 }),
-  }; }));
-  if (archive.length > MAX_BYTES) throw new Error("ZIP archive is larger than 24 MB; remove large files");
-  return { data: archive, name: path.basename(base) + ".zip", size: archive.length, files: result.length, total,
-    website: result.some(file => /(?:^|\/)index\.(?:html?|xhtml)$/i.test(file.name)) };
 }
 // Keep the synchronous primitive for worker/test callers. Native UI handlers
 // must use the bounded worker so scanning, reads, zlib and CRC stay off-thread.
