@@ -1,6 +1,9 @@
 /* System-authored capability and requirement copy, shared by renderer and main process. */
 (function (global) {
   const rows = {
+    '整理需求，补充信息': ['Organize and clarify', '要件を整理・補足', '요구사항 정리 및 보완'],
+    '安排人员或 AI 执行': ['Assign to people or AI', '担当者または AI に割当', '담당자 또는 AI에 배정'],
+    '跟进进展，处理确认': ['Track progress and decisions', '進捗確認・承認対応', '진행 상황 및 확인 사항 처리'],
     "正在整理本轮成果…": ["Preparing this turn’s outputs…","今回の成果を整理しています…","이번 작업의 결과를 정리하는 중…"],
     "正在检查插件草稿…": ["Checking the plugin draft…","プラグインの下書きを確認しています…","플러그인 초안을 확인하는 중…"],
     "正在修复插件草稿…": ["Repairing the plugin draft…","プラグインの下書きを修正しています…","플러그인 초안을 수정하는 중…"],

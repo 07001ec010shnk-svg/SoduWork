@@ -85,14 +85,7 @@
   function menuButton(task) { return '<button type="button" class="rq-card-menu" data-rq-actions="' + esc(task.id) +
     '" aria-label="需求操作：' + esc(R.content(task).title) + '" aria-haspopup="menu" aria-expanded="false">' + icon('more') + '</button>'; }
   function card(task, state, ctx) {
-    const pending = R.approval(task, ctx);
-    // A request that this user has already decided is still returned by the
-    // hub while other approvers finish. It must not keep advertising the
-    // decision card in the requirement pool; the detail view already treats
-    // it as a waiting state.
-    const actionable = pending && (!pending.status || pending.status === 'pending') && !pending.myDecision && R.approvalActionable(task, ctx)
-      ? pending : null;
-    const acceptance = actionable || global.TaskTraceApproval?.canAcceptTask(task, ctx), id = esc(task.id);
+    const id = esc(task.id);
     const moving = state.movingId === String(task.id);
     return '<article class="rq-card" data-hbid="' + id + '" aria-busy="' + moving + '" draggable="' + (!moving && state.group === 'stage' && R.canTriage(task)) + '">' +
       '<div class="rq-card-top">' + cardLabels(task) + priorityFlag(task) + menuButton(task) + '</div>' +
@@ -103,9 +96,7 @@
       (task.projectId || task.projectName ? '<span class="rq-project">' + icon('project') + '<span data-user-content>' + esc(project(task, ctx)) + '</span></span>' : '') +
       (due(task) ? '<span class="rq-card-due">' + due(task) + '</span>' : '') +
       '<span class="rq-card-meta">' + owner(task) + '<span class="rq-card-trailing">' + timestamp(task, true) + '</span></span></button>' +
-      (moving ? '<div class="rq-card-moving" role="status"><span class="rq-moving-spinner" aria-hidden="true"></span>正在变更状态…</div>' : acceptance ? '<button type="button" class="rq-card-decision" data-rq-open="' + id + '">' + icon('check') +
-        (actionable?.action === 'review' || (!pending && acceptance) ? '核对成果并选择验收方式' : esc(R.nextStep(task, ctx).text)) + icon('arrow') + '</button>' :
-       assignable(task) ? '<button type="button" class="rq-card-assign" data-rq-assign="' + id + '">' + icon('arrow') + '安排执行</button>' : '') + '</article>';
+      (moving ? '<div class="rq-card-moving" role="status"><span class="rq-moving-spinner" aria-hidden="true"></span>正在变更状态…</div>' : '') + '</article>';
   }
   function groups(list, state, ctx) {
     // Every board column uses actual update chronology, regardless of a saved
@@ -122,6 +113,7 @@
     }
     return [...buckets.values()].sort((a, b) => a[0] === '__none' ? 1 : b[0] === '__none' ? -1 : a[1].localeCompare(b[1], 'zh-CN'));
   }
+  const compactHints = { intake: '整理需求，补充信息', ready: '安排人员或 AI 执行', delivering: '跟进进展，处理确认' };
   function board(list, state, ctx) {
     const archived = state.archive === 'archived';
     return '<div class="' + (archived ? 'rq-archive' : 'rq-kanban' + (state.group !== 'stage' ? ' is-property-group' : '')) + '" role="list" aria-label="需求看板">' +
@@ -130,7 +122,7 @@
         return '<section class="rq-lane' + (stage ? ' is-' + id : '') + '" data-rq-lane="' + esc(id) + '" role="listitem">' +
           '<header class="rq-lane-head"><div class="rq-lane-heading"><h2 class="rq-lane-title" id="' + domId + '-title" title="' + esc(hint || title) + '">' +
           (stage ? icon(id) : icon(state.group === 'owner' ? 'person' : 'project')) + '<span' + (stage || id === '__none' ? '' : ' data-user-content') + '>' + esc(title) +
-          '</span><em>' + items.length + '</em></h2>' + (stage && hint ? '<p class="rq-lane-hint">' + esc(hint) + '</p>' : '') + '</div>' +
+          '</span><em>' + items.length + '</em></h2>' + (stage && hint ? '<p class="rq-lane-hint" title="' + esc(hint) + '">' + esc(compactHints[id] || hint) + '</p>' : '') + '</div>' +
           (!archived && stage && ['intake', 'ready'].includes(id) ? '<button type="button" class="rq-column-add" data-rq-create="' + id +
             '" aria-label="在' + esc(title) + '新建需求">＋</button>' : '') + '</header>' +
           '<div class="rq-lane-cards" id="' + domId + '" tabindex="0" role="region" aria-labelledby="' + domId + '-title">' +
