@@ -78,12 +78,16 @@ def _package_files(pkg: str) -> list[str]:
     return files
 
 
-def _pkg_version(pkg: str) -> str:
+def _pkg_version(pkg: str, *, root: str | None = None) -> str:
     """Read live package metadata without launching npm or caching availability."""
-    for package_file in _package_files(pkg):
+    files = _package_files(pkg) if root is None else [os.path.join(root, *pkg.split("/"), "package.json")]
+    for package_file in files:
         try:
             with open(package_file, encoding="utf-8") as f:
-                version = str(json.load(f).get("version") or "")
+                metadata = json.load(f)
+                if root is not None and metadata.get("name") != pkg:
+                    continue
+                version = str(metadata.get("version") or "")
             if version:
                 return version
         except Exception:  # noqa: BLE001
@@ -91,7 +95,55 @@ def _pkg_version(pkg: str) -> str:
     return ""
 
 
+def _verified_version(key: str) -> str:
+    # These host compatibility modules are reviewed against exact native source.
+    # Other agents retain their existing installation and upgrade policy.
+    return str((_SPECS.get(key) or {}).get("version") or "") if key in {"kimi", "qwen", "dsh"} else ""
+
+
+def _verified_version_issue(key: str, actual: str) -> str:
+    expected = _verified_version(key)
+    if expected and actual != expected:
+        return (f"需要 SoduWork 已验证版本 {expected}，实际为 {actual or '未找到有效安装记录'}。"
+                "请点「更新」切换至已验证版本。")
+    return ""
+
+
+def _verified_cli_issue(key: str, reported: str) -> str:
+    expected = _verified_version(key)
+    if not expected:
+        return ""
+    package = str((_SPECS.get(key) or {}).get("pkg") or "")
+    prefixes = {key, package, package.rsplit("/", 1)[-1], str((_PROFILES.get(key) or {}).get("name") or "")}
+    prefix = "|".join(re.escape(value) for value in sorted(prefixes) if value)
+    semver = r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
+    # Match a version response, not a number quoted in an error or warning.
+    # Kimi/Qwen print the version alone; DSH prefixes its scoped package name.
+    match = re.fullmatch(rf"(?:(?:{prefix})(?:\s+(?:version\s+)?|@))?v?({semver})",
+                         str(reported or "").strip(), re.I)
+    actual = match.group(1) if match else ""
+    if actual != expected:
+        return (f"需要 SoduWork 已验证版本 {expected}，当前选中的执行程序版本为 {actual or '无法确认'}。"
+                "请检查该底座的执行程序路径，并点「更新」切换至已验证版本。")
+    return ""
+
+
+def _selected_cli_version(key: str, *, cached: bool = True) -> str:
+    executable = _bin_of(key)
+    if not executable:
+        return ""
+    prefix = list(((_PROFILES.get(key) or {}).get("argv_prefix") or (lambda: []))())
+    if not cached:
+        return _short(executable, [*prefix, "--version"])
+    return _cached_version_probe(executable, [*prefix, "--version"], run=_short,
+                                 files=_package_files((_SPECS.get(key) or {}).get("pkg", "")))
+
+
 def _runtime_issue(key: str) -> str:
+    if _verified_version(key):
+        issue = _verified_version_issue(key, _pkg_version((_SPECS.get(key) or {}).get("pkg", "")))
+        if issue:
+            return issue
     if key == "opencode":
         return managed_agents.runtime_issue()
     if key == "codex":
@@ -233,10 +285,11 @@ def detect(key: str, *, has_model: bool = True, probes: dict | None = None) -> d
         if node_issue:
             runtime_issue = node_issue
         elif not runtime_issue:
-            argv = list((prof.get("argv_prefix") or (lambda: []))())
-            if not _cached_version_probe(binp, [*argv, "--version"], run=_short,
-                                         files=_package_files(pkg)):
+            reported = _selected_cli_version(key)
+            if not reported:
                 runtime_issue = "Agent 启动自检失败，请检查 Node 版本、系统架构和原生依赖。"
+            else:
+                runtime_issue = _verified_cli_issue(key, reported)
     if binp and not runtime_issue and spec.get("installer") == "managed":
         if ver_from not in {"managed", "cli", "bundled"}:
             runtime_issue = "Agent 启动自检失败，请检查系统运行库、目录权限或重新安装。"
@@ -588,6 +641,7 @@ def _run_npm(jid: str, key: str, action: str) -> None:
     spec = _SPECS.get(key) or {}
     pkg = spec.get("pkg") or ""
     version = str(spec.get("version") or "").strip()
+    verified = _verified_version(key)
     target_pkg = pkg + ("@" + version if version else "")
     if not pkg:
         _done(jid, False, "该 Agent 缺少安装包定义")
@@ -612,6 +666,18 @@ def _run_npm(jid: str, key: str, action: str) -> None:
         cur = _version_of(key)[0]
         if code != 0 or not latest:
             _done(jid, False, "查不到版本（多半是这台机器连不上 npm registry）", code)
+            return
+        if verified:
+            if latest != verified:
+                _done(jid, False, f"版本查询不一致：需要已验证版本 {verified}，实际返回 {latest}", 2)
+            elif not cur:
+                _done(jid, True, f"已验证版本是 {verified}，这台设备尚未安装", code)
+            elif cur != verified:
+                _done(jid, True, f"当前为 {cur}；SoduWork 已验证版本为 {verified}，请点「更新」切换。", code)
+            elif issue := (_runtime_issue(key) or _verified_cli_issue(key, _selected_cli_version(key))):
+                _done(jid, False, f"已安装已验证版本 {cur}，但{issue}", 2)
+            else:
+                _done(jid, True, f"已安装 SoduWork 已验证版本 {cur}", code)
             return
         if not cur:
             _done(jid, True, f"最新是 {latest}，你这台还没装", code)
@@ -650,6 +716,17 @@ def _run_npm(jid: str, key: str, action: str) -> None:
     runtime_detail = ""
     code, _ = run(["install", "-g", "--include=optional", "--engine-strict", target_pkg], timeout=900)
     agent_npm_runtime.activate_environment()
+    if code == 0 and verified:
+        # Inspect the tree npm was asked to install. Legacy/global metadata
+        # must not hide a missing or wrong private installation, particularly
+        # before DSH activates a runtime derived from that adapter.
+        actual = _pkg_version(pkg, root=agent_npm_runtime.private_root())
+        if issue := _verified_version_issue(key, actual):
+            _done(jid, False, issue, 2)
+            return
+        if key == "dsh" and (issue := _verified_cli_issue(key, _selected_cli_version(key, cached=False))):
+            _done(jid, False, issue, 2)
+            return
     if code == 0 and key == "codex":
         from .codex_account_acp import PACKAGE
         _say(jid, "正在补齐 Codex 安全权限适配器，保留个人账号登录…")
@@ -699,15 +776,16 @@ def _run_npm(jid: str, key: str, action: str) -> None:
         code, runtime_detail = repair_native(run)
         if runtime_detail:
             _say(jid, runtime_detail)
-    ver = _pkg_version(pkg)
-    issue = _runtime_issue(key)
+    ver = _pkg_version(pkg, root=agent_npm_runtime.private_root()) if verified else _pkg_version(pkg)
+    issue = _verified_version_issue(key, ver) or _runtime_issue(key)
     if code == 0 and key == "dsh" and not issue:
         issue = _acp_runtime_issue("dsh", probe=True)
     if code == 0 and not issue:
-        executable = _bin_of(key)
-        prefix = list(((_PROFILES.get(key) or {}).get("argv_prefix") or (lambda: []))())
-        if not executable or not _short(executable, [*prefix, "--version"]):
+        reported = _selected_cli_version(key, cached=False)
+        if not reported:
             issue = "安装包已写入，但 Agent 启动自检失败；请检查 Node 版本、系统架构和原生依赖。"
+        else:
+            issue = _verified_cli_issue(key, reported)
     runtime_ready = not issue
     if code == 0 and ver and runtime_ready:
         _done(jid, True, f"装好了：{pkg}@{ver}", code)

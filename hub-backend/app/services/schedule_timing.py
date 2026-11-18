@@ -47,7 +47,7 @@ def clean_weekdays(raw) -> list[int]:
     for value in values:
         try:
             number = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         if 1 <= number <= 7:
             result.add(number)
@@ -60,7 +60,7 @@ def clean_month_days(raw) -> list[int]:
     for value in values:
         try:
             number = int(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         if 1 <= number <= 31:
             result.add(number)

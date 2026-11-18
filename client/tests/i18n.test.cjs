@@ -5,6 +5,33 @@ const fs = require('node:fs');
 const path = require('node:path');
 const script = fs.readFileSync(path.join(__dirname, '../core/i18n.js'), 'utf8');
 
+test('WeCom remote task guidance follows every supported locale', () => {
+  const c = client();
+  const phrases = [
+    '授权对话和插件使用企业微信，远程发送任务指令请在「手机远程对话」中连接机器人并绑定任务',
+    '尚无进入任务的消息。',
+    '此连接收到过来自未配对会话的消息。要让某个私聊的消息进入任务，请点击「绑定任务」→ 选择执行电脑 → 在目标企微私聊发送一次性配对命令。',
+    '命令有效期 10 分钟，仅可使用一次。在目标企微私聊中发送此命令。配对成功后即可在该私聊发送任务指令。',
+    '绑定任务',
+  ];
+  for (const phrase of phrases) {
+    const variants = ['zh-CN', 'en-US', 'ja-JP', 'ko-KR'].map(locale => c.api.translateText(phrase, locale));
+    assert.equal(new Set(variants).size, 4, phrase);
+  }
+});
+
+test('legacy credential recovery guidance follows every supported locale', () => {
+  const c = client();
+  for (const phrase of [
+    '原设备凭据无法验证',
+    '原设备凭据无法验证，已保留原记录',
+    '原设备凭据尚未迁移，请重试连接',
+  ]) {
+    const variants = ['zh-CN', 'en-US', 'ja-JP', 'ko-KR'].map(locale => c.api.translateText(phrase, locale));
+    assert.equal(new Set(variants).size, 4, phrase);
+  }
+});
+
 test('device and account history controls retain all four locale translations', () => {
   const c = client();
   const expected = {
@@ -270,10 +297,18 @@ test('localized slash actions resolve to the same work contract and preserve req
   }
 });
 function client(saved = {}, blocked = false, options = {}) {
-  const storage = new Map(Object.entries(saved)), listeners = new Map(), sent = [];
+  const storage = options.storage || new Map(Object.entries(saved)), listeners = new Map(), sent = [];
   const context = vm.createContext({
     Intl, Map, Set, Object,
-    localStorage: { getItem: key => { if (blocked) throw Error('blocked'); return storage.get(key) || null; }, setItem: (key, value) => { if (blocked) throw Error('blocked'); storage.set(key, value); } },
+    localStorage: {
+      getItem: key => { if (blocked) throw Error('blocked'); return storage.get(key) || null; },
+      setItem: (key, value) => {
+        if (blocked) throw Error('blocked');
+        const previous = storage.get(key);
+        storage.set(key, value);
+        if (previous !== value) options.onStorageWrite?.(key, value);
+      },
+    },
     document: { readyState: 'loading', documentElement: { dataset: {} }, querySelectorAll: () => [] },
     CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init.detail; } },
     addEventListener: (name, cb) => { listeners.set(name, cb); },
@@ -481,6 +516,130 @@ test('storage and IPC changes synchronize windows without rebroadcast loops', ()
   assert.equal(c.sent.length, initial);
   assert.equal(c.read('saves'), 0);
 });
+for (const [finalLocale, intermediateLocale] of [['en-US', 'zh-CN'], ['zh-CN', 'en-US']]) {
+  test('delayed storage notifications converge without locale backslide to ' + finalLocale, () => {
+    const key = 'soduwork_work_cfg_v5_locale';
+    const storage = new Map([[key, finalLocale]]), windows = [], pending = [];
+    for (let index = 0; index < 2; index++) {
+      const renderer = client({}, false, { storage, onStorageWrite(changedKey, value) {
+        if (changedKey !== key) return;
+        // Browsers enqueue storage events for other same-origin windows only.
+        windows.forEach((target, targetIndex) => {
+          if (targetIndex !== index) pending.push({ target, value });
+        });
+      } });
+      windows.push(renderer);
+    }
+    const [active, passive] = windows;
+    active.api.setLocale(intermediateLocale);
+    const first = pending.shift();
+    first.target.listeners.get('storage')({ key, newValue: first.value });
+    assert.equal(passive.api.getLocale(), intermediateLocale, 'A current cross-window choice still synchronizes');
+    assert.equal(pending.length, 0);
+    active.api.setLocale(finalLocale);
+    active.api.setLocale(intermediateLocale);
+    active.api.setLocale(finalLocale);
+    assert.equal(pending.length, 3, 'Successive writes are queued while the other renderer is busy');
+    const broadcasts = windows.map(renderer => renderer.sent.length);
+    const changes = [];
+    windows.forEach(renderer => renderer.listeners.set('soduwork-locale-change', event => changes.push(event.detail.locale)));
+
+    // Deliver old and new values in order, including any echoes they enqueue.
+    let deliveries = 0;
+    while (pending.length && deliveries++ < 12) {
+      const { target, value } = pending.shift();
+      target.listeners.get('storage')({ key, newValue: value });
+      assert.equal(storage.get(key), finalLocale, 'A delayed event must not rewrite the latest shared preference');
+      for (const renderer of windows) {
+        assert.equal(renderer.api.getLocale(), finalLocale, 'Neither window may flash the superseded choice');
+        assert.equal(renderer.read('cfg.locale'), finalLocale);
+        assert.equal(renderer.context.document.documentElement.lang, finalLocale);
+      }
+    }
+    assert.equal(pending.length, 0, 'Cross-window notifications must settle without an echo loop');
+    assert.ok(changes.every(value => value === finalLocale), 'No transient locale event may restore the superseded choice');
+    assert.deepEqual(windows.map(renderer => renderer.sent.length), broadcasts, 'Passive updates do not rebroadcast IPC');
+    assert.equal(active.read('saves'), 4);
+    assert.equal(passive.read('saves'), 0);
+  });
+}
+
+test('a delayed storage notification cannot restore a deleted locale mirror', () => {
+  const c = client({ soduwork_work_cfg_v5_locale: 'zh-CN' });
+  c.storage.delete('soduwork_work_cfg_v5_locale');
+  const broadcasts = c.sent.length;
+  c.listeners.get('storage')({ key: 'soduwork_work_cfg_v5_locale', newValue: 'en-US' });
+  assert.equal(c.api.getLocale(), 'zh-CN');
+  assert.equal(c.read('cfg.locale'), 'zh-CN');
+  assert.equal(c.storage.has('soduwork_work_cfg_v5_locale'), false);
+  assert.equal(c.sent.length, broadcasts);
+  assert.equal(c.read('saves'), 0);
+});
+
+test('storage notifications retain their fallback when the locale mirror cannot be read', () => {
+  const c = client({}, true);
+  c.api.setLocale('en-US');
+  const broadcasts = c.sent.length;
+  c.listeners.get('storage')({ key: 'soduwork_work_cfg_v5_locale', newValue: 'zh-CN' });
+  assert.equal(c.api.getLocale(), 'zh-CN');
+  assert.equal(c.read('cfg.locale'), 'zh-CN');
+  assert.equal(c.context.document.documentElement.lang, 'zh-CN');
+  assert.equal(c.sent.length, broadcasts);
+  assert.equal(c.read('saves'), 1);
+});
+
+for (const [previousLocale, selectedLocale] of [['en-US', 'zh-CN'], ['zh-CN', 'en-US']]) {
+  test('one locale choice ignores an earlier delayed native notification for ' + previousLocale, () => {
+    const key = 'soduwork_work_cfg_v5_locale';
+    const c = client({ [key]: previousLocale });
+    const changes = [], states = [];
+    c.listeners.set('soduwork-locale-change', event => changes.push(event.detail.locale));
+    const snapshot = () => states.push({ locale: c.api.getLocale(), config: c.read('cfg.locale'),
+      lang: c.context.document.documentElement.lang, mirror: c.storage.get(key) });
+    c.api.setLocale(selectedLocale);
+    snapshot();
+    const broadcasts = c.sent.length;
+    // An earlier native broadcast was queued before this single user action.
+    for (const queued of [previousLocale, selectedLocale]) {
+      c.listeners.get('ipc-locale')(queued);
+      snapshot();
+    }
+    assert.deepEqual(changes, [selectedLocale], 'The complete event trace must contain no temporary reversal');
+    for (const state of states) assert.deepEqual(state,
+      { locale: selectedLocale, config: selectedLocale, lang: selectedLocale, mirror: selectedLocale });
+    assert.equal(c.sent.length, broadcasts);
+    assert.equal(c.read('saves'), 1);
+  });
+}
+
+test('a later explicit locale choice in another window is still accepted through native IPC', () => {
+  const key = 'soduwork_work_cfg_v5_locale';
+  const c = client({ [key]: 'en-US' });
+  c.api.setLocale('zh-CN');
+  const broadcasts = c.sent.length;
+  // The other renderer writes the shared preference before sending native IPC.
+  c.storage.set(key, 'ko-KR');
+  c.storage.set(key + '_explicit', '1');
+  c.listeners.get('ipc-locale')('ko-KR');
+  assert.equal(c.api.getLocale(), 'ko-KR');
+  assert.equal(c.read('cfg.locale'), 'ko-KR');
+  assert.equal(c.context.document.documentElement.lang, 'ko-KR');
+  assert.equal(c.sent.length, broadcasts);
+  assert.equal(c.read('saves'), 1);
+});
+
+test('native locale notifications remain usable when shared storage cannot be read', () => {
+  const c = client({}, true);
+  c.api.setLocale('zh-CN');
+  const broadcasts = c.sent.length;
+  c.listeners.get('ipc-locale')('en-US');
+  assert.equal(c.api.getLocale(), 'en-US');
+  assert.equal(c.read('cfg.locale'), 'en-US');
+  assert.equal(c.context.document.documentElement.lang, 'en-US');
+  assert.equal(c.sent.length, broadcasts);
+  assert.equal(c.read('saves'), 1);
+});
+
 test('switching works when local storage is unavailable', () => {
   const c = client({}, true);
   c.api.setLocale('en-US');

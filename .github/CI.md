@@ -4,7 +4,7 @@
 
 Workflow documentation, release procedures, issue forms and the pull request template are maintained in English. Security reports follow the [security policy](../SECURITY.md); do not disclose exploitable details in a public issue.
 
-`workflows/ci.yml` checks source boundaries, documentation, frontend builds, client contracts, backend offline checks, and isolated HTTP startup on Windows, macOS, and Linux. HTTP startup does not prove native Electron desktop, Docker deployment, provider OAuth, or real-model execution acceptance. Those need separate environments and evidence.
+`workflows/ci.yml` checks source boundaries, documentation, frontend builds, client contracts, backend offline checks, and isolated startup on Windows, macOS, and Linux. The Windows startup job requires a non-system-drive `RUNNER_TEMP`, runs the native Electron desktop with a fresh instance there, and verifies npm, pip and Electron cache files inside that instance. macOS and Linux run HTTP startup acceptance. These checks do not prove native desktop acceptance on other platforms, native Keychain behavior, Docker deployment, provider OAuth, or real-model execution; those need separate environments and evidence.
 
 The Runner compatibility matrix runs strict TLS and execution-host cleanup regressions on Windows, macOS, and Linux. It also freezes the production network modules and checks real loopback HTTPS with synthetic certificates. This covers packaged native trust verifiers, exclusive CA overrides and certificate rejection, without changing machine trust stores or contacting real model services. It does not replace full native desktop package acceptance.
 

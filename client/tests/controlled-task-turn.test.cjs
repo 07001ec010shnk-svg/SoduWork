@@ -167,6 +167,16 @@ test('assigned task model failures retain safe actionable diagnostics without re
   }
 });
 
+test('a remote 403 receipt with no request phase reports only the refusal', async () => {
+  const messages = [];
+  const adapter = create({ task: { id: 'assigned-task' }, spec: { mode: 'dispatch', context: {} }, scope: {},
+    request: async (_, body) => body ? { ref: 'assigned-run' } : { ref: 'assigned-run', status: 'failed',
+      error: '403 synthetic-prompt https://private.invalid Bearer synthetic-key', items: [] } });
+  const result = await adapter.execute({ appendTaskMessage: (...args) => messages.push(args), taskExecutionChanged() {} }, 'task', []);
+  assert.equal(result.reason, '模型请求被拒绝（HTTP 403）');
+  assert.equal(messages.at(-1)[1], result.reason);
+});
+
 test('failed task drains all output and retains its actual answer before surfacing the error', async () => {
   const messages = [];
   let reads = 0;

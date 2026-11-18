@@ -30,7 +30,7 @@
     if (locale === 'zh-CN') return source;
     // Localize system-owned status envelopes only; model replies and user names stay untouched.
     const interrupted = source.match(/^模型服务在回答过程中中断了这一轮(?:（([\s\S]*)）)?。(?:已自动重试 (\d+) 次。)?已有内容和工具结果已保留，(可恢复这一轮继续|请检查模型服务或配置后再继续)。$/);
-    if (interrupted && locale === 'en-US') return [
+    if (interrupted) return [
       interrupted[1] ? tx('模型服务在回答过程中中断了这一轮（{reason}）。')
         .replace('{reason}', () => modelDiagnostic(interrupted[1])) : tx('模型服务在回答过程中中断了这一轮。'),
       interrupted[2] ? tx('已自动重试 {count} 次。').replace('{count}', () => interrupted[2]) : '',

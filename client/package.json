@@ -15,6 +15,7 @@
     "check:runtime": "node scripts/verify-runtime.cjs",
     "check:runtime:packaged": "node scripts/verify-runtime.cjs --packaged",
     "test:e2e:user": "node e2e/user-journeys.mjs",
+    "test:e2e:user:isolated": "node e2e/account-five-users.cjs --user-journeys",
     "test:e2e:local": "node e2e/verify-local.cjs",
     "test:e2e:runtime-process": "node e2e/agent-runtime-process.cjs && node e2e/agent-runtime-storage.cjs",
     "test:e2e:local-models": "node e2e/local-model-privacy.cjs && node e2e/local-model-admission.cjs",

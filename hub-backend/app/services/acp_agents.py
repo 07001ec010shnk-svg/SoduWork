@@ -144,6 +144,12 @@ def home_env(key: str, env: dict, work_root: str, *, installation_root: str | No
     agent_shell.apply(env, key)
     if key == "dsh":
         dsh_runtime.apply_env(env, installation_root or work_root)
+    elif key == "kimi":
+        from . import kimi_runtime
+        kimi_runtime.apply_env(env)
+    elif key == "qwen":
+        from . import qwen_runtime
+        qwen_runtime.apply_env(env)
 
 
 def inject_llm_env(key: str, env: dict, llm: dict, *, mode: str = "work") -> None:

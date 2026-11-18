@@ -60,7 +60,7 @@ outputs() {
 outputSnapshot() {
       const since = outputsSince();
       return { ...completedOutputs(require('./outputs').scan(ctx.effectiveCwd, since, ctx.run.startedAt || 0)),
-        pluginSince: ctx.pluginOutputSince, fileChanges: ctx.handle.fileChanges || null };
+        pluginSince: ctx.pluginOutputSince, pluginValidation: require('./plugin-generation-gate.cjs').records(ctx.handle), fileChanges: ctx.handle.fileChanges || null };
     },
 async outputSnapshotAsync() {
       const since = outputsSince();
@@ -68,7 +68,7 @@ async outputSnapshotAsync() {
       const scanned = await require('./outputs').scanAsync(ctx.effectiveCwd, since, turnSince);
       if ((ctx.run.startedAt || 0) !== turnSince || (ctx.handle.fileChanges || null) !== fileChanges)
         throw Error('当前轮次的成果已变化，请刷新后重试');
-      return { ...completedOutputs(scanned), pluginSince: ctx.pluginOutputSince, fileChanges };
+      return { ...completedOutputs(scanned), pluginSince: ctx.pluginOutputSince, pluginValidation: require('./plugin-generation-gate.cjs').records(ctx.handle), fileChanges };
     },
 fileChanges: null,
 model: ctx.prep.model,

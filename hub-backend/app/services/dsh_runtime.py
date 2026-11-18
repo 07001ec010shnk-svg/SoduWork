@@ -1,7 +1,7 @@
 """Platform-correct DeepSeek Harness runtime managed by SoduWork.
 
 The ACP adapter ships a version-locked DSH archive. That archive can be
-produced on Linux, so npm omits Windows optional native packages. SoduWork
+produced on another platform, so npm can omit optional native packages. SoduWork
 extracts the verified archive into a staging directory, downloads only the
 exact native packages recorded in its lock file, verifies their hashes,
 and atomically activates the complete runtime through DSH_PATH.
@@ -163,22 +163,46 @@ def _arch() -> str:
     return ""
 
 
+def _linux_libc() -> str:
+    name = platform.libc_ver()[0].lower()
+    if name in ("glibc", "musl"):
+        return name
+    try:
+        if os.confstr("CS_GNU_LIBC_VERSION"):
+            return "glibc"
+    except (AttributeError, OSError, ValueError):
+        pass
+    if list(Path("/lib").glob("ld-musl-*.so.1")):
+        return "musl"
+    raise RuntimeError("无法识别 Linux libc，不能验证 DeepSeek Harness 原生组件")
+
+
+def _native_target() -> tuple[str, str, str]:
+    system, arch = sys.platform, _arch()
+    if system not in ("win32", "darwin", "linux") or not arch:
+        raise RuntimeError("当前平台或 CPU 架构尚不受 DeepSeek Harness 支持")
+    return system, arch, _linux_libc() if system == "linux" else ""
+
+
 def _required_native_packages() -> tuple[str, ...]:
-    arch = _arch()
-    if os.name == "nt" and arch:
-        return (f"@img/sharp-win32-{arch}", f"@koromix/koffi-win32-{arch}",
-                f"@vscode/ripgrep-win32-{arch}")
-    return ()
+    system, arch, libc = _native_target()
+    sharp_system = "linuxmusl" if libc == "musl" else system
+    names = (f"@img/sharp-{sharp_system}-{arch}",
+             f"@koromix/koffi-{system}-{arch}",
+             f"@vscode/ripgrep-{system}-{arch}")
+    # Verified adapter 0.4.41: Windows bundles libvips inside sharp; Darwin
+    # and both Linux libc variants require a separate locked libvips package.
+    if system != "win32":
+        names += (f"@img/sharp-libvips-{sharp_system}-{arch}",)
+    return names
 
 
 def _native_specs(root: str) -> list[dict]:
     required = _required_native_packages()
-    if os.name == "nt" and not required:
-        raise RuntimeError("当前 Windows CPU 架构尚不受 DeepSeek Harness 支持")
-    if not required:
-        return []
     owners = (("sharp", required[0]), ("koffi", required[1]),
               ("@vscode/ripgrep", required[2]))
+    if len(required) == 4:
+        owners += (("sharp", required[3]),)
     lock_packages = (_read_json(os.path.join(root, "package-lock.json")).get(
         "packages") or {})
     specs = []
@@ -197,13 +221,45 @@ def _native_specs(root: str) -> list[dict]:
     return specs
 
 
+def _native_files(root: str, package: str, version: str) -> list[str]:
+    """Critical loaders/binaries in the reviewed archive, not arbitrary globs."""
+    folder = os.path.dirname(_package_file(root, package))
+    if package.startswith("@vscode/ripgrep-"):
+        relative = ["bin/rg.exe" if "-win32-" in package else "bin/rg"]
+    elif package.startswith("@koromix/koffi-"):
+        target = package.removeprefix("@koromix/koffi-").replace("-", "_")
+        if target.startswith("linux_") and _native_target()[2] == "musl":
+            target = target.replace("linux_", "musl_", 1)
+        relative = ["index.js", target + "/koffi.node"]
+    elif package.startswith("@img/sharp-libvips-"):
+        exported = (_read_json(os.path.join(folder, "package.json")).get("exports") or {})
+        if not isinstance(exported, dict):
+            exported = {}
+        relative = ["lib/index.js", str(exported.get("./binary") or ".missing-binary")]
+    else:
+        target = package.removeprefix("@img/sharp-")
+        relative = ["index.cjs", f"lib/sharp-{target}-{version}.node"]
+        if target.startswith("win32-"):
+            vips = str(_read_json(os.path.join(folder, "versions.json")).get("vips") or "")
+            relative += ["lib/libvips-42.dll", f"lib/libvips-cpp-{vips}.dll"]
+    paths = []
+    for name in relative:
+        path = os.path.abspath(os.path.join(folder, name))
+        if os.path.commonpath((os.path.abspath(folder), path)) != os.path.abspath(folder):
+            raise RuntimeError(f"{package} 的原生组件路径无效")
+        paths.append(path)
+    return paths
+
+
 def _has_exact_package(root: str, package: str, version: str) -> bool:
-    if str(_read_json(_package_file(root, package)).get(
-            "version") or "").strip() != version:
+    manifest = _read_json(_package_file(root, package))
+    if manifest.get("name") != package or manifest.get("version") != version:
         return False
-    if package.startswith("@vscode/ripgrep-win32-"):
-        return os.path.isfile(os.path.join(root, "node_modules", *package.split("/"), "bin", "rg.exe"))
-    return True
+    try:
+        paths = _native_files(root, package, version)
+        return all(os.path.isfile(path) and os.path.getsize(path) > 0 for path in paths)
+    except (OSError, ValueError, RuntimeError):
+        return False
 
 
 def _runtime_issue_at(root: str, expected_version: str = "") -> str:
@@ -222,7 +278,7 @@ def _runtime_issue_at(root: str, expected_version: str = "") -> str:
     missing = [f"{spec['name']}@{spec['version']}" for spec in specs
                if not _has_exact_package(root, spec["name"], spec["version"])]
     if missing:
-        return ("DeepSeek Harness 的 Windows 原生组件不完整（缺少 %s）。"
+        return ("DeepSeek Harness 的当前平台原生组件不完整（缺少或损坏 %s）。"
                 "请在 Agent 管理的 DeepSeek Harness 卡片上点「修复安装」后重试。" %
                 "、".join(missing))
     return ""
@@ -242,9 +298,22 @@ def _storage_env(env: dict, runtime_root: str) -> None:
     env["NODE_OPTIONS"] = "--import=" + loader.resolve().as_uri()
 
 
+def _host_env(env: dict, runtime_root: str) -> None:
+    # Only host-owned preloads may alter the native adapter. Repeated setup must
+    # not duplicate hooks or inherit arbitrary shell/desktop Node options.
+    env.pop("NODE_OPTIONS", None)
+    _storage_env(env, runtime_root)
+    loader = Path(__file__).with_name("dsh_acp_settlement.mjs")
+    if not loader.is_file():
+        raise RuntimeError("DeepSeek Harness 子代理等待组件缺失，请更新 SoduWork")
+    env["SODUWORK_DSH_ACP_SETTLEMENT"] = "1"
+    env["NODE_OPTIONS"] = (env.get("NODE_OPTIONS", "") +
+                           " --import=" + loader.resolve().as_uri()).strip()
+
+
 def apply_env(env: dict, data_root: str | None = None) -> None:
     env["DSH_PATH"] = host_root(data_root)
-    _storage_env(env, env["DSH_PATH"])
+    _host_env(env, env["DSH_PATH"])
     env.setdefault("DSH_TELEMETRY_DISABLED", "1")
 
 
@@ -513,17 +582,21 @@ def remove_host(data_root: str | None = None) -> None:
 
 def _fingerprint(executable: str, data_root: str, expected_version: str) -> tuple:
     root = host_root(data_root)
-    paths = [_package_file(root, PACKAGE)]
+    paths = [executable, _package_file(root, PACKAGE),
+             os.path.join(root, "package-lock.json")]
+    paths += [_package_file(root, name) for name in ("sharp", "koffi", "@vscode/ripgrep")]
     try:
         specs = _native_specs(root)
     except RuntimeError:
         specs = []
     for spec in specs:
         paths.append(_package_file(root, spec["name"]))
+        paths.extend(_native_files(root, spec["name"], spec["version"]))
     mtimes = []
     for path in paths:
         try:
-            mtimes.append((path, os.path.getmtime(path)))
+            stat = os.stat(path)
+            mtimes.append((path, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_mode))
         except OSError:
             mtimes.append((path, 0.0))
     return (os.path.abspath(executable), root, expected_version, tuple(mtimes))
@@ -594,7 +667,7 @@ def _probe_runtime(executable: str, runtime_root: str,
             for name in ("NODE_OPTIONS", "ELECTRON_RUN_AS_NODE"):
                 env.pop(name, None)
             env["DSH_PATH"] = runtime_root
-            _storage_env(env, runtime_root)
+            _host_env(env, runtime_root)
             env.setdefault("DSH_TELEMETRY_DISABLED", "1")
             env.update(
                 DSH_HOME=home,

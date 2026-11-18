@@ -4,6 +4,7 @@
 
 | Your goal | Start here |
 | --- | --- |
+| Install the desktop client and start a conversation | [Desktop quickstart](desktop-quickstart.en.md) |
 | Run the desktop and management UI for the first time | [Run from source](getting-started.en.md) |
 | Configure a model endpoint or investigate billing/protocol errors | [Model services](model-services.en.md) |
 | Understand the layout and change code | [Developer guide](development.en.md) |

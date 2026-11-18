@@ -49,6 +49,7 @@ from ..services import work_catalog
 from ..services import device_auth
 from ..services import device_connections
 from ..services import environment_service
+from .input_validation import parse_integer
 
 log = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
@@ -416,7 +417,8 @@ async def create_domain(
     user: User = Depends(require_perm("user.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    r = await rbac.create_domain(session, (body.get("name") or "").strip(), int(body.get("sort") or 0))
+    sort = parse_integer(body.get("sort"), field="sort", default=0)
+    r = await rbac.create_domain(session, (body.get("name") or "").strip(), sort)
     await audit.log(session, user, "domain.create", "domain", r["id"], r["name"], {})
     return r
 
@@ -428,7 +430,12 @@ async def update_domain(
     user: User = Depends(require_perm("user.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    r = await rbac.update_domain(session, did, body.get("name"), body.get("sort"))
+    # Omitted/null sort retains the previous rank; a supplied value must be
+    # validated before the service can mutate either name or sort.
+    sort = body.get("sort")
+    if sort is not None:
+        sort = parse_integer(sort, field="sort")
+    r = await rbac.update_domain(session, did, body.get("name"), sort)
     if r is None:
         raise HTTPException(status_code=404, detail="领域不存在")
     await audit.log(session, user, "domain.update", "domain", did, r["name"], {})

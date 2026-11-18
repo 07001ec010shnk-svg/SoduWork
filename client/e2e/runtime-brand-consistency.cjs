@@ -115,7 +115,9 @@ if (typeof electron === 'string') {
     assert.deepEqual(report.failures, [], 'Runtime identity or clipping differs across surfaces');
     report.ok = true;
   }).catch(error => { report.error = String(error.stack || error); }).finally(() => {
-    win?.destroy(); fs.rmSync(profile, { recursive: true, force: true });
+    win?.destroy();
+    try { fs.rmSync(profile, { recursive: true, force: true }); }
+    catch (error) { report.cleanupError = error.code || error.message; }
     fs.writeFileSync(path.join(output, 'report.json'), JSON.stringify(report, null, 2));
     console.log(JSON.stringify({ ok: report.ok, checks: report.checks.length, failures: report.failures.length, output, error: report.error }));
     app.exit(report.ok ? 0 : 1);

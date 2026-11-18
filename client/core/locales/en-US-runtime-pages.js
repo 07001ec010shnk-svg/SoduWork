@@ -686,6 +686,8 @@
     "尚未选择执行设备": "No execution device selected yet",
     "请先选择执行 Agent": "Choose an execution Agent first",
     "尚未选择执行 Agent": "No execution Agent selected yet",
+    "请先选择执行底座": "Choose an execution runtime first",
+    "尚未选择执行底座": "No execution runtime selected yet",
     "个人插件跟随本机当前版本": "Personal plugin follows the local version",
     "个人插件固定 v{value1}": "Personal plugin pinned to v{value1}",
     "可用执行机": "Available Runner",

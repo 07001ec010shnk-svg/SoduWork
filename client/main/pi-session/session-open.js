@@ -420,7 +420,7 @@ async function open(opts) {
       piSession = next.session; access = next.access; accessPolicy = next.policy;
       resources = next.resources; opts.readOnly = accessPolicy.mode === 'readonly';
       opts.accessPolicy = accessPolicy;
-      unsub = piSession.subscribe(onPiEvent);
+      unsub = require('./model-request-phase.cjs').subscribe(piSession, onPiEvent);
       _rawPromptComplete = outputContinuation.bind(piSession, acc, () => Boolean(run.stopReason) || liveAccess.changing() || turnQueue.active()?.stopRequested || closed, _emit);
     },
   });
@@ -606,7 +606,7 @@ async function open(opts) {
 
 
   // Contain subscription exceptions because they propagate through the runtime event loop.
-  let unsub = piSession.subscribe(onPiEvent);
+  let unsub = require('./model-request-phase.cjs').subscribe(piSession, onPiEvent);
 
   let _rawPromptComplete = outputContinuation.bind(
     piSession, acc, () => Boolean(run.stopReason) || liveAccess.changing() || turnQueue.active()?.stopRequested || closed, _emit);
@@ -640,7 +640,7 @@ async function open(opts) {
     commit(next) {
       unsub(); piSession = next.session; access = next.access; resources = next.resources;
       opts.noExtensions = false;
-      unsub = piSession.subscribe(onPiEvent);
+      unsub = require('./model-request-phase.cjs').subscribe(piSession, onPiEvent);
       _rawPromptComplete = outputContinuation.bind(piSession, acc, () => Boolean(run.stopReason) || liveAccess.changing() || turnQueue.active()?.stopRequested || closed, _emit);
     },
   });
@@ -649,7 +649,9 @@ async function open(opts) {
     _openTiming('prompt-start', openStarted);
     return runControl.promptComplete(run,
       (value, config) => require('./background-process').run(() =>
-        liveAccess.run(() => _rawPromptComplete(value, config)),
+        liveAccess.run(() => options?.pluginRepair
+          ? piSession.sendCustomMessage({ customType: 'soduwork.plugin.repair', display: false, content: value }, { triggerTurn: true })
+          : _rawPromptComplete(value, config)),
         { desktopScope: desktopControlScope }), prompt, options)
       .finally(() => _openTiming('prompt-end', openStarted));
   };

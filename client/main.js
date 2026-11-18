@@ -634,20 +634,13 @@ if (!gotTheLock) {
     if (_linuxStartup.focusRecovery(app)) return;
     if (_fileOpen.enqueue(_fileOpenModule.instanceFiles(
       argv, workingDirectory, app.isPackaged, additionalData))) return;
-    // Reveal the existing instance even when minimized or hidden.
-    if (!_desktopOverlay.window || _desktopOverlay.window.isDestroyed()) { _desktopOverlay.createWindow(); return; }
-    if (_desktopOverlay.emergency && typeof _desktopOverlay.recoverFromEmergency === 'function') { _desktopOverlay.recoverFromEmergency(); return; }
-    if (_desktopOverlay.window.isMinimized()) _desktopOverlay.window.restore();
-    if (!_desktopOverlay.window.isVisible()) _desktopOverlay.window.show();
-    _desktopOverlay.window.focus();
     /*
-     * On macOS, repeated application launches also restore the workspace; preserve the
-     * existing Windows activation path.
+     * Reopening the application always targets its workspace. The desktop overlay
+     * can have every entry hidden or be recovering independently; neither state
+     * should prevent restoring the workspace or change saved visibility preferences.
      */
-    if (process.platform === 'darwin') {
-      try { openDeskWindow({ panel: 'workspace' }, null); }
-      catch (e) { console.error('[second-instance] 打开主工作区失败', e); }
-    }
+    try { openDeskWindow({ panel: 'workspace' }, null); }
+    catch (e) { console.error('[second-instance] Failed to open workspace', e); }
   });
 
   _fileOpen.fromCommand(process.argv, process.cwd());

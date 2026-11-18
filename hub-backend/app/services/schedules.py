@@ -51,8 +51,24 @@ EVERY = schedule_timing.EVERY
 DEFAULT_TIME_ZONE = "Asia/Shanghai"
 
 
+def validate_time_zone(value) -> str:
+    """Validate new input without silently changing its intended wall clock."""
+    if value is None or value == "":
+        return DEFAULT_TIME_ZONE
+    if not isinstance(value, str):
+        raise ValueError("timeZone 必须是有效的 IANA 时区名称")
+    name = value.strip()
+    if not name or len(name) > 64:
+        raise ValueError("timeZone 必须是有效的 IANA 时区名称")
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        raise ValueError("timeZone 必须是有效的 IANA 时区名称") from None
+    return name
+
+
 def clean_time_zone(value: str | None) -> str:
-    """Return a validated IANA timezone name.
+    """Read a historical timezone with the existing migration fallback.
 
     The client sends its browser timezone with the schedule. Asia/Shanghai is
     the migration default for schedules created before this field existed.
@@ -60,7 +76,7 @@ def clean_time_zone(value: str | None) -> str:
     name = str(value or DEFAULT_TIME_ZONE).strip()[:64] or DEFAULT_TIME_ZONE
     try:
         ZoneInfo(name)
-    except ZoneInfoNotFoundError:
+    except (ZoneInfoNotFoundError, ValueError):
         if name not in (DEFAULT_TIME_ZONE, "UTC", "Etc/UTC"):
             return DEFAULT_TIME_ZONE
     return name

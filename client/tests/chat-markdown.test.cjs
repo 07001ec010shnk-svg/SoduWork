@@ -10,7 +10,10 @@ function setup() {
     setTimeout(fn,ms) { const key=++id; timers.set(key,{fn,at:now+ms}); return key; },
     clearTimeout(key) { timers.delete(key); } };
   sandbox.window = sandbox;
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../vendor/markdown/marked.umd.js'),'utf8'), sandbox);
+  const desktop = fs.readFileSync(path.join(__dirname, '../desk.html'), 'utf8');
+  for (const [, file] of desktop.matchAll(/<script src="((?:vendor\/markdown\/marked\.umd|core\/markdown)\.js)"><\/script>/g)) {
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), sandbox);
+  }
   const parse = sandbox.marked.parse;
   sandbox.marked = {...sandbox.marked, parse:(...args) => { parseCount++; return parse(...args); }};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../components/panels/chat-markdown.js'),'utf8'), sandbox);
@@ -49,4 +52,31 @@ test('closing a renderer cancels pending flush work', () => {
   assert.equal(view.timers.size,1); view.markdown.reset();
   assert.equal(view.timers.size,0); view.advance(400);
   assert.equal(view.parseCount,1);
+});
+
+test('numeric ranges retain literal tildes in completed, cached and streaming replies', () => {
+  const view = setup();
+  const source = '找 3~5 个用户，运行 7~14 天。';
+  const expected = '<div class="nmd"><p>' + source + '</p>\n</div>';
+  assert.equal(view.markdown.rich(source), expected);
+  assert.equal(view.markdown.rich(source), expected);
+  for (const prefix of ['找 3~5 个用户，运行 7', '找 3~5 个用户，运行 7~', source]) {
+    view.advance(400);
+    assert.equal(view.render(prefix), '<div class="nmd"><p>' + prefix + '</p>\n</div>');
+  }
+  view.markdown.reset();
+  assert.equal(view.markdown.rich(source), expected);
+});
+
+test('literal tildes coexist with explicit strikethrough and other Markdown syntax', () => {
+  const { markdown } = setup();
+  for (const source of ['3~5\n7~14', '-3~-1 与 0.5~1.5', '~普通文字~', '说明 ~~~普通文字~~~']) {
+    assert.equal(markdown.rich(source), '<div class="nmd"><p>' + source + '</p>\n</div>');
+  }
+  assert.match(markdown.rich('3~5 与 ~~旧建议~~，7~14 与 **新建议**'), /3~5 与 <del>旧建议<\/del>，7~14 与 <strong>新建议<\/strong>/);
+  assert.match(markdown.rich(String.raw`3\~5 与 7\~14`), /3~5 与 7~14/);
+  assert.match(markdown.rich('`3~5 与 7~14`'), /<code>3~5 与 7~14<\/code>/);
+  assert.match(markdown.rich('~~~text\n3~5 与 7~14\n~~~'), /<pre><code class="language-text">3~5 与 7~14\n<\/code><\/pre>/);
+  assert.match(markdown.rich('| 范围 |\n| --- |\n| 3~5 与 7~14 |'), /<table>[\s\S]*<td>3~5 与 7~14<\/td>/);
+  assert.match(markdown.rich('[3~5](https://example.test/~user) 与 7~14'), /<a href="https:\/\/example.test\/~user">3~5<\/a> 与 7~14/);
 });

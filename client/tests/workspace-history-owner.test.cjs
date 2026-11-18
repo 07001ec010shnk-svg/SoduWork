@@ -116,6 +116,34 @@ test('automatic cloud cache remains a read-only fallback and keeps its display k
   assert.ok(f.ids().includes(f.cloud.id), 'Deleting the cache cannot hide the executable original');
 });
 
+test('a confirmed cloud deletion clears the merged row through selection, stale refresh and reload', async t => {
+  const f = await cloudCacheFixture(t);
+  let confirmations = 0;
+  f.window.SoduWorkConfirmDialog = { open: async () => { confirmations++; return true; } };
+  f.window.WorkspaceHost = { open: async () => true };
+  f.window.soduWorkAPI.conversationSession.deleteHistory = async (id, options) => {
+    assert.equal(id, f.cloud.id);
+    if (!options?.confirmed) return { ok: false, needsConfirm: true, confirm: {} };
+    f.setRemote([]);
+    const copies = await f.history.deleteCloudCaches([id]);
+    return { ok: true, id, deleted: true, aliasIds: [id, ...copies] };
+  };
+  await f.api.refreshConversationHistory(); await tick();
+  f.ctx.active = 'create'; f.ctx.activeChatId = f.cloud.id;
+  assert.equal(await f.api.deleteHistoryChat(f.cloud.id), true);
+  assert.equal(confirmations, 1);
+  assert.deepEqual(f.ids(), [f.manual.id]);
+  f.ctx.root = { querySelectorAll: () => [] };
+  f.api.setActiveChat(f.manual.id);
+  f.api.updateChatState({ sessionId: f.cloud.id, presence: { ...f.cloud, state: 'completed' } });
+  await f.api.refreshConversationHistory(); await tick();
+  assert.deepEqual(f.ids(), [f.manual.id]);
+  const restarted = fixture('one', { local: true, realHistory: true, history: async options => options.source === 'local'
+    ? f.history.page() : { ok: true, chats: [] } });
+  await restarted.api.refreshConversationHistory(); await tick();
+  assert.deepEqual(Array.from(restarted.ctx.paintedRows, row => row.id), [f.manual.id]);
+});
+
 test('cloud cache display follows exact directory aliases and active selection without merging namesakes or lifecycle targets', async t => {
   const f = await cloudCacheFixture(t);
   const canonical = { ...f.cloud, id: 'cloud-sync-canonical', historyAliasIds: [f.cloud.id] };
@@ -212,6 +240,19 @@ test('account changes clear private rows and reject a late history response with
   assert.equal(f.ctx.chatItems.length, 0); assert.equal(f.ctx.historyLoad, next, 'old finally cannot clear B in-flight request');
   f.pending[1].resolve({ ok: true, chats: [{ id: 'private-b', title: 'B', usedHarnesses: ['claude'] }] }); await next;
   assert.deepEqual(f.ctx.chatItems.map(item => item.id), ['private-b']);
+});
+
+test('a late history read cannot overwrite a newer draft selection event without execution status', async () => {
+  const f = fixture('user-a', { realHistory: true });
+  const draft = { id: 'automation-draft', title: 'Draft', workOnly: true, usedHarnesses: [], draftAdapterId: 'qwen' };
+  f.api.setChats([draft]);
+  const loading = f.api.refreshConversationHistory(); await tick();
+  f.api.updateChatState({ kind: 'work-draft-selection-saved', sessionId: draft.id,
+    presence: { ...draft, draftAdapterId: 'codex-harness' } });
+  assert.equal(f.ctx.chatItems[0].draftAdapterId, 'codex-harness');
+  f.pending[0].resolve({ ok: true, chats: [draft] }); await loading;
+  assert.equal(f.ctx.chatItems[0].draftAdapterId, 'codex-harness');
+  assert.equal(f.ctx.chatItems[0].workOnly, true);
 });
 
 test('A to B to A rejects both previous epochs and restores the current account title', async () => {

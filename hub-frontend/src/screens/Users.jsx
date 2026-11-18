@@ -132,10 +132,10 @@ function UserEditor({ user, orgs, roles, onClose, onDone }) {
         </div>
       </div>
       <div style={{ display: 'flex', gap: 12 }}>
-        <div style={{ flex: 1 }}><label className="f-lbl" htmlFor={`${formId}-username`}>{tx("账号")}</label><input id={`${formId}-username`} className="f-in" value={username} disabled={!isNew} required={isNew} onChange={(e) => setUsername(e.target.value)} placeholder={tx("登录账号")} /></div>
-        <div style={{ flex: 1 }}><label className="f-lbl" htmlFor={`${formId}-name`}>{tx("姓名")}</label><input id={`${formId}-name`} className="f-in" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder={tx("显示名")} /></div>
+        <div style={{ flex: 1 }}><label className="f-lbl" htmlFor={`${formId}-username`}>{tx("账号")}</label><input id={`${formId}-username`} name="managed-username" autoComplete="off" className="f-in" value={username} disabled={!isNew} required={isNew} onChange={(e) => setUsername(e.target.value)} placeholder={tx("登录账号")} /></div>
+        <div style={{ flex: 1 }}><label className="f-lbl" htmlFor={`${formId}-name`}>{tx("姓名")}</label><input id={`${formId}-name`} name="managed-display-name" autoComplete="off" className="f-in" value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder={tx("显示名")} /></div>
       </div>
-      <div><label className="f-lbl" htmlFor={`${formId}-password`}>{isNew ? tx("初始密码") : tx("重置密码（留空不改）")}</label><input id={`${formId}-password`} className="f-in" type="password" value={password} required={isNew} onChange={(e) => setPassword(e.target.value)} placeholder={isNew ? tx("设置初始密码") : tx("不改则留空")} /></div>
+      <div><label className="f-lbl" htmlFor={`${formId}-password`}>{isNew ? tx("初始密码") : tx("重置密码（留空不改）")}</label><input id={`${formId}-password`} name="managed-new-password" autoComplete="new-password" className="f-in" type="password" value={password} required={isNew} onChange={(e) => setPassword(e.target.value)} placeholder={isNew ? tx("设置初始密码") : tx("不改则留空")} /></div>
       <div style={{ display: 'flex', gap: 12 }}>
         <div style={{ flex: 1 }}><label className="f-lbl" id={`${formId}-org-label`} htmlFor={`${formId}-org`}>{tx("所属部门")}</label>
           <SelectMenu searchable id={`${formId}-org`} aria-labelledby={`${formId}-org-label`} required className="f-in" value={orgId} onChange={(e) => setOrgId(e.target.value)}><option value="">{tx("— 选择部门 —")}</option>{opts.map((o) => <option key={o.id} value={o.id} data-path={o.path}>{o.label}</option>)}</SelectMenu>

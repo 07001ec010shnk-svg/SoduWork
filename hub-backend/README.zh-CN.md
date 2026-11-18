@@ -50,15 +50,79 @@ python3 quality_gate.py --list
 
 `live` 层可能连接真实 Hub、Runner、代码平台、模型或业务库，默认拒绝执行，不能用来替代离线发布门禁。详细口径见 [`../docs/release-scope.md`](../docs/release-scope.md)。
 
+离线检查拥有各自的子进程树，并在清理完成后返回，包括命令先于后代进程退出的情况。在 Windows 上，门禁复用仓库中的 Windows PowerShell Job 辅助程序，确认 Job 分配成功后才允许命令执行。输出采集到私有临时文件，避免后代继承输出句柄导致超时后无限等待；失败报告保留超时前产生的输出。运行 `py -m unittest test_quality_gate_cleanup` 可验证当前平台上的真实进程清理回归。
+
 受权限控制的回合在结算或开始下一轮前，必须确认执行宿主已退出。已有可靠的 Agent 退出记录时，正常收尾最多等待 30 秒，例如冻结程序清理自己的解压目录；取消和权限变更仍使用较短的停止期限。终止无法确认时继续跟踪原进程并阻止替换，不能仅凭已有回答或终止请求成功就判定完成。可运行 `python3 -m unittest test_local_process_cleanup`，使用隔离子进程验证延迟退出与终止未确认的行为。
 
 冒烟脚本集中在 [`smoke/`](smoke/) 目录。单独运行时，在 `hub-backend/` 目录使用模块命令，例如 `python3 -m smoke.smoke_capabilities`；质量门禁会选择已登记的模块。单元测试和 `tests/` 集成辅助脚本保留现有位置。
 
 ## DeepSeek Harness 回合完成状态
 
-DeepSeek Harness 收到 `max_tokens` 且工具操作已结束时，会在原会话中续跑一次，要求模型从已保存的工具结果接着做。再次达到输出上限时，会显示本轮未完成。
+DeepSeek ACP 适配器 0.4.40 和 0.4.41 可能在子代理仍运行时返回完成。SoduWork 的宿主专用预加载器通过原生 `waitForChildren` 服务等待正在推进的后代，再复查父代理空闲状态及会话序号。子代理结果唤醒父代理的新回合后，会保留最后回合的输出上限或错误。取消会结束等待，驻留但空闲的子代理不会使已完成提示永久等待。
+
+预加载器在 macOS、Linux 和 Windows 上对经过核对的适配器提示结算和工具预览代码应用内存兼容修复，不改写安装包及原生会话文件。未知适配器版本或变更后的代码块会明确要求更新 SoduWork，避免静默使用有缺陷的行为。源码及冻结 Runner 均包含该加载器。
+
+在根目录执行 `node --test client/tests/dsh-acp-settlement.test.cjs`，验证离线生命周期和加载行为。在 `hub-backend` 执行 `python3 e2e_dsh_subagent_settlement.py --adapter-entry /absolute/npm/root/@openma/deepseek-harness-acp/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`，可使用明确指定的已安装适配器与合成回环模型进行隔离验收，不调用生产模型或桌面 UI。
+
+收到 `max_tokens` 时，经过核对的适配器只把原生状态为 pending 的工具预览标记为未执行，再清理预览。DSH 在执行前就会丢弃这些调用；真正开始执行的工具仍须等待实际结果。宿主在实时和历史工具卡片中保留这个区别，后续真实失败也不会被旧取消状态掩盖。
+
+工具活动结束后，DeepSeek Harness 可在原会话中从已保存的结果接着做，并使用更小的工具调用。自动恢复最多续跑一次，只有原生压缩成功后才能再续跑一次。持续达到上限时，会显示本轮未完成并保留进度，不再作为协议错误呈现。续跑成功会清除旧截断状态；协议错误和宿主清理失败仍优先处理。
+
+DeepSeek 运行时预检按归档锁定版本检查 Windows、macOS 和 Linux 的 x64/arm64
+sharp、koffi 和 ripgrep 包；macOS/Linux 还检查 libvips，Linux 区分 glibc 与 musl
+二进制。清单缺失、版本错误或关键加载器/二进制缺失会阻止激活临时安装，并使缓存的
+就绪结果失效。修复失败保留原运行时。执行 `python3 -m smoke.smoke_dsh_runtime`
+可验证离线平台矩阵、激活和缓存回归。这些静态检查不能证明任意二进制损坏或
+macOS Gatekeeper 已通过；目标平台仍需实际验证 ACP 和工具执行。
+
+## 其他底座的终止结果
+
+托管安装和更新固定使用已验证版本：DeepSeek ACP 0.4.41、Kimi Code 2.6.2、Qwen Code 0.27.4。版本检查也以这些目标为准，包括本机已安装更高版本的情况。SoduWork 完成兼容性验证后再升级固定版本；读取安装状态不会替换本机软件。
+
+Kimi Code 2.6.2 和 Qwen Code 0.27.4 也可能把原生输出上限转换为 ACP 成功响应。宿主专用预加载器保留其原生最终结果，核验经过审阅的完整源码摘要，并对未知版本明确提示更新。预加载器不改写安装包或工具执行行为，随 macOS、Linux 和 Windows 的 Runner 分发。Qwen 的宿主加载器要求 Node 22.15 或更高版本，即使旧安装包声明了更低的引擎要求，也不能降低此要求。
+
+Kimi 在工具参数校验后仍保留最终模型停止原因，并将原生失败回合报告为失败。Qwen 保留自身有界输出恢复，传播恢复期间的真实错误；其单独的会话输入预算不会被误标为输出上限。SoduWork 的单次调用 Qwen 配置使用原生 `model.loopProtection = "stop"`，让已检测到的重复失败停止，而非只提示。该托管调用会覆盖 `warn`/`off`，但不改写运维配置文件，也不降低正常任务的总体预算。两者耗尽原生输出恢复后，宿主均不会叠加重试。
+
+Codex ACP 协商带版本的 `sessionFailure` 能力，在接受 `end_turn` 前读取当前提示的结构化失败；错误文本不能作为完成证据，无法解析的结构化失败也会阻止成功结算。该 v1 能力也会改变工具报告：审批省略的字段仅从同一个仍有效的工具调用恢复，终端增量和结果快照经过有界缓存后仍保留在已结束的工具卡片中；此次协商不会开启原生子代理会话能力。Pi、OpenCode、DeepSeek、Kimi 和 Qwen 均保留后续真实错误，避免被此前的截断掩盖；真正恢复成功后会清除旧截断状态。
+
+可在后端测试环境执行 `python3 -m unittest test_kimi_runtime test_qwen_runtime test_codex_acp_outcome test_acp_error_messages test_local_turn_outcome`。独立夹具 `e2e_kimi_outcome.py`、`e2e_qwen_turn_outcome.py` 和 `e2e_codex_acp_outcome.py` 使用明确指定的已安装底座及隔离本机回环模型，所需路径见各自 `--help`。Codex 验收还检查真实审批的批准、拒绝和命令输出，不调用付费模型服务。
+
+## 任务文本兼容
+
+通过 `POST /api/v1/tasks` 新建任务，以及 `PATCH` 或批量更新中明确提交的字段，
+标题最多 200 个字符、来源最多 120 个字符；超长输入会在写入前返回 422。
+读取历史记录、修改无关字段时保留原有文本。
+
+`PUT /api/v1/tasks/{id}` 是桌面端幂等同步和撤销删除使用的接口。
+升级前尚未同步的任务、删除后恢复的任务都可能没有服务端记录，因此该接口接收完整历史文本，
+有意不套用 POST/PATCH 的文本长度限制；账号所有权和平台管理来源限制继续生效。
+
+迁移 `0092_task_text_storage` 无损扩容 PostgreSQL 的任务文本列，
+也覆盖尚未使用版本化迁移的旧数据库；已有 SQLite 表不需要重建。
+先部署 Hub 并完成迁移，再升级桌面端。桌面端保留完整文本，
+对仅因旧长度校验而阻塞的 PUT 队列记录重试一次；再次被拒绝则保留阻塞，等待明确处理。
+存在超长数据时，降级会拒绝缩窄字段。升级前请备份数据库和匹配版本的程序。
 
 ## 连数据库
+
+领域排序接受 32 位有符号整数及旧客户端使用的十进制整数字符串。非法值、
+布尔值、小数和越界值会在修改记录前返回 HTTP 400。PATCH 省略排序或传入 null
+时保留原排序，创建时仍默认使用 0。调度数字字段和客户端更新进度使用相同的
+整数校验，并保留原有范围限制和可选字段默认值。新提交的调度时区必须是有效的
+IANA 时区；省略时保留原配置，null 或空字符串沿用默认时区。历史无效时区仍可
+通过默认时区回退正常读取。
+
+迁移 `0091_domain_sort_validation` 修复 SQLite 中存储类型或范围异常的历史领域
+排序，保留正常排序、领域 ID 和关联关系。排序仍有空间时，修复项排列在正常项
+之后；若已达到上限，则在上限并列，并按创建时间和 ID 排序。每次修复会在同一
+事务中先写入 `domain.sort_repair`
+审计记录，保存原存储类型、原值的无损表示及替换值。首次接管旧版未使用 Alembic
+的数据库时也会执行此修复，重复运行不会重复处理。PostgreSQL 的领域数据保持不变。
+升级前请备份数据库；降级不会恢复异常值。管理员可通过审计记录复核并调整排序。
+
+离线回归命令：`python3 -m unittest test_api_integer_validation
+test_domain_sort_validation test_domain_sort_migration
+test_schedule_update_input_validation`。这些测试已登记到发布质量检查清单。
 
 在 `.env` 里设 `DATABASE_URL`：
 
@@ -141,6 +205,20 @@ python3 e2e_runner_tls.py --output /absolute/evidence/directory
 升级前必须备份数据库和匹配版本程序。0053 在事务中迁移并删除旧表；文件内容及对象存储键不变。同一交付 Task 的原需求若来自不同可见范围，升级明确失败并回滚，不能静默扩大权限。重复执行不会重复迁移。统一需求开始产生新写入后，自动降级被禁止，应使用升级前数据库备份和对应程序一起回滚。旧 `/work-items` 路由返回 410，旧插件 `work.task.create` 仅作为统一 Task 创建的别名。
 
 隔离验证入口：`python3 -B tests/unified_requirements_upgrade.py --sqlite` 和 `python3 -B tests/unified_requirements_upgrade.py`。后者仅创建随机本机 PostgreSQL 临时实例，完成后停止并清理，不使用业务数据库。权限回归为 `test_unified_requirements_acl.py`，包含真实迁移后的 HTTP 多身份和 WebSocket 投影检查。
+
+## 非 Pi 底座的任务续跑
+
+选择目标模式，或在桌面消息中明确要求持续完成时，Codex、Codex Harness、OpenCode、DeepSeek Harness、Kimi 和 Qwen 使用 Runner 统一的任务控制器。Pi 保持原有控制机制；普通提问及未提出持续完成要求的指令保持原来的单轮行为。
+
+输出截断、上下文恢复和任务完成分别判断。只有明确类型的输出上限结果才能触发输出恢复；认证、传输、权限及工具结果不明都不能据此重试。由任务控制器接管的 DeepSeek 轮次会关闭桥接层内部的输出重试，避免新进程放大次数。任务记录最多允许两次输出恢复，第二次必须有新的成功工具进展。上下文恢复保留独立计数，可压缩或接力原生会话，同时保留 SoduWork 会话和工作区。
+
+工作轮成功结束后，单独的复核轮检查实际产物和验证结果。只有本轮有效的结构化结论、本复核轮真实成功的工具证据，以及已声明产物的检查都满足，才认定完成。这是模型辅助复核，不能证明任意业务要求必然正确。缺少证据、结论格式错误或不支持的证据会暂停任务；连续两轮没有新的成功工具进展也会暂停。原权限和审批要求始终有效。
+
+默认预算为 240 分钟和 1,000 个工具步骤。累计活动时间、工具步骤、复核状态及恢复次数会跨内部续跑和 Runner 重启保存。暂停期间不计活动时间，继续不会补充预算。用户新消息在原生轮次结束时优先处理；停止和关闭目标会阻止自动重启，包括执行宿主正在收尾的情况。关闭目标保留文件，并允许继续普通对话。
+
+运行 `python3 -m unittest test_local_task_goal test_local_task_goal_integration test_context_recovery test_acp_error_messages` 验证控制器及关键边界。检查使用合成结果和隔离进程，不代表所有真实模型的交付质量验收。
+
+已有兼容的 DeepSeek 安装时，运行 `python3 e2e_task_goal_dsh.py --adapter-entry /absolute/adapter/dist/bin.js --runtime-root /absolute/runner/data/agent-runtimes/dsh-host --node /absolute/path/to/node --output /absolute/evidence/directory`。检查使用已安装的适配器、运行时、真实文件工具及生产流解析、任务控制器和恢复代码；模型响应与进程调度回调使用测试替身。它要求截断恢复后在同一原生会话完成文件复核，已有文件保持不变，写入不会重复。不安装依赖，也不使用生产凭据。
 
 ## OpenCode 恢复会话时的模型选择
 

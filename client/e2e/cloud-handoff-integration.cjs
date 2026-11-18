@@ -85,8 +85,7 @@ app.whenReady().then(async () => {
     const thought = 'Inspect restored workspace before delivering.';
     await until(() => current.snapshot().messages.some(row => row.blocks?.some(block =>
       block.kind === 'thinking' && block.text === thought)), agent.id + ': native thought replay');
-    const thoughtBlocks = current.snapshot().messages.flatMap(row => row.blocks || []).filter(block => block.kind === 'thinking');
-    const nativeThoughts = thoughtBlocks;
+    const nativeThoughts = current.snapshot().messages.flatMap(row => row.blocks || []).filter(block => block.kind === 'thinking');
     assert.equal(nativeThoughts.length, 1, agent.id + ': final thought must replace delta chunks');
     assert.equal(nativeThoughts[0].text, thought);
     assert.equal(nativeThoughts[0].done, true);
@@ -112,8 +111,8 @@ app.whenReady().then(async () => {
       return{thoughts:rows.filter(x=>x.type==='thinking').map(x=>x.item.text),
         usageRows:rows.filter(x=>x.type==='usage').length,outputCards:[...host.querySelectorAll('.ntool-name')].filter(x=>x.textContent==='输出').length,
         expanded:host.querySelector('.dks-thinking button')?.getAttribute('aria-expanded')}})()`);
-    assert.deepEqual(runtimeView.thoughts, [...refinement.map(block => block.text), thought],
-      agent.id + ": persisted renderer keeps refinement separate and deduplicates native reasoning");
+    assert.deepEqual(runtimeView.thoughts, [thought],
+      agent.id + ': persisted renderer shows the final native thought exactly once');
     assert.equal(runtimeView.outputCards, 0); assert.equal(runtimeView.usageRows, 0);
     assert.equal(runtimeView.expanded, 'false');
     await js(`window.SoduWorkAPI={listAttachments:cloudFixture.attachments,attachmentUrl:row=>${JSON.stringify(identity.hub)}+row.url};

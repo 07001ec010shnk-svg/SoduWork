@@ -32,6 +32,31 @@ class StartupError(RuntimeError):
     """A recoverable setup failure with a user-facing explanation."""
 
 
+class DiskFullError(StartupError):
+    """A storage failure that must not be replaced with download advice."""
+
+
+def command_failure(message: str, log: Path, offset: int) -> StartupError:
+    """Classify only this attempt, without echoing potentially private output."""
+    prefix = f"{message}. See {log}. "
+    try:
+        with log.open('rb') as output:
+            output.seek(offset)
+            tail = b''
+            while chunk := output.read(65536):
+                text = tail + chunk
+                if re.search(rb'\bENOSPC\b|\[Errno 28\]|\[WinError 112\]|'
+                             rb'No space left on device|not enough space on the disk', text, re.I):
+                    return DiskFullError(prefix + '磁盘空间不足 / Disk full. '
+                                         'Free space on the data, cache or temporary-directory volume '
+                                         'and retry; completed steps are reused.')
+                tail = text[-128:]
+    except OSError:
+        pass  # Preserve the command failure even if its log cannot be read.
+    return StartupError(prefix + 'Check the failing step in the log for the cause and retry; '
+                        'completed steps are reused.')
+
+
 def stop_child(child: subprocess.Popen) -> None:
     """Reap only this launcher's child tree, including npm's build subprocesses."""
     if child.poll() is not None:
@@ -85,20 +110,19 @@ def run(command: list[str], *, cwd: Path, log: Path, label: str,
     with log.open("ab") as output:
         output.write(("\n--- " + label + " ---\n").encode("utf-8"))
         output.flush()
+        offset = output.tell()
         with subprocess.Popen(command, cwd=cwd, env=env, stdout=output,
                               stderr=subprocess.STDOUT, **spawn_options()) as child:
             try:
                 code = wait_child(child, progress_label=label, timeout=timeout)
             except subprocess.TimeoutExpired as exc:
                 stop_child(child)
-                raise StartupError(f"{label} timed out after {timeout:g}s. See {log}. "
-                                   "Check the network/proxy and retry; completed steps are reused.") from exc
+                raise command_failure(f"{label} timed out after {timeout:g}s", log, offset) from exc
             except BaseException:
                 stop_child(child)
                 raise
     if code:
-        raise StartupError(f"{label} failed (exit {code}). See {log}. "
-                           "Check the network/proxy and retry; completed steps are reused.")
+        raise command_failure(f"{label} failed (exit {code})", log, offset)
     print(f"  完成 / Done ({time.monotonic() - started:.1f}s)", flush=True)
 
 
@@ -121,8 +145,13 @@ def check_dependencies() -> tuple[str, str]:
 
 
 def check_desktop_session() -> None:
-    if sys.platform.startswith('linux') and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
+    if not sys.platform.startswith('linux'):
+        return
+    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
         raise StartupError("Desktop startup requires a graphical Linux session. Use start.py without --desktop on a server.")
+    if os.geteuid() == 0:
+        raise StartupError("Linux desktop startup cannot run as root. Run as the ordinary user logged into a graphical session, "
+                           "or use start.py without --desktop for a headless service.")
 
 
 def dependency_report(*, desktop: bool = False) -> None:
@@ -211,18 +240,38 @@ def read_stamp(path: Path) -> str:
     return path.read_text(encoding="utf-8").strip() if path.is_file() else ""
 
 
-def verify_runner_environment(python: Path, backend: Path, log: Path) -> None:
+def verify_runner_environment(python: Path, backend: Path, log: Path, *, env: dict) -> None:
     """Check imports and the control-channel API without starting a Runner."""
     probe = ("import inspect, sys, websockets, yaml, pg8000, pymysql, pymongo, dns, redis, cryptography\n"
              "assert sys.version_info >= (3, 12), 'Runner requires Python 3.12+'\n"
              "assert {'additional_headers', 'proxy'} <= set(inspect.signature(websockets.connect).parameters), "
              "'Runner requires the websockets 15+ connection API'\n")
-    run([str(python), "-I", "-c", probe], cwd=backend, log=log, timeout=60,
+    run([str(python), "-I", "-c", probe], cwd=backend, log=log, timeout=60, env=env,
         label="[Runner] 检查本地运行环境 / Checking the local Runner environment")
+
+
+def prepare_environment(state: Path) -> dict[str, str]:
+    """Isolate install caches and temporary files before runtime HOME isolation."""
+    cache = state / "cache"
+    temporary = cache / "tmp"
+    temporary.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    # Windows environment names and npm configuration keys are case-insensitive.
+    for key, value in (("npm_config_cache", cache / "npm"), ("PIP_CACHE_DIR", cache / "pip"),
+                       ("electron_config_cache", cache / "electron")):
+        name = next((name for name in env if name.lower() == key.lower()), key) \
+            if os.name == 'nt' or key == 'npm_config_cache' else key
+        if not env.get(name):
+            env[name] = str(value)
+    # TEMP/TMP are normally set to the system drive on Windows. Override them
+    # only in preparation children; merely supplying defaults would not isolate it.
+    env.update({key: str(temporary) for key in ('TMPDIR', 'TEMP', 'TMP')})
+    return env
 
 
 def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     _, npm = check_dependencies()
+    cache_env = prepare_environment(state)
     runtime = state / "application"
     backend = runtime / "hub-backend"
     backend.mkdir(parents=True, exist_ok=True)
@@ -242,7 +291,7 @@ def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     venv = state / "venv"
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if not python.is_file():
-        run([sys.executable, "-m", "venv", str(venv)], cwd=state, log=log,
+        run([sys.executable, "-m", "venv", str(venv)], cwd=state, log=log, env=cache_env,
             label="[1/4] 创建独立环境 / Creating a private Python environment")
     requirements = [ROOT / "hub-backend" / name for name in ("requirements.txt", "requirements-runner.txt")]
     py_stamp = state / "python-dependencies.sha256"
@@ -250,7 +299,9 @@ def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     install = read_stamp(py_stamp) != wanted
     if not install:
         try:
-            verify_runner_environment(python, backend, log)
+            verify_runner_environment(python, backend, log, env=cache_env)
+        except DiskFullError:
+            raise
         except StartupError:
             # A stamp is not proof that packages still import. Repair only this
             # launcher's environment, never a checkout or activated shell venv.
@@ -258,8 +309,9 @@ def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     if install:
         run([str(python), "-m", "pip", "install", "--disable-pip-version-check",
              *[argument for file in requirements for argument in ("-r", str(file))]], cwd=state, log=log,
+            env=cache_env,
             label="[2/4] 安装服务依赖 / Installing server dependencies (first run needs internet)")
-        verify_runner_environment(python, backend, log)
+        verify_runner_environment(python, backend, log, env=cache_env)
         py_stamp.write_text(wanted, encoding="utf-8")
 
     source = ROOT / "hub-frontend"
@@ -274,6 +326,7 @@ def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     wanted = hashlib.sha256((source / "package-lock.json").read_bytes()).hexdigest()
     if read_stamp(npm_stamp) != wanted or not (frontend / "node_modules/vite").is_dir():
         run([npm, "ci", "--include=dev", "--no-audit", "--no-fund"], cwd=frontend, log=log,
+            env=cache_env,
             label="[3/4] 安装页面依赖 / Installing management UI dependencies")
         npm_stamp.write_text(wanted, encoding="utf-8")
     build_stamp = state / "frontend.sha256"
@@ -288,6 +341,7 @@ def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     wanted = digest_files(files, ROOT)
     if read_stamp(build_stamp) != wanted or not (frontend / "dist/index.html").is_file():
         run([npm, "run", "build"], cwd=frontend, log=log,
+            env=cache_env,
             label="[4/4] 构建管理页面 / Building the management UI")
         build_stamp.write_text(wanted, encoding="utf-8")
     return python, backend
@@ -299,9 +353,9 @@ def electron_binary(client: Path) -> Path:
     return client / 'node_modules/electron/dist' / relative
 
 
-def electron_install_environment() -> dict[str, str]:
+def electron_install_environment(environment: dict | None = None) -> dict[str, str]:
     """Enable the locked downloader's proxy only in its installation process."""
-    env = dict(os.environ)
+    env = dict(os.environ if environment is None else environment)
     switch = env.get('ELECTRON_GET_USE_PROXY')
     if switch is None:
         # Match EnvHttpProxyAgent: lowercase, including an empty value, wins.
@@ -320,11 +374,13 @@ def prepare_desktop(state: Path, log: Path) -> Path:
     """Install only in the launcher's generated copy, leaving the checkout untouched."""
     node, npm = check_dependencies()
     check_desktop_session()
+    cache_env = prepare_environment(state)
     client = state / 'application/client'
     stamp = state / 'desktop-dependencies.sha256'
     wanted = hashlib.sha256((client / 'package-lock.json').read_bytes()).hexdigest()
     if read_stamp(stamp) != wanted or not electron_binary(client).is_file():
         run([npm, 'ci', '--include=dev', '--no-audit', '--no-fund', '--ignore-scripts'], cwd=client, log=log,
+            env=cache_env,
             label='[Desktop] 安装桌面端 / Installing the desktop application (first run needs internet)')
         # npm versions differ in install-script policy. Download the locked Electron
         # runtime explicitly without enabling unrelated dependencies' lifecycle scripts.
@@ -334,12 +390,15 @@ def prepare_desktop(state: Path, log: Path) -> Path:
             try:
                 run([node, str(client / 'scripts/install-electron.cjs')], cwd=client, log=log,
                     label='[Desktop] 下载桌面运行环境 / Downloading the Electron runtime',
-                    env=electron_install_environment(),
+                    env=electron_install_environment(cache_env),
                     timeout=ELECTRON_DOWNLOAD_TIMEOUT)
+            except DiskFullError:
+                raise
             except StartupError as exc:
                 raise StartupError(
-                    f"{exc}\nElectron 下载失败。检查网络、代理或设置 ELECTRON_MIRROR 后重试。\n"
-                    "Set ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ in your shell "
+                    f"{exc}\nElectron 准备失败；先查看日志中的具体原因。仅网络连接失败时检查代理或 ELECTRON_MIRROR。\n"
+                    "If the log reports a download connection failure, check your proxy or set "
+                    "ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ in your shell "
                     "if that mirror is reachable, then run the same launcher again. "
                     "See docs/getting-started.md for shell-specific commands."
                 ) from exc
@@ -351,5 +410,6 @@ def prepare_desktop(state: Path, log: Path) -> Path:
         # preparation script verifies its own manifest and probes the tools on
         # every launch, reusing the verified payload or an interrupted download.
         run([node, str(client / 'scripts/prepare-shell-runtime.cjs')], cwd=client, log=log,
+            env=cache_env,
             label='[Desktop] 准备命令运行环境 / Preparing the command runtime')
     return client

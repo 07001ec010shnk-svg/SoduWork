@@ -43,6 +43,33 @@ class QwenRuntimeTests(unittest.TestCase):
         self.assertEqual(config["model"]["name"], self.llm["model"])
         self.assertTrue(Path(env[qwen_runtime.SETTINGS_ENV]).is_relative_to(self.root))
 
+    def test_host_outcome_hook_replaces_inherited_node_options_without_duplication(self):
+        env = {"NODE_OPTIONS": "--import=untrusted-startup.mjs"}
+        qwen_runtime.apply_env(env)
+        expected = Path(qwen_runtime.__file__).with_name("qwen_acp_outcome.mjs").resolve().as_uri()
+        self.assertEqual(env["NODE_OPTIONS"], "--import=" + expected)
+        self.assertEqual(env["SODUWORK_QWEN_ACP_OUTCOME"], "1")
+        qwen_runtime.apply_env(env)
+        self.assertEqual(env["NODE_OPTIONS"], "--import=" + expected)
+
+    def test_missing_outcome_hook_fails_before_native_startup(self):
+        with patch.object(qwen_runtime.Path, "is_file", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "任务结算组件缺失"):
+                qwen_runtime.apply_env({})
+
+    def test_managed_runs_stop_native_detected_loops_without_lowering_task_budget(self):
+        for selected in (None, "warn", "off", "stop"):
+            with self.subTest(selected=selected):
+                operator = {"model": {"maxToolCallsPerTurn": 250}}
+                if selected is not None:
+                    operator["model"]["loopProtection"] = selected
+                original = json.dumps(operator)
+                self.operator.write_text(original, encoding="utf-8")
+                _, configured = self.configure()
+                self.assertEqual(configured["model"]["loopProtection"], "stop")
+                self.assertEqual(configured["model"]["maxToolCallsPerTurn"], 250)
+                self.assertEqual(self.operator.read_text(encoding="utf-8"), original)
+
     def test_alias_and_credentials_preserved_without_name_inference(self):
         env, config = self.configure()
         self.assert_image(config, True)
