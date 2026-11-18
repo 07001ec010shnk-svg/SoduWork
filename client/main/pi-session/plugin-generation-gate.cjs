@@ -119,7 +119,7 @@ function finalDeliveryRevision(snapshot) {
   return JSON.stringify([delivery.source, delivery.summary, files.map(file =>
     [file.relative, file.size, file.at, file.primary, file.kind]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
 }
-async function begin({handle, app, identity, logicalOwner, outputSnapshot, selectedPluginIds = [], cancelled = () => false, repair, changed = () => {}, preflight} = {}) {
+async function begin({handle, app, identity, logicalOwner, outputSnapshot, selectedPluginIds = [], cancelled = () => false, pauseConfirmed = () => false, repair, changed = () => {}, preflight} = {}) {
   if (!handle?.cwd) return { canStart: () => !cancelled(), finish: async result => result, dispose() {} };
   const cwd=handle.cwd, sessionId=handle.sessionId, owner=handle.deliveryOwner;
   const scope = () => JSON.stringify([handle.deliveryOwner, identity?.hub, identity?.clientId,
@@ -141,7 +141,8 @@ async function begin({handle, app, identity, logicalOwner, outputSnapshot, selec
   }
   const originalScope = logical.scope;
   let disposed=false;
-  const current=()=>!disposed && logical.handle===handle && handle.cwd === cwd && handle.sessionId === sessionId && handle.deliveryOwner === owner && scope() === originalScope && !cancelled();
+  const owned=()=>!disposed && logical.handle===handle && handle.cwd === cwd && handle.sessionId === sessionId && handle.deliveryOwner === owner && scope() === originalScope;
+  const current=()=>owned() && !cancelled();
   const baseline=logical.baseline, touched=logical.touched;
   const collectTargets=async()=>{
     const latest = await scan();
@@ -244,12 +245,29 @@ async function begin({handle, app, identity, logicalOwner, outputSnapshot, selec
         for(const row of failed)put(row.file,'repairing',logical.repairs,row.diagnostic);
         let repaired;
         try {repaired=await repair(repairPrompt(failed,attempt+1),{attempt:attempt+1,recordUser:false});}
-        catch(_) {repaired={ok:false};}
-        if(!current())return stopped();
+        catch(error) {
+          // Exceptions can contain provider payloads. Only the model classifier's
+          // safe public diagnostic may enter the turn receipt or queue banner.
+          const issue = require('./model-errors').describe(error);
+          repaired = {ok:false, retrySafe:issue.retryable,
+            reason:issue.publicText || 'Plugin repair failed'};
+        }
+        if(!current()) {
+          // Native pause also stops validation. Retain that confirmed waiting
+          // receipt while still fencing cancellation and a changed owner.
+          if(owned() && repaired?.ok===true && repaired.paused && !repaired.cancelled && pauseConfirmed())return {...result,...repaired};
+          return stopped();
+        }
         if(!completed(repaired)) {
           for(const row of failed)put(row.file,'invalid',attempt+1,row.diagnostic);
-          return repaired?.cancelled ? stopped() : {...result,ok:false,retrySafe:false,failureKind:'plugin-validation',
-            reason:failed[0].diagnostic.file + ': repair did not complete'};
+          if(repaired?.cancelled)return {...result,...repaired};
+          // A runtime rejection is not a new static package defect. Preserve
+          // native failure/control receipts, including Runner-specific fields.
+          if(repaired?.paused || repaired?.recovering)return {...result,...repaired};
+          return {...result,...repaired,ok:false,retrySafe:repaired?.retrySafe===true,
+            failureKind:repaired?.failureKind || 'plugin-repair',
+            reason:repaired?.reason || repaired?.snapshot?.completion?.error ||
+              failed[0].diagnostic.file + ': repair did not complete'};
         }
         // A sibling cannot satisfy a missing draft's validation obligation.
         const latest=await collectTargets();

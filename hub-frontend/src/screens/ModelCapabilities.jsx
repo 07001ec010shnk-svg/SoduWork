@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { translateText as tx, useLocale, localeMap, deferredMessageKey } from '../i18n.js'
 import { api } from '../api.js'
 
@@ -99,7 +100,7 @@ export function CapabilityReport({ result, model, disabled }) {
       </div>})}</dl><p>{tx('检测结果仅适用于当前服务和模型配置；超时或网络异常不代表模型不支持。')}</p>
   </details>
 }
-export function ModelCapabilityStatus({ model, disabled, onChecked, scheduleFirstCheck }) {
+export function ModelCapabilityStatus({ model, disabled, onChecked, scheduleFirstCheck, portalTarget }) {
   useLocale()
   const [busy, setBusy] = useState(false)
   const [queued, setQueued] = useState(false)
@@ -146,7 +147,7 @@ export function ModelCapabilityStatus({ model, disabled, onChecked, scheduleFirs
   const checking = busy || queued
   const revisionConflict = error?.status === 409 && (error.code === 'model_config_revision_changed' ||
     (!error.code && error.message === '模型配置在检测期间已变更，请重新检测'))
-  return <div className="model-cap-status">
+  const content = <div className="model-cap-status">
     <div className="model-cap-check-action"><button type="button" className="admin-card-action" disabled={checking || disabled}
       onClick={() => check()}>{checking ? tx('正在检测能力…') : tx('检测能力')}</button>
       <span>{tx('使用已保存的服务与模型配置')}</span></div>
@@ -155,4 +156,6 @@ export function ModelCapabilityStatus({ model, disabled, onChecked, scheduleFirs
     {error && <div className="model-cap-error" role="alert">{revisionConflict
       ? tx('模型配置已变更，请重新检测') : error.message || tx('能力检测失败，请稍后重试')}</div>}
   </div>
+  // Undefined preserves inline callers; null keeps only the check lifecycle mounted.
+  return portalTarget === undefined ? content : portalTarget ? createPortal(content, portalTarget) : null
 }

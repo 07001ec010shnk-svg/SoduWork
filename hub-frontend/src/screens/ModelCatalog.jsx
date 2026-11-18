@@ -1,5 +1,5 @@
 import { translateText as tx, localeMap, useLocale } from '../i18n.js'
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useId } from 'react'
 import { api } from '../api.js'
 import { useViewportHeight } from '../viewport-height.js'
 import { Loading, ErrorState, Icon, Modal, Confirm, toast, SelectMenu } from '../ui.jsx'
@@ -61,8 +61,17 @@ export default function ModelCatalog() {
   const [del, setDel] = useState(null)         // {kind:'p'|'m', id, name}
   const [discover, setDiscover] = useState(null)  // provider whose upstream list to import
   const [defaultOpen, setDefaultOpen] = useState(false)
-  // Keep provider cards compact and expand model lists on demand.
-  const [expandedProviders, setExpandedProviders] = useState(() => new Set())
+  // Details do not resize or reorder the service grid.
+  const [viewProviderId, setViewProviderId] = useState(null)
+  const [capabilityTargets, setCapabilityTargets] = useState({})
+  const registerCapabilityTarget = useCallback((id, element) => {
+    setCapabilityTargets(current => {
+      if (current[id] === element) return current
+      const next = { ...current }
+      if (element) next[id] = element; else delete next[id]
+      return next
+    })
+  }, [])
   const [error, setError] = useState(null)
   const [newProviderId, setNewProviderId] = useState('')
   const pendingProviderFocus = useRef('')
@@ -132,10 +141,11 @@ export default function ModelCatalog() {
   }
   const models = d?.models || []
   const byP = (pid) => models.filter((m) => m.providerId === pid)
-  // Keep the newly created service in view for this visit without changing the saved catalog order.
+  // Keep custom services ahead of built-ins within each enabled/disabled group
+  // after reload too. A just-created service still receives temporary focus.
   const providers = (d?.providers || []).slice().sort((a, b) =>
     Number(b.id === newProviderId) - Number(a.id === newProviderId) ||
-    (b.enabled - a.enabled) || (b.builtin - a.builtin) || a.name.localeCompare(b.name))
+    (b.enabled - a.enabled) || (a.builtin - b.builtin) || a.name.localeCompare(b.name))
   useEffect(() => {
     if (!pendingProviderFocus.current || !d?.providers?.some(p => p.id === pendingProviderFocus.current)) return
     const card = listRef.current?.querySelector('.model-provider.is-new-provider')
@@ -146,6 +156,7 @@ export default function ModelCatalog() {
     heading.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     card.focus({ preventScroll: true })
   }, [d, newProviderId, listRef])
+  const viewProvider = providers.find(p => p.id === viewProviderId)
   const enabledProviders = providers.filter((p) => p.enabled).length
   const enabledModels = models.filter((m) => m.enabled).length
   const readyProviders = providers.filter((p) => p.enabled && p.baseUrl && p.keySet).length
@@ -159,104 +170,7 @@ export default function ModelCatalog() {
     catch (e) { toast(e.message || tx("保存失败")); load() }
   }
 
-  return (
-    <>
-      <ModelRuntime providers={providers} models={models} catalogSummary={
-        <section className="model-catalog-summary model-runtime-dimension" aria-label={tx("目录配置")} aria-busy={!d && !error}>
-          <header className="model-dimension-head"><Icon name="box" /><h4>{tx("目录配置")}</h4></header>
-          <div className="model-catalog-summary-card"><span>{tx("服务总数")}</span><strong>{d ? providers.length : '—'}</strong><small>{d ? tx("已启用 {0} · 已停用 {1}", [enabledProviders, providers.length - enabledProviders]) : error ? tx("目录读取失败") : tx("正在读取目录")}</small></div>
-          <div className="model-catalog-summary-card"><span>{tx("模型总数")}</span><strong>{d ? models.length : '—'}</strong><small>{d ? tx("已启用 {0} · 已停用 {1}", [enabledModels, models.length - enabledModels]) : error ? tx("目录读取失败") : tx("正在读取目录")}</small></div>
-          <div className="model-catalog-summary-card"><span>{tx("配置完整服务")}</span><strong>{d ? readyProviders : '—'}</strong><small>{tx("服务已启用，且地址与密钥均已填写。")}</small></div>
-          <p className="model-dimension-note">{error ? tx("目录读取失败") : tx("配置完整仅表示设置已齐全。")}</p>
-        </section>
-      } catalogActions={<>
-        <button className="btn btn-ghost" onClick={() => setDefaultOpen(true)}><Icon name="key" />{tx("组织默认调用")}</button>
-        <button className="btn btn-primary" disabled={!d} onClick={() => setEditP('new')}><Icon name="plus" />{tx("接一个服务")}</button>
-      </>} />
-      {error && <ErrorState msg={error.message} onRetry={load} />}
-      {!d && !error && <Loading />}
-      <div ref={bindList} className="model-provider-grid" tabIndex={0} role="region" aria-label={tx("服务与模型列表，可滚动")}>
-        {providers.map((p) => {
-          const ms = byP(p.id)
-          const modelsOpen = expandedProviders.has(p.id)
-          const modelListId = `model-list-${String(p.id).replace(/[^a-zA-Z0-9_-]/g, '-')}`
-          const ready = p.enabled && p.baseUrl && p.keySet
-          const state = ready ? tx("已配置") : (!p.enabled ? tx("已停用") : (!p.baseUrl ? tx("缺地址") : tx("缺密钥")))
-          return (
-            <article key={p.id} tabIndex={p.id === newProviderId ? -1 : undefined}
-              className={'model-provider' + (p.enabled ? '' : ' disabled') + (modelsOpen ? ' is-models-expanded' : '') + (p.id === newProviderId ? ' is-new-provider' : '')}>
-              <header className="model-provider-head">
-                <span className={'model-provider-glyph' + (ready ? ' ready' : '')}>{(p.name || p.id || '?').slice(0, 1)}</span>
-                <div className="model-provider-title">
-                  <div><h3>{p.name || p.id}</h3>{p.builtin && <span className="sysbadge">{tx("内置")}</span>}</div>
-                  <code>{p.id}</code>
-                </div>
-                <span className={'model-state ' + (ready ? 'ready' : (!p.enabled ? 'off' : 'warn'))}><i />{state}</span>
-              </header>
-
-              <div className="model-provider-facts">
-                <div><span>{tx("服务地址")}</span><code title={p.baseUrl || ''}>{p.baseUrl || tx("还没填写接口地址")}</code></div>
-                <div><span>{tx("组织密钥")}</span><b>{p.keySet ? tx("已配置 · {0} 位", [p.keyLen]) : tx("尚未配置")}</b></div>
-              </div>
-              {p.note && <p className="model-provider-note">{p.note}</p>}
-
-              <div className={'model-cloud' + (modelsOpen ? ' is-expanded' : ' is-collapsed')}>
-                <div className="model-cloud-label">
-                  <span>{tx("已启用模型")}</span><b>{ms.filter((m) => m.enabled).length}/{ms.length}</b>
-                </div>
-                <div id={modelListId} className="model-chips" hidden={!modelsOpen} tabIndex={0} role="region"
-                  aria-label={tx("{0}的模型列表", [p.name || p.id])}>
-                  {ms.map((m) => (
-                    <div key={m.id} className={'model-chip' + (m.enabled ? '' : ' off')}>
-                      <div className="model-chip-identity">
-                        <div className="model-chip-heading"><i className={'model-kind kind-' + (m.modality || 'chat')}>
-                          {MODEL_TYPE_LABEL[m.modality || 'chat']}
-                        </i>
-                        <code title={m.name}>{m.label || m.name}</code></div>
-                        {m.label && m.label !== m.name && <span className="model-chip-id">{m.name}</span>}
-                        {(m.modality || 'chat') === 'chat' && <CapabilityBadges model={m} />}
-                      </div>
-                      <div className="model-chip-actions" role="group" aria-label={tx("{0} 操作", [m.label || m.name])}>
-                        <button type="button" className="admin-card-action" aria-label={tx("配置模型 {0}", [m.label || m.name])} onClick={() => setAddM({ providerId: p.id, model: m })}>{tx("配置")}</button>
-                        <button type="button" className="admin-card-action" aria-label={tx("{0}模型 {1}", [m.enabled ? tx("停用") : tx("启用"), m.label || m.name])} title={m.enabled ? tx("停用后将不再供成员选择") : tx("启用模型")} onClick={() => toggleM(m)}>{m.enabled ? tx("停用") : tx("启用")}</button>
-                        {!m.builtin && <span className="model-chip-danger"><button type="button" className="admin-card-action is-danger" aria-label={tx("删除模型 {0}", [m.label || m.name])} onClick={() => setDel({ kind: 'm', id: m.id, name: m.label || m.name, revision: m.revision })}>{tx("删除")}</button></span>}
-                      </div>
-                      {(m.modality || 'chat') === 'chat' && <ModelCapabilityStatus key={checkRevision(p, m)}
-                        scheduleFirstCheck={scheduleFor(p, m)}
-                        model={m} disabled={!p.enabled || !m.enabled || !p.baseUrl || !p.keySet}
-                        onChecked={result => applyCheck(p, m, result)} />}
-                    </div>
-                    ))}
-                </div>
-                {!modelsOpen && ms.length > 0 && <p className="model-cloud-collapsed-note">{tx("模型列表已收起，点击展开查看配置")}</p>}
-                {ms.length === 0 && <span className="model-empty">{tx("这个服务还没有模型")}</span>}
-              </div>
-
-              <footer className="model-provider-actions admin-card-actions">
-                <div className="model-card-action-group">
-                  <button type="button" className="admin-card-action is-primary" onClick={() => setAddM({ providerId: p.id, provider: p })}><Icon name="plus" />{tx("加模型")}</button>
-                  <button type="button" className="admin-card-action" onClick={() => setDiscover({ ...p })}><Icon name="search" />{tx("发现模型")}</button>
-                  <button type="button" className="admin-card-action" onClick={() => setEditP(p)}><Icon name="settings" />{tx("配置服务")}</button>
-                  <button type="button" className="admin-card-action" onClick={() => toggleP(p)}>{p.enabled ? tx("停用服务") : tx("启用服务")}</button>
-                </div>
-                <div className="model-card-footer-controls">
-                  {ms.length > 0 && <button type="button" className="model-cloud-toggle"
-                    aria-expanded={modelsOpen} aria-controls={modelListId}
-                    onClick={() => setExpandedProviders(current => {
-                      const next = new Set(current)
-                      if (next.has(p.id)) next.delete(p.id); else next.add(p.id)
-                      return next
-                    })}>
-                    {modelsOpen ? tx("收起") : tx("展开")}<Icon name="chevron" aria-hidden="true" />
-                  </button>}
-                  {!p.builtin && <div className="model-card-danger-group"><button type="button" className="admin-card-action is-danger" onClick={() => setDel({ kind: 'p', id: p.id, name: p.name, revision: p.revision })}><Icon name="trash" />{tx("删除服务")}</button></div>}
-                </div>
-              </footer>
-            </article>
-          )
-        })}
-      </div>
-
+  const dialogs = <>
       {defaultOpen && <Modal title={tx("组织默认调用")} icon="key" wide onClose={() => setDefaultOpen(false)}><LlmSettings embedded /></Modal>}
       {editP && <ProviderForm initial={editP === 'new' ? null : editP}
         onClose={() => setEditP(null)} onSaved={(providerId) => {
@@ -280,9 +194,172 @@ export default function ModelCatalog() {
           } catch (e) { toast(tx("删不掉：") + (e.message || e)) }
           setDel(null); load()
         }} />}
-    </>
+  </>
+
+  return (
+    <div className="model-catalog">
+      <ModelRuntime providers={providers} models={models}
+        catalogCounts={d ? { providers: providers.length, models: models.length } : null} catalogSummary={
+        <section className="model-catalog-summary model-runtime-dimension" aria-label={tx("目录配置")} aria-busy={!d && !error}>
+          <header className="model-dimension-head"><Icon name="box" /><h4>{tx("目录配置")}</h4></header>
+          <div className="model-catalog-summary-card"><span>{tx("服务总数")}</span><strong>{d ? providers.length : '—'}</strong><small>{d ? tx("已启用 {0} · 已停用 {1}", [enabledProviders, providers.length - enabledProviders]) : error ? tx("目录读取失败") : tx("正在读取目录")}</small></div>
+          <div className="model-catalog-summary-card"><span>{tx("模型总数")}</span><strong>{d ? models.length : '—'}</strong><small>{d ? tx("已启用 {0} · 已停用 {1}", [enabledModels, models.length - enabledModels]) : error ? tx("目录读取失败") : tx("正在读取目录")}</small></div>
+          <div className="model-catalog-summary-card"><span>{tx("配置完整服务")}</span><strong>{d ? readyProviders : '—'}</strong><small>{tx("服务已启用，且地址与密钥均已填写。")}</small></div>
+          <p className="model-dimension-note">{error ? tx("目录读取失败") : tx("配置完整仅表示设置已齐全。")}</p>
+        </section>
+      } catalogActions={<>
+        <button className="btn btn-ghost" onClick={() => setDefaultOpen(true)}><Icon name="key" />{tx("组织默认调用")}</button>
+        <button className="btn btn-primary" disabled={!d} onClick={() => setEditP('new')}><Icon name="plus" />{tx("接一个服务")}</button>
+      </>} />
+      {error && <ErrorState msg={error.message} onRetry={load} />}
+      {!d && !error && <Loading />}
+      <div ref={bindList} className="model-provider-grid" tabIndex={0} role="region" aria-label={tx("服务与模型列表，可滚动")}>
+        {providers.map((p) => {
+          const ms = byP(p.id)
+          const ready = p.enabled && p.baseUrl && p.keySet
+          const state = ready ? tx("已配置") : (!p.enabled ? tx("已停用") : (!p.baseUrl ? tx("缺地址") : tx("缺密钥")))
+          return (
+            <article key={p.id} tabIndex={p.id === newProviderId ? -1 : undefined}
+              className={'model-provider' + (p.enabled ? '' : ' disabled') + (p.id === newProviderId ? ' is-new-provider' : '')}>
+              <header className="model-provider-head">
+                <span className={'model-provider-glyph' + (ready ? ' ready' : '')}>{(p.name || p.id || '?').slice(0, 1)}</span>
+                <div className="model-provider-title">
+                  <div><h3 title={p.name || p.id}>{p.name || p.id}</h3>{p.builtin && <span className="sysbadge">{tx("内置")}</span>}</div>
+                  <code title={p.id}>{p.id}</code>
+                </div>
+                <span className={'model-state ' + (ready ? 'ready' : (!p.enabled ? 'off' : 'warn'))}><i />{state}</span>
+              </header>
+
+              <div className="model-provider-facts">
+                <div><span>{tx("服务地址")}</span><code title={p.baseUrl || ''}>{p.baseUrl || tx("还没填写接口地址")}</code></div>
+                <div><span>{tx("组织密钥")}</span><b>{p.keySet ? tx("已配置 · {0} 位", [p.keyLen]) : tx("尚未配置")}</b></div>
+              </div>
+              {p.note && <p className="model-provider-note" title={p.note}>{p.note}</p>}
+
+              <div className="model-cloud">
+                <div className="model-cloud-label">
+                  <span>{tx("已启用模型")}</span><b>{ms.filter((m) => m.enabled).length}/{ms.length}</b>
+                  {ms.length > 0 && <button type="button" className="model-cloud-toggle" aria-haspopup="dialog"
+                    onClick={event => { event.currentTarget.focus(); setViewProviderId(p.id) }}>
+                    {tx("查看")}<Icon name="chevron" aria-hidden="true" />
+                  </button>}
+                </div>
+
+              </div>
+
+              <footer className="model-provider-actions admin-card-actions">
+                <div className="model-card-action-group">
+                  <button type="button" className="admin-card-action is-primary" onClick={() => setAddM({ providerId: p.id, provider: p })}><Icon name="plus" />{tx("加模型")}</button>
+                  <button type="button" className="admin-card-action" onClick={() => setDiscover({ ...p })}><Icon name="search" />{tx("发现模型")}</button>
+                  <button type="button" className="admin-card-action" onClick={() => setEditP(p)}><Icon name="settings" />{tx("配置服务")}</button>
+                </div>
+                <ProviderMoreActions provider={p} onToggle={() => toggleP(p)}
+                  onDelete={() => setDel({ kind: 'p', id: p.id, name: p.name, revision: p.revision })} />
+              </footer>
+            </article>
+          )
+        })}
+      </div>
+
+      {/* Keep checks mounted independently of the detail dialog. Closing it must
+          not discard a queued first check or an in-flight result. */}
+      {providers.flatMap(p => byP(p.id).filter(m => (m.modality || 'chat') === 'chat').map(m =>
+        <ModelCapabilityStatus key={m.id + ':' + checkRevision(p, m)} model={m}
+          portalTarget={capabilityTargets[m.id] || null} scheduleFirstCheck={scheduleFor(p, m)}
+          disabled={!p.enabled || !m.enabled || !p.baseUrl || !p.keySet}
+          onChecked={result => applyCheck(p, m, result)} />))}
+      {viewProvider ? <Modal title={tx("{0}的模型列表", [viewProvider.name || viewProvider.id])}
+        icon="box" wide scope="model-provider-dialog" onClose={() => setViewProviderId(null)}
+        foot={<>
+          <button type="button" className="btn btn-primary" onClick={() => setAddM({ providerId: viewProvider.id, provider: viewProvider })}><Icon name="plus" />{tx("加模型")}</button>
+          <button type="button" className="btn btn-ghost" onClick={() => setDiscover({ ...viewProvider })}><Icon name="search" />{tx("发现模型")}</button>
+          <button type="button" className="btn btn-ghost" onClick={() => setEditP(viewProvider)}><Icon name="settings" />{tx("配置服务")}</button>
+        </>}>
+        <div className="model-provider">
+          <div className="model-chips" tabIndex={0} role="region"
+            aria-label={tx("{0}的模型列表", [viewProvider.name || viewProvider.id])}>
+            {byP(viewProvider.id).map((m) => (
+              <div key={m.id} className={'model-chip' + (m.enabled ? '' : ' off')}>
+                <div className="model-chip-identity">
+                  <div className="model-chip-heading"><i className={'model-kind kind-' + (m.modality || 'chat')}>
+                    {MODEL_TYPE_LABEL[m.modality || 'chat']}
+                  </i>
+                  <code title={m.name}>{m.label || m.name}</code></div>
+                  {m.label && m.label !== m.name && <span className="model-chip-id">{m.name}</span>}
+                  {(m.modality || 'chat') === 'chat' && <CapabilityBadges model={m} />}
+                </div>
+                <div className="model-chip-actions" role="group" aria-label={tx("{0} 操作", [m.label || m.name])}>
+                  <button type="button" className="admin-card-action" aria-label={tx("配置模型 {0}", [m.label || m.name])} onClick={() => setAddM({ providerId: viewProvider.id, model: m })}>{tx("配置")}</button>
+                  <button type="button" className="admin-card-action" aria-label={tx("{0}模型 {1}", [m.enabled ? tx("停用") : tx("启用"), m.label || m.name])} title={m.enabled ? tx("停用后将不再供成员选择") : tx("启用模型")} onClick={() => toggleM(m)}>{m.enabled ? tx("停用") : tx("启用")}</button>
+                  {!m.builtin && <span className="model-chip-danger"><button type="button" className="admin-card-action is-danger" aria-label={tx("删除模型 {0}", [m.label || m.name])} onClick={() => setDel({ kind: 'm', id: m.id, name: m.label || m.name, revision: m.revision })}>{tx("删除")}</button></span>}
+                </div>
+                {(m.modality || 'chat') === 'chat' && <CapabilityStatusSlot modelId={m.id} register={registerCapabilityTarget} />}
+              </div>
+              ))}
+          </div>
+          {byP(viewProvider.id).length === 0 && <p className="muted">{tx("这个服务还没有模型")}</p>}
+        </div>
+        {dialogs}
+      </Modal> : dialogs}
+    </div>
   )
 }
+
+function CapabilityStatusSlot({ modelId, register }) {
+  const bind = useCallback(element => register(modelId, element), [modelId, register])
+  return <div className="model-cap-status-slot" ref={bind} />
+}
+
+function ProviderMoreActions({ provider, onToggle, onDelete }) {
+  const id = useId()
+  const trigger = useRef(null), popup = useRef(null)
+  const [open, setOpen] = useState(false)
+  useLayoutEffect(() => {
+    const element = popup.current
+    const sync = event => setOpen(event.newState === 'open')
+    const place = () => {
+      if (!element.matches(':popover-open')) return
+      const rect = trigger.current.getBoundingClientRect()
+      const width = element.offsetWidth, height = element.offsetHeight
+      const viewport = window.visualViewport
+      const left = viewport?.offsetLeft || 0, top = viewport?.offsetTop || 0
+      const vw = viewport?.width || innerWidth, vh = viewport?.height || innerHeight
+      Object.assign(element.style, {
+        left: Math.max(left + 12, Math.min(rect.right - width, left + vw - width - 12)) + 'px',
+        top: Math.max(top + 12, Math.min(rect.bottom + 6 + height > top + vh - 12 ? rect.top - height - 6 : rect.bottom + 6, top + vh - height - 12)) + 'px',
+      })
+    }
+    const afterToggle = event => { sync(event); place() }
+    element.addEventListener('toggle', afterToggle)
+    const observer = new ResizeObserver(place)
+    observer.observe(element)
+    window.addEventListener('resize', place)
+    window.addEventListener('scroll', place, true)
+    viewportEvents(true)
+    function viewportEvents(add) {
+      const method = add ? 'addEventListener' : 'removeEventListener'
+      window.visualViewport?.[method]('resize', place)
+      window.visualViewport?.[method]('scroll', place)
+    }
+    return () => {
+      observer.disconnect(); element.removeEventListener('toggle', afterToggle)
+      window.removeEventListener('resize', place); window.removeEventListener('scroll', place, true)
+      viewportEvents(false)
+    }
+  }, [])
+  const choose = action => { popup.current.hidePopover(); trigger.current.focus(); action() }
+  return <div className="model-card-more">
+    <button ref={trigger} type="button" className="admin-card-action" popoverTarget={id}
+      aria-expanded={open} aria-controls={id}>{tx("更多")}<Icon name="chevron" aria-hidden="true" /></button>
+    <div ref={popup} id={id} popover="auto" className="model-card-more-popup" onKeyDown={event => {
+      if (event.key === 'Escape') { event.preventDefault(); popup.current.hidePopover(); trigger.current.focus() }
+    }}>
+      <button type="button" className="admin-card-action" onClick={() => choose(onToggle)}>{provider.enabled ? tx("停用服务") : tx("启用服务")}</button>
+      {!provider.builtin && <button type="button" className="admin-card-action is-danger" onClick={() => choose(onDelete)}><Icon name="trash" />{tx("删除服务")}</button>}
+    </div>
+  </div>
+}
+
 
 function ProviderForm({ initial, onClose, onSaved }) {
   const uiLocale = useLocale();
