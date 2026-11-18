@@ -67,6 +67,38 @@ function ensureInside(target, root) {
   if (!resolved.startsWith(base)) fail('unsafe path: ' + resolved);
 }
 
+function operationError(error, operation, target, destination) {
+  return `${error.code || 'UNKNOWN'} ${error.syscall || operation} ${error.path || target}` +
+    ((error.dest || destination) ? ' -> ' + (error.dest || destination) : '');
+}
+
+// Visit siblings even when a protected entry cannot be removed. lstat keeps
+// links/reparse points as leaves so cleanup never traverses their targets.
+function reclaimStaleRuntime(stale, root, log) {
+  function remove(target) {
+    ensureInside(target, root);
+    let operation = 'lstat';
+    try {
+      const stat = fs.lstatSync(target);
+      if (stat.isDirectory() && !stat.isSymbolicLink()) {
+        operation = 'readdir';
+        const names = fs.readdirSync(target);
+        for (const name of names) remove(path.join(target, name));
+        operation = 'rmdir';
+        fs.rmdirSync(target);
+      } else {
+        operation = 'unlink';
+        fs.unlinkSync(target);
+      }
+    } catch (error) {
+      if (error.code !== 'ENOENT') {
+        log('[SoduWork shell runtime] retained stale entry: ' + operationError(error, operation, target));
+      }
+    }
+  }
+  remove(stale);
+}
+
 function hash(file) {
   const digest = crypto.createHash('sha256');
   digest.update(fs.readFileSync(file));
@@ -195,14 +227,22 @@ async function prepare({ platform = process.platform, environment = process.env,
   const archive = await archiveOf(selectRelease(arch, environment), { cache, environment, download, log });
 
   ensureInside(runtimeRoot, root);
+  let stale;
   try {
     fs.rmSync(runtimeRoot, { recursive: true, force: true });
   } catch (error) {
     if (!['EPERM', 'EACCES'].includes(error.code)) throw error;
     // Interrupted extraction can leave an undeletable reparse point.
-    const stale = runtimeRoot + '.stale-' + crypto.randomUUID();
+    stale = runtimeRoot + '.stale-' + crypto.randomUUID();
     ensureInside(stale, root);
-    fs.renameSync(runtimeRoot, stale);
+    try {
+      fs.renameSync(runtimeRoot, stale);
+    } catch (renameError) {
+      log('[SoduWork shell runtime] cleanup failed: ' + operationError(error, 'rm', runtimeRoot));
+      log('[SoduWork shell runtime] recovery rename failed: ' +
+        operationError(renameError, 'rename', runtimeRoot, stale));
+      throw renameError;
+    }
     log('[SoduWork shell runtime] retained an unremovable previous runtime at ' + stale);
   }
   fs.mkdirSync(runtimeRoot, { recursive: true });
@@ -234,6 +274,7 @@ async function prepare({ platform = process.platform, environment = process.env,
     sha256: item.sha256, source: item.url, prune: PRUNE_REV,
     preparedAt: new Date().toISOString(),
   }, null, 2) + '\n', 'utf8');
+  if (stale) reclaimStaleRuntime(stale, root, log);
   console.log('[SoduWork shell runtime] prepared: Git for Windows ' + item.version + ' (' + arch + ')');
 }
 
