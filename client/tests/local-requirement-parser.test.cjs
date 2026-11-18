@@ -69,19 +69,39 @@ function completion(text, finishReason = 'stop') {
     usage: { prompt_tokens: 8, completion_tokens: 12, total_tokens: 20 } } };
 }
 
-function rendererParser(parser) {
+function rendererParser(parser, getLocale) {
   const values = new Map();
   const box = { URL, URLSearchParams, AbortController, Response, console,
     navigator: { platform: 'test' }, CustomEvent: class {}, dispatchEvent() {},
     setTimeout: () => 0, clearTimeout() {}, setInterval: () => 0,
     localStorage: { getItem: key => values.get(key) ?? null,
       setItem: (key, value) => values.set(key, String(value)), removeItem: key => values.delete(key) },
+    SoduWorkI18n: { getLocale },
     soduWorkAPI: { conversationSession: { localRequirementParse: parser } },
     fetch: () => assert.fail('private parsing must not contact Hub') };
   box.window = box;
   vm.runInNewContext(require('./renderer-source.cjs').readFileSync(path.join(__dirname, '../api.js'), 'utf8'), box);
   return box.SoduWorkAPI;
 }
+
+test('private parsing requests generated fields in the current UI language', async () => {
+  let locale = 'en-US';
+  const instructions = [];
+  const api = rendererParser(async request => {
+    instructions.push(request.instructions);
+    assert.equal(request.input, '原始需求：\nOriginal issue');
+    return { ok: true, text: '{"title":"Original issue"}' };
+  }, () => locale);
+  assert.equal((await api.parseTaskText('Original issue', 'local:test')).title, 'Original issue');
+  assert.match(instructions[0], /Output language: English\./);
+  assert.match(instructions[0], /Keep JSON keys, enum values, dates, proper names, identifiers, and literal quotations unchanged/);
+  locale = 'ja-JP';
+  await api.parseTaskText('Original issue', 'local:test', [], { kind: 'automation' });
+  assert.match(instructions[1], /Output language: Japanese\./);
+  locale = 'constructor';
+  await api.parseTaskText('Original issue', 'local:test');
+  assert.match(instructions[2], /Output language: Simplified Chinese\./);
+});
 
 test('the default local parser resolves encrypted configuration and calls a real keyless provider', async t => {
   const f = await providerFixture(t, () => completion('{"title":"Local requirement","note":"Keep the full instruction"}'));
@@ -158,6 +178,17 @@ test('removed local models fail before dispatch without falling back to Hub or i
   assert.match(result._parseError, /本地文字模型已删除.*原文已保留/);
   assert.doesNotMatch(result._parseError, /额度/);
   assert.equal(f.requests.length, 0);
+});
+
+test('local parser explains provider HTTP failures without exposing upstream messages', async () => {
+  for (const [httpStatus,expected] of [[400,/请求参数.*兼容/],[401,/凭据/],[403,/权限/],
+    [404,/地址.*模型名称/],[422,/请求参数.*兼容/],[429,/请求过多/],[503,/暂时不可用/]]) {
+    const api=rendererParser(async()=>({ok:false,code:httpStatus===429?'APP_AI_RATE_LIMITED':'APP_AI_PROVIDER_ERROR',
+      httpStatus,reason:'private-provider-key http://private-provider.invalid/v1'}));
+    const result=await api.parseTaskText('原始任务','local:model-'+ 'a'.repeat(32),[],{kind:'automation'});
+    assert.match(result._parseError,new RegExp('HTTP '+httpStatus)); assert.match(result._parseError,expected);
+    assert.doesNotMatch(result._parseError,/private-provider/);
+  }
 });
 
 test('a real private provider timeout is bounded, aborts the request and keeps the result uncertain', async t => {

@@ -42,7 +42,7 @@ test('reasoning-only provider length stops preserve history and never issue an a
   } }));
   await f.handle.submit('检查隔离测试材料').completion;
   assert.equal(f.requests.length, 1);
-  assert.equal(f.requests[0].max_tokens ?? f.requests[0].max_completion_tokens, 65536);
+  assert.equal(f.requests[0].max_tokens ?? f.requests[0].max_completion_tokens, 16384);
   const snapshot = f.handle.snapshot();
   assert.equal(snapshot.status, 'incomplete');
   assert.match(snapshot.statusText, /单次输出上限/);

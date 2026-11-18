@@ -24,13 +24,25 @@ The desktop uses Electron and native HTML/CSS/JavaScript. The React management U
 
 Conversations and task execution share the same session path: `panels-chat` → `conversationSession` → main-process IPC → `agent-runtime` → Pi or Runner. AI team assignments open the corresponding conversation. Requirement drawers expand task traces; legacy detail links resolve the same requirement rather than creating duplicate records.
 
+If a Runner plugin draft check cannot read its files, the conversation reports the failure and stops showing active execution. Existing files remain available and dependent queued work waits for an explicit resume. A failed final check does not replay the completed model request. Cancelling or changing permissions during the check retains the user's new control state.
+
 When the requirement creator and executor are the same person, execution continues in the original conversation. An explicitly selected runtime or model is applied through the normal native selection transaction while retaining the conversation ID and history. Acceptance also reuses the original execution conversation. These rules apply to Pi and every other runtime; only an authoritative missing-archive result permits a new conversation. Temporary read failures, denied access, and unconfirmed runtime switches preserve the original conversation and stop submission.
 
 The desktop rail opens the requirement pool directly. The old task board, detail chat box, and separate AI workstation conversation are retired. The [release scope](../docs/release-scope.en.md) describes the shared structure, assignment rules, and compatibility boundaries.
 
 HTML script order defines dependencies. When splitting scripts, verify resource references, shared state, loading order, and actual Electron behavior.
 
+Desktop Markdown keeps single tildes literal, so ranges such as `3~5` and `7~14` in one paragraph retain their separators. Use `~~text~~` for strikethrough. The shared `core/markdown.js` configuration applies to conversation history, streamed replies, read-aloud text extraction and Markdown previews; saved source text is unchanged.
+
+Conversation automation drafts accept relative delays such as `五分钟后` (in five minutes). The execution instant is anchored to the message submission time and retained when later messages only refine the work. Missing, invalid or ambiguous times require clarification instead of defaulting to daily 18:00. Incomplete task descriptions remain drafts. Users can cancel creation, continue refining the same card, or return to ordinary chat. After creation, explicit edit requests prepare changes for confirmation and update the original schedule ID; cancelling an edit keeps the saved configuration. Disabling stops future automatic runs, while closing the card only dismisses its view. Run `node e2e/automation-sheet-layout.cjs /absolute/evidence/directory` for isolated Electron form and conversation-routing checks using synthetic parser and schedule APIs.
+
+Unconfirmed drafts support repeated time changes. Explicit time-only messages using `后`, `之后`, `以后` or `过后`, such as `修改为10分钟以后`, update the same draft locally, even when model extraction is unavailable. Each delay uses that message's submission time, captured before asynchronous access checks, and synchronizes scheduling annotations in the title, instructions and acceptance criteria without changing unrelated business durations. Restoring the card retains the latest instant; nothing is created until confirmation.
+
+Local draft extraction honors the model's detected output-token parameter. Provider failures retain a safe HTTP status with separate guidance for credentials, access, endpoint/model selection, incompatible parameters, throttling and service outages; raw provider responses remain private and calls are not automatically retried. Failed refinements retain this diagnostic and the original draft. Runner readiness only checks execution prerequisites and does not confirm successful model extraction.
+
 Native history and downloaded conversation replicas retain their account and Hub boundaries when listed, read, restored, or changed, including offline use. Unknown-owner archives require explicit import as separate read-only copies. Cached content does not grant permission to execute a requirement or cloud conversation; resolving a verified native source must preserve its original runtime, model, and permissions.
+
+Work-form conversations show their saved runtime selection in the sidebar before execution, labelled “Selected runtime”. Selection changes and reopening preserve this icon independently of actual execution provenance. Legacy drafts without a saved selection do not infer it from their archive format. Run `node e2e/workspace-runtime-label.cjs /absolute/evidence/directory` to check draft updates, history restoration and narrow sidebar layouts in isolated Electron.
 
 Remote notice history and receipt markers use account-scoped IndexedDB transactions and Web Locks when both browser capabilities are available. Local reminders remain in the existing localStorage cache. Migration retires a legacy snapshot only after a successful durable commit, and a failed write preserves that snapshot for retry. Environments without these capabilities keep the existing cache behavior.
 
@@ -50,6 +62,18 @@ claims from injected local context. My Memory shows rendered Markdown by default
 with source editing available under Edit Markdown. Existing conversations retain
 their history and working directory.
 
+After successfully sending the first message of a new local chat or goal in an
+explicitly selected working or project directory, the desktop remembers the
+runtime and model used together.
+Starting another conversation in that directory, or selecting it in a new draft,
+restores that pair when both are available. Preferences belong to the current
+Hub, account and device. Cloud execution retains its existing selection flow.
+Temporary workspaces do not share directory preferences. If a saved runtime or
+model is unavailable, select an available combination explicitly; automatic
+fallback does not replace the saved pair. Changes to an unsent draft do not
+replace the last-used selection. Codex account sessions without a verified model
+selection do not save a directory preference.
+
 For a first local session, run `sh start.sh --desktop` from the repository root. For independent development, keep Hub running and execute:
 
 ```sh
@@ -64,9 +88,17 @@ The root source launcher prepares both Hub and Runner dependencies in its privat
 
 Run `npm test` for unit/contract tests and `npm run check:layout` for source boundaries. Inspect the requirements of each `e2e/` script before using it. Fixture success does not establish real-model or production acceptance.
 
+On Windows, `npm run test:e2e:user:isolated` runs the desktop user journeys with a fresh Electron profile, registered test account, local Hub and simulated provider. Install `hub-backend/requirements-test.txt` in `hub-backend/.venv`, or set `SODUWORK_TEST_PYTHON` to an interpreter with those dependencies. Results are written to `outputs/isolated-user-journeys/report.json`. Set `SODUWORK_JOURNEY_OUTPUT` to select a different evidence directory. To check workspace recovery alone, use `npm run test:e2e:user:isolated -- --only=UJ-09`, which also runs the task creation and assignment needed for recovery.
+
 On Windows, the execution runtime joins a native Job Object before tools initialize. A private Windows PowerShell helper retains the job until shutdown and verifies its processes have exited, including Git Bash descendants whose intermediate Windows parent has already exited. This is lifecycle cleanup, not a security sandbox; Linux and macOS retain their existing process-tree cleanup.
 
+Changing a Pi conversation from read-only to standard or full access rebuilds its tool selection from the configured defaults while preserving the conversation history. Standard access still requires approval for commands, and changing back to read-only removes write and command tools. Run `node --test tests/access-readonly-upgrade.test.cjs` to verify the production session driver with a loopback provider and real file and command operations.
+
+If the model rejects a plugin draft repair, the conversation and queue retain the safe runtime error instead of replacing it with a generic package-validation error. Existing files and tool results remain available; HTTP 403 does not trigger another automatic repair. Static package diagnostics remain attached to the draft separately.
+
 To verify summary export against a disposable authenticated Hub, run `node e2e/acceptance-summary-export.cjs /absolute/evidence/directory /path/to/test/python`. The Python environment needs the backend test dependencies. This exercises native IPC and saved bytes with injected save-dialog choices, not a real model or production account.
+
+For models without an explicit maximum output budget, the desktop, Hub and Runner use 16384 tokens, further bounded by the configured context window. This fallback is not a detected provider limit. Set **Maximum output tokens** in **My Models**, or **Model Catalog** for organization models, to match the deployed service. Reasoning models may need a larger explicit budget to reach tool calls or a final answer. Keep the real context window separate from the output limit; do not shrink it to work around an output-budget rejection. Capability and connection tests use small requests and do not determine the maximum output limit. Output-limit errors identify the setting to adjust and do not trigger automatic retries.
 
 ## Packaging
 

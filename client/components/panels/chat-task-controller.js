@@ -77,6 +77,8 @@
     };
     const batches = new Map();
     fileRows.forEach((file, index) => {
+      // Match native rework selection: ordinary material uploads cannot select a delivery batch.
+      if (roundOf(file) === 0 && batchOf(file) === 'legacy' && String(file.role || '') === 'input') return;
       const key = batchOf(file), old = batches.get(key) || {key, stamp: -1, index: -1, round: 0};
       old.stamp = Math.max(old.stamp, stampOf(file, index)); old.index = Math.max(old.index, index); old.round = Math.max(old.round, roundOf(file));
       batches.set(key, old);

@@ -21,6 +21,52 @@ from tools.dev import verify_desktop_fixture as desktop_fixture
 
 
 class LocalStartupTests(unittest.TestCase):
+    def test_linux_root_desktop_fails_before_initialization_password_or_downloads(self):
+        for options in ([], ['--prepare-only'], ['--check']):
+            with self.subTest(options=options), patch.object(sys, 'platform', 'linux'), \
+                    patch.dict(os.environ, {'DISPLAY': ':fixture', 'WAYLAND_DISPLAY': ''}), \
+                    patch.object(os, 'geteuid', return_value=0, create=True), \
+                    patch.object(start, 'check_dependencies'), \
+                    patch.object(start, 'initialize') as initialize, \
+                    patch.object(start, 'exclusive', return_value=nullcontext()), \
+                    patch.object(start, 'prepare') as prepare, \
+                    patch.object(start, 'prepare_desktop') as desktop, \
+                    patch.object(start, 'serve') as serve, \
+                    patch.object(start, 'password_for_start') as password, \
+                    patch.object(start, 'dependency_report') as report, \
+                    redirect_stdout(io.StringIO()), patch('sys.stderr', io.StringIO()) as errors:
+                self.assertEqual(start.main(['--desktop', '--data-dir', str(self.state), *options]), 1)
+                self.assertIn('ordinary user', errors.getvalue())
+                self.assertIn('without --desktop', errors.getvalue())
+                for operation in (initialize, prepare, desktop, serve, password, report):
+                    operation.assert_not_called()
+                self.assertFalse(self.state.exists())
+
+    def test_desktop_session_accepts_linux_users_and_does_not_query_other_platforms(self):
+        with patch.object(sys, 'platform', 'linux'), \
+                patch.object(os, 'geteuid', return_value=1000, create=True):
+            for display in ({'DISPLAY': ':fixture', 'WAYLAND_DISPLAY': ''},
+                            {'DISPLAY': '', 'WAYLAND_DISPLAY': 'wayland-fixture'}):
+                with self.subTest(display=display), patch.dict(os.environ, display):
+                    build.check_desktop_session()
+        for platform in ('win32', 'darwin'):
+            with self.subTest(platform=platform), patch.object(sys, 'platform', platform), \
+                    patch.dict(os.environ, {'DISPLAY': '', 'WAYLAND_DISPLAY': ''}), \
+                    patch.object(os, 'geteuid', return_value=0, create=True) as uid:
+                build.check_desktop_session()
+                uid.assert_not_called()
+
+    def test_linux_root_can_check_headless_service_prerequisites(self):
+        with patch.object(sys, 'platform', 'linux'), \
+                patch.dict(os.environ, {'DISPLAY': '', 'WAYLAND_DISPLAY': ''}), \
+                patch.object(os, 'geteuid', return_value=0, create=True), \
+                patch.object(start, 'dependency_report') as report, \
+                patch.object(start, 'initialize') as initialize:
+            self.assertEqual(start.main(['--check', '--data-dir', str(self.state)]), 0)
+        report.assert_called_once_with(desktop=False)
+        initialize.assert_not_called()
+        self.assertFalse(self.state.exists())
+
     def test_headless_desktop_fails_before_initialization_password_or_downloads(self):
         for options in ([], ['--prepare-only'], ['--check']):
             with self.subTest(options=options), patch.object(sys, 'platform', 'linux'), \
@@ -131,10 +177,58 @@ class LocalStartupTests(unittest.TestCase):
             with self.assertRaisesRegex(build.StartupError, 'npm'):
                 build.check_dependencies()
 
+    def test_dependency_report_prints_the_version_from_a_single_node_probe(self):
+        with patch.object(build.shutil, 'which', side_effect=lambda name: name), \
+                patch.object(build.subprocess, 'check_output', return_value='v24.0.0+build.42\n') as probe, \
+                redirect_stdout(io.StringIO()) as output:
+            build.dependency_report()
+
+        commands = [call.args[0] for call in probe.call_args_list]
+        self.assertEqual(commands.count(['node', '--version']), 1)
+        self.assertIn('Node.js: v24.0.0+build.42', output.getvalue().splitlines())
+
+    def test_unexecutable_node_reports_friendly_error(self):
+        for failure in (OSError('Permission denied'), OSError('Exec format error')):
+            with self.subTest(failure=str(failure)), \
+                    patch.object(build.shutil, 'which', side_effect=lambda name: name), \
+                    patch.object(build.subprocess, 'check_output', side_effect=failure), \
+                    self.assertRaisesRegex(build.StartupError, '22.19'):
+                build.check_dependencies()
+
     def setUp(self):
+        # Desktop fixtures represent an ordinary login, even in root-run CI.
+        uid = patch.object(os, 'geteuid', return_value=1000, create=True)
+        uid.start()
+        self.addCleanup(uid.stop)
         self.temp = tempfile.TemporaryDirectory(prefix="soduwork-start-unit-")
         self.addCleanup(self.temp.cleanup)
         self.state = Path(self.temp.name) / "service"
+
+    def test_live_verifier_uses_default_caches_without_changing_parent_settings(self):
+        choices = {'npm_config_cache': '/operator/npm', 'PIP_CACHE_DIR': '/operator/pip',
+                   'electron_config_cache': '/operator/electron', 'PIP_NO_CACHE_DIR': '1'}
+        with patch.dict(os.environ, choices), patch.object(verify.subprocess, 'Popen') as popen:
+            before = dict(os.environ)
+            _, output = verify.start(self.state, 18989)
+            output.close()
+            self.assertTrue(dict(os.environ) == before, 'Verifier changed the parent environment')
+            child_keys = {key.lower() for key in popen.call_args.kwargs['env']}
+        self.assertFalse(child_keys & {key.lower() for key in choices})
+
+    def test_live_cache_acceptance_requires_payloads_and_the_temporary_directory(self):
+        for name in ('npm', 'pip'):
+            cache = self.state / 'cache' / name
+            cache.mkdir(parents=True)
+            (cache / 'fixture').write_bytes(b'fixture')
+        with self.assertRaisesRegex(AssertionError, 'temporary directory'):
+            verify.install_cache_sizes(self.state, desktop=False)
+        (self.state / 'cache/tmp').mkdir()
+        self.assertEqual(verify.install_cache_sizes(self.state, desktop=False), {'npm': 7, 'pip': 7})
+        with self.assertRaisesRegex(AssertionError, 'electron install cache'):
+            verify.install_cache_sizes(self.state, desktop=True)
+        (self.state / 'cache/electron').mkdir()
+        (self.state / 'cache/electron/archive.zip').write_bytes(b'fixture')
+        self.assertEqual(verify.install_cache_sizes(self.state, desktop=True), {'npm': 7, 'pip': 7, 'electron': 7})
 
     def test_fresh_source_instance_uses_current_name_but_existing_data_stays(self):
         base = Path(self.temp.name) / "user-data"
@@ -152,6 +246,105 @@ class LocalStartupTests(unittest.TestCase):
             marker.write_text("{}", encoding="utf-8")
             self.assertEqual(start.default_state(), fresh)
             self.assertEqual(marker.read_text(encoding="utf-8"), "{}")
+
+    @unittest.skipIf(os.name == 'nt', 'Linux XDG paths use POSIX semantics')
+    def test_linux_default_state_falls_back_for_invalid_xdg_data_home(self):
+        home = Path(self.temp.name) / 'home'
+        expected = home / '.local/share/soduwork/source-service'
+        for value in (None, '', 'relative-data', '~/data'):
+            environment = {} if value is None else {'XDG_DATA_HOME': value}
+            with self.subTest(value=value), patch.dict(os.environ, environment, clear=True), \
+                    patch.object(sys, 'platform', 'linux'), patch.object(Path, 'home', return_value=home):
+                self.assertEqual(start.default_state(), expected)
+        self.assertFalse(home.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'Linux XDG paths use POSIX semantics')
+    def test_linux_default_state_preserves_absolute_xdg_data_and_existing_files(self):
+        for name in ('custom-data', 'custom data with spaces'):
+            base = Path(self.temp.name) / name
+            expected = base / 'soduwork/source-service'
+            expected.mkdir(parents=True)
+            marker = expected / 'local-service.json'
+            marker.write_text('{}', encoding='utf-8')
+            with self.subTest(name=name), patch.dict(os.environ, {'XDG_DATA_HOME': str(base)}), \
+                    patch.object(sys, 'platform', 'linux'):
+                self.assertEqual(start.default_state(), expected)
+            self.assertEqual(marker.read_text(encoding='utf-8'), '{}')
+
+    @unittest.skipIf(os.name == 'nt', 'Linux XDG paths use POSIX semantics')
+    def test_linux_prepare_only_uses_safe_default_with_invalid_xdg_data_home(self):
+        home = Path(self.temp.name) / 'home'
+        expected = (home / '.local/share/soduwork/source-service').resolve()
+        for value in ('', 'relative-data'):
+            with self.subTest(value=value), patch.dict(os.environ, {'XDG_DATA_HOME': value}), \
+                    patch.object(sys, 'platform', 'linux'), patch.object(Path, 'home', return_value=home), \
+                    patch.object(start, 'check_dependencies'), patch.object(start.signal, 'signal'), \
+                    patch.object(start, 'initialize', return_value={}) as initialize, \
+                    patch.object(start, 'exclusive', return_value=nullcontext()), \
+                    patch.object(start, 'prepare') as prepare, redirect_stdout(io.StringIO()), \
+                    patch('sys.stderr', io.StringIO()):
+                self.assertEqual(start.main(['--prepare-only']), 0)
+                initialize.assert_called_once_with(expected, 'admin')
+                prepare.assert_called_once_with(expected, expected / 'startup.log')
+        self.assertFalse(home.exists())
+
+    def test_explicit_data_dir_overrides_invalid_platform_data_home(self):
+        home = Path(self.temp.name) / 'home'
+        chosen = (Path(self.temp.name) / 'chosen data').resolve()
+        chosen.mkdir()
+        marker = chosen / 'local-service.json'
+        marker.write_text('{}', encoding='utf-8')
+        for value in ('', 'relative-data'):
+            with self.subTest(value=value), \
+                    patch.dict(os.environ, {'XDG_DATA_HOME': value, 'LOCALAPPDATA': value}), \
+                    patch.object(Path, 'home', return_value=home), \
+                    patch.object(start, 'check_dependencies'), patch.object(start.signal, 'signal'), \
+                    patch.object(start, 'initialize', return_value={}) as initialize, \
+                    patch.object(start, 'exclusive', return_value=nullcontext()), \
+                    patch.object(start, 'prepare') as prepare, redirect_stdout(io.StringIO()), \
+                    patch('sys.stderr', io.StringIO()):
+                self.assertEqual(start.main(['--prepare-only', '--data-dir', str(chosen)]), 0)
+                initialize.assert_called_once_with(chosen, 'admin')
+                prepare.assert_called_once_with(chosen, chosen / 'startup.log')
+            self.assertEqual(marker.read_text(encoding='utf-8'), '{}')
+        self.assertFalse(home.exists())
+
+    @unittest.skipIf(os.name == 'nt', 'Linux XDG paths use POSIX semantics')
+    def test_linux_absolute_xdg_data_home_inside_checkout_is_still_rejected(self):
+        checkout = (Path(self.temp.name) / 'checkout').resolve()
+        checkout.mkdir()
+        base = checkout / 'xdg-data'
+        with patch.dict(os.environ, {'XDG_DATA_HOME': str(base)}), \
+                patch.object(sys, 'platform', 'linux'), patch.object(start, 'ROOT', checkout), \
+                patch.object(start, 'check_dependencies'), patch.object(start.signal, 'signal'), \
+                patch.object(start, 'initialize') as initialize, patch.object(start, 'exclusive') as exclusive, \
+                patch.object(start, 'prepare') as prepare, redirect_stdout(io.StringIO()), \
+                patch('sys.stderr', io.StringIO()) as errors:
+            self.assertEqual(start.main(['--prepare-only']), 1)
+        self.assertIn('outside the source checkout', errors.getvalue())
+        initialize.assert_not_called()
+        exclusive.assert_not_called()
+        prepare.assert_not_called()
+        self.assertFalse(base.exists())
+
+    def test_windows_default_state_ignores_empty_or_relative_localappdata(self):
+        home = Path(self.temp.name) / "home"
+        expected = home / "AppData/Local/SoduWork/source-service"
+        for value in ("", "relative-data", ".."):
+            with patch.object(start, "os", wraps=os) as platform_os, \
+                    patch.object(Path, "home", return_value=home), \
+                    patch.dict(os.environ, {"LOCALAPPDATA": value}):
+                platform_os.name = "nt"
+                resolved = start.default_state()
+            self.assertEqual(resolved, expected, f"LOCALAPPDATA={value!r} 时解析结果不正确")
+            self.assertTrue(resolved.is_absolute(), f"LOCALAPPDATA={value!r} 时得到相对路径")
+
+    def test_windows_default_state_keeps_an_absolute_localappdata(self):
+        chosen = Path(self.temp.name) / "chosen"
+        with patch.object(start, "os", wraps=os) as platform_os, \
+                patch.dict(os.environ, {"LOCALAPPDATA": str(chosen)}):
+            platform_os.name = "nt"
+            self.assertEqual(start.default_state(), chosen / "SoduWork/source-service")
 
     def test_macos_default_desktop_profile_is_outside_installed_client(self):
         home = Path(self.temp.name)
@@ -622,12 +815,42 @@ class LocalStartupTests(unittest.TestCase):
         marker = root / 'finished'
         command = [sys.executable, '-c',
                    'import time,pathlib,sys; time.sleep(2); pathlib.Path(sys.argv[1]).touch()', str(marker)]
-        with self.assertRaisesRegex(build.StartupError, 'timed out'):
+        with self.assertRaisesRegex(build.StartupError, 'timed out') as failure:
             build.run(command, cwd=root, log=root / 'download.log', label='Download fixture', timeout=.1)
+        self.assertNotIn('network/proxy', str(failure.exception))
         self.assertFalse(marker.exists())
         build.run([sys.executable, '-c', 'import pathlib,sys; pathlib.Path(sys.argv[1]).touch()', str(marker)],
                   cwd=root, log=root / 'download.log', label='Retry fixture', timeout=5)
         self.assertTrue(marker.exists())
+
+    def test_failed_command_reports_disk_full_without_exposing_output(self):
+        self.state.mkdir()
+        log = self.state / 'startup.log'
+        for diagnostic in ('OSError: [Errno 28] No space left on device',
+                           'npm error code ENOSPC',
+                           'OSError: [WinError 112] There is not enough space on the disk'):
+            with self.subTest(diagnostic=diagnostic), redirect_stdout(io.StringIO()) as console:
+                command = [sys.executable, '-c',
+                           'import sys; print(sys.argv[1], file=sys.stderr); sys.exit(1)',
+                           diagnostic + '\nprivate diagnostic fixture']
+                with self.assertRaisesRegex(build.StartupError, 'Disk full') as failure:
+                    build.run(command, cwd=self.state, log=log, label='Install fixture')
+                message = str(failure.exception)
+                self.assertIn(str(log), message)
+                self.assertNotIn('network/proxy', message)
+                self.assertNotIn('private diagnostic fixture', message + console.getvalue())
+
+    def test_failed_command_does_not_reuse_an_old_disk_full_diagnostic(self):
+        self.state.mkdir()
+        log = self.state / 'startup.log'
+        log.write_text('Previous attempt: ENOSPC\n', encoding='utf-8')
+        command = [sys.executable, '-c',
+                   'import sys; print("No matching distribution found for fixture", file=sys.stderr); sys.exit(1)']
+        with self.assertRaises(build.StartupError) as failure, redirect_stdout(io.StringIO()):
+            build.run(command, cwd=self.state, log=log, label='Install fixture')
+        self.assertIn(str(log), str(failure.exception))
+        self.assertNotIn('Disk full', str(failure.exception))
+        self.assertNotIn('network/proxy', str(failure.exception))
 
     def test_busy_port_is_left_running(self):
         with socket.socket() as listener:
@@ -929,6 +1152,95 @@ class LocalStartupTests(unittest.TestCase):
                 with self.assertRaisesRegex(build.StartupError, 'shell fixture failed'):
                     build.prepare_desktop(self.state, self.state / 'startup.log')
 
+    def test_prepare_keeps_package_caches_inside_the_data_directory(self):
+        state = Path(self.temp.name) / 'cache-state'
+        with patch.object(build.os, 'name', 'nt'), \
+                patch.dict(os.environ, {'PATH': os.environ.get('PATH', '')}, clear=True):
+            environment = build.prepare_environment(state)
+        self.assertEqual(environment['npm_config_cache'], str(state / 'cache/npm'))
+        self.assertEqual(environment['PIP_CACHE_DIR'], str(state / 'cache/pip'))
+        self.assertEqual(environment['electron_config_cache'], str(state / 'cache/electron'))
+        self.assertEqual(environment['PATH'], os.environ['PATH'])
+        for key in ('TEMP', 'TMP', 'TMPDIR'):
+            self.assertEqual(environment[key], str(state / 'cache/tmp'))
+
+    def test_prepare_sets_tmpdir_on_posix(self):
+        state = Path(self.temp.name) / 'cache-state'
+        with patch.object(build.os, 'name', 'posix'), patch.dict(os.environ, {}, clear=True):
+            environment = build.prepare_environment(state)
+        self.assertEqual(environment['TMPDIR'], str(state / 'cache/tmp'))
+        self.assertTrue((state / 'cache/tmp').is_dir())
+
+    def test_prepare_children_really_create_temporary_files_inside_data_directory(self):
+        outside = Path(self.temp.name) / 'user-temp'
+        outside.mkdir()
+        for platform_name in ('nt', 'posix'):
+            with self.subTest(platform=platform_name):
+                state = self.state / platform_name
+                with patch.dict(os.environ, dict.fromkeys(('TEMP', 'TMP', 'TMPDIR'), str(outside))):
+                    before = dict(os.environ)
+                    with patch.object(build.os, 'name', platform_name):
+                        environment = build.prepare_environment(state)
+                    self.assertTrue(dict(os.environ) == before, 'Preparation changed the parent environment')
+                commands = [
+                    [sys.executable, '-c', 'import tempfile; f = tempfile.TemporaryFile(); '
+                     'f.write(b"fixture"); f.close(); print(tempfile.gettempdir())'],
+                    ['node', '-e', 'const fs = require("node:fs"), os = require("node:os"), '
+                     'path = require("node:path"); fs.mkdtempSync(path.join(os.tmpdir(), "fixture-")); '
+                     'console.log(os.tmpdir());'],
+                ]
+                for command in commands:
+                    selected = subprocess.check_output(command, env=environment, text=True).strip()
+                    self.assertEqual(Path(selected).resolve(), (state / 'cache/tmp').resolve())
+        self.assertEqual(list(outside.iterdir()), [])
+
+    def test_prepare_never_overrides_an_explicit_cache_choice(self):
+        state = Path(self.temp.name) / 'cache-state'
+        chosen = {'NPM_CONFIG_CACHE': '/operator/npm', 'PIP_CACHE_DIR': '/operator/pip',
+                  'electron_config_cache': '/operator/electron'}
+        with patch.dict(os.environ, chosen, clear=True):
+            environment = build.prepare_environment(state)
+        lowered = {key.lower(): value for key, value in environment.items()}
+        for key, value in chosen.items():
+            self.assertEqual(lowered[key.lower()], value)
+
+    def test_empty_cache_settings_do_not_fall_back_to_user_profile(self):
+        with patch.dict(os.environ, {'NPM_CONFIG_CACHE': '', 'PIP_CACHE_DIR': '',
+                                     'electron_config_cache': ''}, clear=True):
+            environment = build.prepare_environment(self.state)
+        lowered = {key.lower(): value for key, value in environment.items()}
+        for key, folder in (('npm_config_cache', 'npm'), ('pip_cache_dir', 'pip'),
+                            ('electron_config_cache', 'electron')):
+            self.assertEqual(lowered[key], str(self.state / 'cache' / folder))
+
+    def test_prepare_passes_isolated_caches_to_every_install_command(self):
+        state = Path(self.temp.name) / 'prepare-state'
+        state.mkdir()
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'source_files', return_value=[]), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value=None), \
+                patch.object(build, 'run') as run:
+            build.prepare(state, state / 'startup.log')
+        installs = run.call_args_list
+        self.assertEqual(len(installs), 5)  # venv, pip, Runner probe, npm ci, build
+        self.assertTrue(any('pip' in call.args[0] for call in installs))
+        for call in installs:
+            self.assertTrue(call.kwargs.get('env') == build.prepare_environment(state),
+                            'Every preparation child must receive the isolated environment')
+
+    def test_cached_runner_disk_full_is_not_retried_as_a_dependency_repair(self):
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value='digest'), \
+                patch.object(build, 'verify_runner_environment', side_effect=build.DiskFullError('Disk full')), \
+                patch.object(build, 'run') as run:
+            with self.assertRaises(build.DiskFullError):
+                build.prepare(self.state, self.state / 'startup.log')
+        self.assertFalse(any('pip' in call.args[0] for call in run.call_args_list))
+
     def test_cached_nonwindows_desktop_does_not_prepare_windows_shell(self):
         with patch.object(sys, 'platform', 'darwin'):
             client = self.cached_desktop()
@@ -985,9 +1297,32 @@ class LocalStartupTests(unittest.TestCase):
             self.assertEqual(build.prepare_desktop(self.state, self.state / 'startup.log'), client)
             self.assertEqual(dict(build.os.environ), environment)
         self.assertEqual(len(calls), 3)
-        self.assertIsNone(calls[0][1].get('env'))
-        self.assertEqual(calls[1][1]['env'], {**environment, 'ELECTRON_GET_USE_PROXY': '1'})
-        self.assertIsNone(calls[2][1].get('env'))
+        for index, (_, kwargs) in enumerate(calls):
+            child = kwargs.get('env', {})
+            self.assertEqual(child.get('npm_config_cache'), str(self.state / 'cache/npm'))
+            self.assertEqual(child.get('PIP_CACHE_DIR'), str(self.state / 'cache/pip'))
+            self.assertEqual(child.get('electron_config_cache'), str(self.state / 'cache/electron'))
+            self.assertEqual(child.get('TMPDIR'), str(self.state / 'cache/tmp'))
+            self.assertEqual(child.get('ELECTRON_GET_USE_PROXY'), '1' if index == 1 else None)
+            for key, value in environment.items():
+                self.assertEqual(child[key], value)
+
+    def test_desktop_disk_full_does_not_add_network_advice_or_stamp_success(self):
+        client = self.state / 'application/client'
+        client.mkdir(parents=True)
+        (client / 'package-lock.json').write_text('{}')
+        real_run = build.run
+        def fail_download(command, **kwargs):
+            if command[-1] == str(client / 'scripts/install-electron.cjs'):
+                real_run([sys.executable, '-c', 'import sys; print("ENOSPC"); sys.exit(1)'], **kwargs)
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'run', side_effect=fail_download), \
+                patch.dict(os.environ, {'DISPLAY': ':fixture'}), redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(build.StartupError, 'Disk full') as failure:
+                build.prepare_desktop(self.state, self.state / 'startup.log')
+        self.assertNotIn('ELECTRON_MIRROR', str(failure.exception))
+        self.assertNotIn('network', str(failure.exception).lower())
+        self.assertFalse((self.state / 'desktop-dependencies.sha256').exists())
 
     def test_desktop_download_failure_keeps_overrides_and_reports_recovery(self):
         client = self.state / 'application/client'

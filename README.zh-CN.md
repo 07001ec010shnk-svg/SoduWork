@@ -111,7 +111,7 @@ cd SoduWork
 <details>
 <summary><b>在线体验</b></summary>
 
-从 [Releases](https://github.com/mdiri-ai/SoduWork/releases) 下载客户端，在登录页的 **连接** 里填入体验地址 `https://soduwork.ai`，注册并登录即可。
+从 [Releases](https://github.com/mdiri-ai/SoduWork/releases/latest) 下载客户端，在登录页的 **连接** 里填入服务地址 `https://service.soduwork.ai`，注册并登录即可。
 
 > 体验环境仅用于评估，请勿上传真实业务数据或任何敏感信息。
 
@@ -119,6 +119,8 @@ cd SoduWork
 
 <details>
 <summary><b>安装桌面客户端</b></summary>
+
+图文步骤见[桌面客户端安装与首次使用](docs/desktop-quickstart.md)。
 
 | 系统 | 安装包 |
 | --- | --- |
@@ -374,7 +376,7 @@ SoduWork 不替代 Agent Harness，而是把它们接进团队工作台，补上
 - **社区交流**：[Discord](https://discord.gg/AXYNrAYHy)
 - **问题反馈与功能建议**：[GitHub Issues](https://github.com/mdiri-ai/SoduWork/issues)
 - **使用交流与想法**：[GitHub Discussions](https://github.com/mdiri-ai/SoduWork/discussions)
-- **企业合作**：私有化部署、系统集成与技术支持，请发邮件至 [soduwork@outlook.com](mailto:soduwork@outlook.com)
+- **企业合作**：私有化部署、系统集成与技术支持，请发邮件至 [contact@soduwork.ai](mailto:contact@soduwork.ai)
 
 ## 参与贡献
 

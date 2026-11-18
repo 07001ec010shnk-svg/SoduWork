@@ -313,20 +313,85 @@ function bootView() {
   f.mounted.dispose();
   const query = f.gate.querySelector;
   f.gate.querySelector = selector => ['.soduwork-auth-connection', '.soduwork-auth-first summary'].includes(selector) ? null : query(selector);
-  f.api.registerClient = () => new Promise(resolve => { f.finishEnrollment = resolve; });
+  f.api.registerClient = () => new Promise((resolve, reject) => { f.finishEnrollment = resolve; f.failEnrollment = reject; });
+  f.api.clientAuthMe = async () => ({});
   f.api.clientAuthPolicy = () => new Promise((resolve, reject) => f.policyRequests.push({ resolve, reject }));
   f.window.SoduWorkAPI = f.api;
   const body = element(); body.appendChild = () => {};
   const listeners = new Map();
+  let created = 0;
   const document = { readyState: 'loading', documentElement: element(), body,
-    createElement: () => f.gate, querySelectorAll: () => [], addEventListener(name, listener) { listeners.set(name, listener); },
+    createElement: () => { created++; const next = created === 1 ? f.gate : element(); if (created === 2) f.restoringNode = next; if (created === 4) f.restoringMessage = next; return next; },
+    querySelectorAll: () => [], addEventListener(name, listener) { listeners.set(name, listener); },
     getElementById() { return null; } };
   const authSource = fs.readFileSync(path.join(__dirname, '../components/client-auth/client-auth.js'), 'utf8')
     .replace('global.ClientAuth = {', 'global.ClientAuth = { bootForTest: boot, loadPolicyForTest: loadPolicy, connectForTest: switchConnection,');
   vm.runInNewContext(authSource, { ...f.context, document, Intl });
+  f.document = document;
   f.init = () => listeners.get('DOMContentLoaded')();
   return f;
 }
+
+test('initial restoration keeps the authentication boundary until a verified active result', async () => {
+  const f = bootView(), startup = f.window.ClientAuth.bootForTest();
+  assert.equal(f.gate.getAttribute('aria-labelledby'), 'soduWorkAuthRestoringTitle');
+  assert.equal(f.restoringNode.hidden, false);
+  assert.equal(f.document.documentElement.classList.contains('soduwork-auth-pending'), true);
+  assert.equal(f.mounted.submitButton.disabled, true);
+  f.finishEnrollment({ ok: true, user: { id: 'restored-user' } }); await startup;
+  assert.equal(f.gate.hidden, true);
+  assert.equal(f.restoringNode.hidden, true);
+  assert.equal(f.document.documentElement.classList.contains('soduwork-auth-pending'), false);
+  assert.equal(f.window.ClientAuth.snapshot().user.id, 'restored-user');
+});
+
+test('pending enrollment reveals sign-in without exposing private content', async () => {
+  const f = bootView(), startup = f.window.ClientAuth.bootForTest();
+  f.finishEnrollment({ ok: true, activationRequired: true }); await startup;
+  assert.equal(f.gate.hidden, false);
+  assert.equal(f.restoringNode.hidden, true);
+  assert.equal(f.gate.getAttribute('aria-labelledby'), 'soduWorkAuthTitle');
+  assert.equal(f.document.documentElement.classList.contains('soduwork-auth-pending'), true);
+  assert.equal(f.mounted.submitButton.disabled, false);
+});
+
+test('an active event may complete restoration before its bootstrap response', async () => {
+  const f = bootView(); f.init();
+  assert.equal(f.restoringNode.hidden, false);
+  f.switchUser();
+  f.window.dispatchEvent({ type: 'soduwork-device-auth', detail: { state: 'active', user: { id: 'second-user' } } });
+  assert.equal(f.gate.hidden, true);
+  assert.equal(f.restoringNode.hidden, true);
+  assert.equal(f.document.documentElement.classList.contains('soduwork-auth-pending'), false);
+  f.finishEnrollment({ ok: true, user: { id: 'second-user' } }); await f.flush();
+  assert.equal(f.gate.hidden, true);
+  assert.equal(f.window.ClientAuth.snapshot().user.id, 'second-user');
+});
+
+test('neutral restoration uses the current locale without revealing the login form', () => {
+  const f = bootView(); f.init();
+  assert.equal(f.restoringMessage.textContent, '正在加载…');
+  f.setLocale('en-US');
+  assert.equal(f.restoringMessage.textContent, 'Loading…');
+  assert.equal(f.restoringNode.hidden, false);
+  assert.equal(f.document.documentElement.classList.contains('soduwork-auth-pending'), true);
+});
+
+test('failed restoration reveals actionable login and retry still requires a verified identity', async () => {
+  const f = bootView(), startup = f.window.ClientAuth.bootForTest();
+  f.failEnrollment(Error('Connection refused')); await startup;
+  assert.equal(f.restoringNode.hidden, true);
+  assert.equal(f.gate.hidden, false);
+  assert.equal(f.mounted.submitButton.disabled, false);
+  assert.match(f.mounted.statusNode.textContent, /检查网络后重试/);
+  assert.equal(f.document.documentElement.classList.contains('soduwork-auth-pending'), true);
+  const retry = f.window.ClientAuth.bootForTest();
+  assert.equal(f.mounted.submitButton.disabled, true);
+  assert.equal(f.document.documentElement.classList.contains('soduwork-auth-pending'), true);
+  f.finishEnrollment({ ok: true, user: { id: 'retry-user' } }); await retry;
+  assert.equal(f.gate.hidden, true);
+  assert.equal(f.document.documentElement.classList.contains('soduwork-auth-pending'), false);
+});
 
 test('remembered account is filled only after restored service enrollment completes', async () => {
   const f = bootView(), read = [];

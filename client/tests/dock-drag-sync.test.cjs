@@ -69,6 +69,18 @@ function boot(initial = {}) {
   return { sandbox, dock, calls, frames, documentListeners, fire, frame, snapshot, start };
 }
 
+test('a missing dock preference stays hidden until explicitly enabled', () => {
+  const h = boot({ dockVisible: undefined });
+  assert.equal(h.dock.classList.contains('show'), false);
+  assert.equal(h.dock.firstElementChild, null);
+  assert.equal(h.calls.save, 0);
+  h.sandbox.cfg.dockVisible = true;
+  h.sandbox._syncSidebar();
+  assert.equal(h.dock.classList.contains('show'), true);
+  assert.ok(h.dock.firstElementChild);
+  assert.equal(h.calls.save, 0, 'visibility refresh must not rewrite the explicit preference');
+});
+
 test('task/config sidebar refresh preserves the in-flight drag position and floating shape', () => {
   for (const dockX of [null, 500]) {
     const h = boot({ dockX });

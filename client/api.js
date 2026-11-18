@@ -117,7 +117,7 @@
   // Expose endpoint editing only when the main process permits it; refresh when policy is restored.
   var runtimeEditable = false;
   function legacyHubConfig() {
-    var row;
+    var row, credentialHub;
     try { row = JSON.parse(readLocal(HUB_CONNECTIONS_KEY)); } catch (_) {}
     if (!row || !['production', 'development'].includes(row.environment)) {
       var previous = readLocal(HUB_ENV_KEY), legacy = safeHub(readLocal(LEGACY_HUB_KEY), '');
@@ -128,6 +128,7 @@
       var production = !existed ? runtimeForm() !== 'local-code' :
         previous === 'production' || (previous !== 'development' &&
           (legacy === LEGACY_PRODUCTION_HUB || (!legacy && existed)));
+      credentialHub = (production ? legacy : dev || legacy) || LEGACY_PRODUCTION_HUB;
       row = { environment: production ? 'production' : 'development',
         productionHub: existed ? (legacy || LEGACY_PRODUCTION_HUB) : DEFAULT_PRODUCTION_HUB,
         developmentHub: dev || (!production && legacy) ||
@@ -137,7 +138,8 @@
     var team = safeHub(row.productionHub, ''), local = safeHub(row.developmentHub, DEFAULT_DEVELOPMENT_HUB);
     var environment = row.environment === 'production' && team ? 'production' : 'development';
     var hub = environment === 'production' ? team : local;
-    if (readLocal('soduwork_work_device_secret') && !readLocal(LEGACY_AUTH_HUB_KEY)) writeLocal(LEGACY_AUTH_HUB_KEY, hub);
+    if (readLocal('soduwork_work_device_secret') && !readLocal(LEGACY_AUTH_HUB_KEY))
+      writeLocal(LEGACY_AUTH_HUB_KEY, credentialHub || safeHub(row.environment === 'production' ? row.productionHub : row.developmentHub, LEGACY_PRODUCTION_HUB));
     return { environment: environment, hub: hub, productionHub: team, developmentHub: local, editable: true };
   }
   function hubConfig() {
@@ -205,6 +207,22 @@
     return hubConfig();
   }
   var _savedHubRestore = null;
+  async function migrateLegacyCredential(bridge) {
+    var key = 'soduwork_work_device_secret', legacySecret = readLocal(key);
+    if (!legacySecret || !bridge.deviceAuthMigrateLegacy) return;
+    var origin = readLocal(LEGACY_AUTH_HUB_KEY);
+    if (!origin) { legacyHubConfig(); origin = readLocal(LEGACY_AUTH_HUB_KEY); }
+    function legacyDevice() { return readLocal('soduwork_work_user_id') || (typeof User !== 'undefined' && User?.id); }
+    var clientId = legacyDevice();
+    if (!clientId || clientId === 'u-unknown' || !origin || origin === LEGACY_PRODUCTION_HUB || safeHub(origin, '') !== origin) return;
+    try {
+      var receipt = await bridge.deviceAuthMigrateLegacy({hub:origin, clientId, legacySecret});
+      if (receipt?.stored === true && receipt.hub === origin && receipt.clientId === clientId &&
+          readLocal(LEGACY_AUTH_HUB_KEY) === origin && readLocal(key) === legacySecret &&
+          legacyDevice() === clientId)
+        localStorage.removeItem(key);
+    } catch (_) { /* Keep the original until secure storage acknowledges this exact identity. */ }
+  }
   // Resolve the trusted main-process policy before enrollment. Saved environment
   // selection is consulted only by explicitly enabled internal fixtures.
   function restoreSavedHub() {
@@ -225,6 +243,7 @@
             !(connection && connection.editable === true)) throw new Error('客户端服务配置无效');
         runtimeHub = target;
         runtimeEditable = !!(connection && connection.editable === true);
+        return migrateLegacyCredential(fixedBridge);
       }).catch(function (error) { _savedHubRestore = null; throw error; });
       return _savedHubRestore;
     }
@@ -1008,6 +1027,9 @@
   }
   function localParseInstructions(options) {
     var kind = options?.kind === 'automation' ? 'automation' : 'requirement';
+    var locale = global.SoduWorkI18n?.getLocale?.();
+    var languages = { 'zh-CN': 'Simplified Chinese', 'en-US': 'English', 'ja-JP': 'Japanese', 'ko-KR': 'Korean' };
+    var language = typeof locale === 'string' && Object.hasOwn(languages, locale) ? languages[locale] : languages['zh-CN'];
     return [
       '你是本机需求整理助手。只根据用户原文和附件材料整理内容，不访问网络，不补造事实。',
       '仅返回一个 JSON 对象，不要 Markdown、代码围栏或解释文字。',
@@ -1016,6 +1038,7 @@
       'due（无法从原文确定时为空字符串）、tags（字符串数组）。',
       '保留原文中的关键约束；无法确定的字段使用空字符串、空数组或 normal。当前表单类型：' + kind + '。',
       options?.instruction ? '额外整理要求：' + String(options.instruction).slice(0, 1000) : '',
+      'Output language: ' + language + '. Write generated titles, descriptions, acceptance criteria, and tags in this language, even when the reference material uses another language. Keep JSON keys, enum values, dates, proper names, identifiers, and literal quotations unchanged.',
     ].filter(Boolean).join('\n');
   }
   function localParseFields(raw) {
@@ -1051,6 +1074,20 @@
       APP_AI_RESULT_UNKNOWN: '本地模型调用中断或超时，未能确认结果，请确认后再重试',
     };
     var message = messages[result?.code] || '本地模型需求解析失败，请检查本地模型后重试';
+    // The host supplies a numeric status, never upstream response text, URLs or
+    // credentials. Keep provider authentication distinct from SoduWork login.
+    var status = result?.httpStatus;
+    if (['APP_AI_PROVIDER_ERROR', 'APP_AI_RATE_LIMITED'].includes(result?.code) &&
+        Number.isInteger(status) && status >= 400 && status <= 599) {
+      var advice = status === 401 ? '模型服务拒绝了凭据，请在「我的模型」检查该服务的密钥' :
+        status === 403 ? '模型服务拒绝访问，请检查该模型的调用权限' :
+        [404,405].includes(status) ? '请检查服务地址、接口路径和模型名称是否正确' :
+        [400,422].includes(status) ? '模型服务不接受当前请求参数，请检查该模型的接口兼容配置' :
+        status === 429 ? '模型服务请求过多或配额受限，请检查该服务后稍后重试' :
+        [408,504].includes(status) ? '模型服务响应超时，请稍后重试' :
+        status >= 500 ? '模型服务暂时不可用，请检查服务状态或稍后重试' : '请检查模型服务配置后重试';
+      message = '本地模型服务返回错误（HTTP ' + status + '），' + advice;
+    }
     return { _parseError: message + '；原文已保留，也可手动填写' };
   }
   async function parseLocalTaskText(text, model, attachments, options) {
@@ -1733,6 +1770,8 @@
         if (!localProvider) throw new Error('本地模型服务已不可用，请刷新目录后重试');
         var localModel = (localCatalog?.myModels || []).find(row => row.providerId === nativeId && row.name === String(body.model || '').trim());
         if (!localModel) throw new Error('本地模型不存在或已不可用，请刷新目录后重试');
+        if (body.expectedConfigRevision && body.expectedConfigRevision !== localModel.configRevision)
+          throw new Error('模型配置在检测期间已变更，请重新检测');
         if (typeof local?.checkCapabilities !== 'function') throw new Error('当前客户端尚未提供本机能力检测，请更新客户端');
         var report = await local.checkCapabilities({ modelRef: localModel.id,
           checks: Array.isArray(body.checks) ? body.checks : ['connection'],
@@ -1747,6 +1786,7 @@
       options?.signal?.throwIfAborted();
       var result = await jfetch('/my-models/capabilities/check', { method: 'POST',
         body: JSON.stringify({ providerId: body.providerId, model: body.model,
+          ...(body.expectedConfigRevision ? { expectedConfigRevision: body.expectedConfigRevision } : {}),
           ...(Array.isArray(body.checks) ? { checks: body.checks } : {}) }),
         signal: options?.signal ? AbortSignal.any([options.signal, _abortSignal(140000)]) : _abortSignal(140000) });
       await invalidateDomain('models', scope); return result;
@@ -3192,7 +3232,11 @@
              * After secure storage takes ownership, remove long-lived secrets from the renderer even
              * before device activation.
              */
-            try { if (readLocal(LEGACY_AUTH_HUB_KEY) === base()) localStorage.removeItem('soduwork_work_device_secret'); } catch (e) {}
+            if (window.soduWorkAPI.deviceAuthMigrateLegacy) {
+              if (secret()) await registration.step(function () { return migrateLegacyCredential(window.soduWorkAPI); });
+            } else {
+              try { if (readLocal(LEGACY_AUTH_HUB_KEY) === base()) localStorage.removeItem('soduwork_work_device_secret'); } catch (e) {}
+            }
             // Existing signed-in profiles may predate the explicit account preference.
             if (secure.ok && secure.session && secure.user?.id && !secure.activationRequired && !SoduWorkAPI.rememberedLoginAccount()) {
               rememberLoginAccount(loginAccount(secure.user.email) || loginAccount(secure.user.username), secure);
@@ -3243,7 +3287,7 @@
       try { root = typeof workRoot === 'function' ? String(workRoot() || '').trim() : ''; } catch (e) {}
       checkLogin();
       var result = await window.soduWorkAPI.deviceAuthLogin({
-        hub: loginHub, clientId: device(),
+        hub: loginHub, clientId: device(), preserveLegacyIdentity: !!secret(),
         account: String(credentials && credentials.account || '').trim(),
         password: String(credentials && credentials.password || ''),
         displayName: String(credentials && credentials.displayName || '').trim(),
@@ -3283,7 +3327,7 @@
       }
       if (epoch !== _registrationEpoch || hub !== base()) throw staleTaskScope();
       var result = await window.soduWorkAPI.deviceAccountAction(Object.assign({}, payload || {}, {
-        action: action, hub: hub, clientId: device(), version: version, workRoot: root,
+        action: action, hub: hub, clientId: device(), version: version, workRoot: root, preserveLegacyIdentity: !!secret(),
         name: [info && info.username, info && info.hostname].filter(Boolean).join(' · '),
         platform: info && info.platform || ''
       }));

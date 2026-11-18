@@ -252,3 +252,36 @@ test('runtime-added events refresh the catalog once, preserve the selected Agent
   for (const listener of listeners) listener(); await flush();
   assert.equal(f.runtime.value(), 'custom-new');
 });
+
+test('directory runtime restoration requires an installed available Agent and never substitutes Pi', async () => {
+  const f = fixture(() => ({ ok: true, runtimes: fullCatalog })); await f.runtime.ready();
+  assert.equal(await f.runtime.restoreSelection('qwen'), true);
+  assert.equal(f.runtime.value(), 'qwen');
+  assert.equal(await f.runtime.restoreSelection('uninstalled-agent'), false);
+  assert.equal(f.runtime.value(), 'qwen');
+  f.api.probe = async () => ({ ok: false, reason: 'Fixture authentication unavailable' });
+  assert.equal(await f.runtime.restoreSelection('codex'), false);
+  assert.equal(f.runtime.value(), 'qwen');
+});
+
+test('a delayed directory runtime restore cannot overwrite an explicit newer Agent selection', async () => {
+  const f = fixture(() => ({ ok: true, runtimes: fullCatalog })), old = deferred(); await f.runtime.ready();
+  f.api.probe = async id => id === 'qwen' ? old.promise : { ok: true };
+  const restoring = f.runtime.restoreSelection('qwen'); await flush();
+  await f.select('codex'); assert.equal(f.runtime.value(), 'codex');
+  old.resolve({ ok: true }); assert.equal(await restoring, false);
+  assert.equal(f.runtime.value(), 'codex');
+});
+
+test('directory runtime restore checks its caller scope again after asynchronous health checks', async () => {
+  for (const changed of ['directory', 'owner', 'location']) {
+    const f = fixture(() => ({ ok: true, runtimes: fullCatalog })), old = deferred(); await f.runtime.ready();
+    let current = true; f.api.probe = async () => old.promise;
+    const restoring = f.runtime.restoreSelection('qwen', () => current); await flush();
+    if (changed === 'directory') current = false;
+    if (changed === 'owner') f.owner('hub-b/device/user-b');
+    if (changed === 'location') f.runtime.setLocation('cloud');
+    old.resolve({ ok: true }); assert.equal(await restoring, false, changed);
+    assert.notEqual(f.runtime.value(), 'qwen', changed);
+  }
+});

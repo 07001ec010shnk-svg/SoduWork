@@ -30,8 +30,12 @@ function payload(model, params) {
   const max = Math.min(params.maxOutputTokens, require('./conversation/model-selection').outputLimit(model));
   const wireModel = model.localOnly ? model.wireModelId : model.id;
   if (typeof wireModel !== 'string' || !wireModel.trim()) throw Error('Model request identity is unavailable');
+  // Capability probes establish the accepted wire parameter independently of
+  // model names or reasoning support. Use that evidence as the runtime does.
+  const tokenField = require('./model-capability-contract.cjs').compatibility(model.compatibility).maxTokensField ||
+    (thinking.reasoning && thinking.format === 'openai' ? 'max_completion_tokens' : 'max_tokens');
   const body = { model: wireModel, stream: false,
-    [thinking.reasoning && thinking.format === 'openai' ? 'max_completion_tokens' : 'max_tokens']: max,
+    [tokenField]: max,
     messages: [{ role: 'system', content: params.instructions }, { role: 'user', content: params.input }] };
   // Match the supported off mappings in the bundled Pi completion transport.
   // An always-thinking model is never forced off or silently replaced.
@@ -161,8 +165,8 @@ function create({ app, authenticatedIdentityOf, authorizeAI, fetchImpl = global.
         await current();
         if (!response.ok) {
           await response.body?.cancel();
-          return failure(response.status === 429 ? 'APP_AI_RATE_LIMITED' : 'APP_AI_PROVIDER_ERROR',
-            '模型服务暂不可用（HTTP ' + response.status + '），本次未获得结果');
+          return { ...failure(response.status === 429 ? 'APP_AI_RATE_LIMITED' : 'APP_AI_PROVIDER_ERROR',
+            '模型服务暂不可用（HTTP ' + response.status + '），本次未获得结果'), httpStatus: response.status };
         }
         const result = await boundedJSON(response);
         await current();

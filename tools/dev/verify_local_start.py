@@ -65,6 +65,10 @@ def start(state, port, password=None, *, desktop=False):
     # .env can redirect the child service to a real database/model/storage.
     env = dict(os.environ, DATABASE_URL="postgresql://must-never-connect.invalid/soduwork",
                OPENAI_API_KEY="fixture-must-not-inherit", MINIO_ENDPOINT="must-never-connect.invalid")
+    # Exercise the launcher's defaults, independent of the verifier's cache choices.
+    for key in list(env):
+        if key.lower() in {'npm_config_cache', 'pip_cache_dir', 'electron_config_cache', 'pip_no_cache_dir'}:
+            del env[key]
     options = ({"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt"
                else {"start_new_session": True})
     child = subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.PIPE,
@@ -162,12 +166,22 @@ def desktop_stopped(pid):
     raise AssertionError('Electron was left running after the source launcher stopped')
 
 
-def verify(*, desktop=False):
-    state = Path(tempfile.mkdtemp(prefix="soduwork-source-live-"))
+def install_cache_sizes(state: Path, *, desktop: bool) -> dict[str, int]:
+    sizes = {}
+    for name in ('npm', 'pip', 'electron') if desktop else ('npm', 'pip'):
+        sizes[name] = sum(path.stat().st_size for path in (state / 'cache' / name).rglob('*') if path.is_file())
+        assert sizes[name] > 0, f'{name} install cache is missing from the data directory'
+    assert (state / 'cache/tmp').is_dir(), 'Preparation temporary directory was not created'
+    return sizes
+
+
+def verify(*, desktop=False, temp_root: Path | None = None):
+    state = Path(tempfile.mkdtemp(prefix="soduwork-source-live-", dir=temp_root))
     port = free_port()
     base = f"http://127.0.0.1:{port}"
     password = secrets.token_urlsafe(24)
     checks = []
+    cache_sizes = {}
     child = output = None
     print(f"Isolated verification directory: {state}\nURL: {base}", flush=True)
     if desktop and sys.platform == 'darwin':
@@ -189,6 +203,8 @@ def verify(*, desktop=False):
             checks.append('native-electron-ready-with-isolated-local-hub-profile')
             endpoint = json.loads((desktop_profile(state) / 'hub-endpoint.json').read_text())
             assert endpoint['hub'] == base
+        cache_sizes = install_cache_sizes(state, desktop=desktop)
+        checks.append('install-caches-inside-data-directory')
         print(f"Clean startup: {time.monotonic() - begin:.1f}s", flush=True)
         page = request(base, "/", raw=True)
         assert b"<html" in page.lower()
@@ -283,15 +299,18 @@ def verify(*, desktop=False):
             stop(child, base)
         if output is not None:
             output.close()
-        report = {"ok": len(checks) == (14 if desktop else 12), "checks": checks, "dataDir": str(state), "url": base,
+        report = {"ok": len(checks) == (15 if desktop else 13), "checks": checks, "dataDir": str(state), "url": base,
+                  "installCacheBytes": cache_sizes,
                   "nativeKeychain": "mocked" if desktop and sys.platform == 'darwin' else "not-verified"}
         (state / "verification.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
         print(json.dumps(report, indent=2), flush=True)
-    assert len(checks) == (14 if desktop else 12)
+    assert len(checks) == (15 if desktop else 13)
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--desktop', action='store_true', help='Also verify native Electron readiness and cleanup (requires a graphical desktop)')
-    verify(desktop=parser.parse_args().desktop)
+    parser.add_argument('--temp-root', type=Path, help='Existing parent directory for the fresh isolated instance (for example, on another volume)')
+    args = parser.parse_args()
+    verify(desktop=args.desktop, temp_root=args.temp_root)

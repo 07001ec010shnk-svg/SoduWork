@@ -42,7 +42,8 @@ async function run(){
  assert.equal(await js('document.querySelector("[data-pkey]").value'),'fixture-key-not-a-secret');
  report.cases.push('service switches and searches retain unsaved key, with password hidden again');
  await js('document.querySelector("[data-mdeditor]").open=true;fill("[data-padd]","custom-report-model");document.querySelector("[data-madd]").click()');
- assert.ok(await js('[...document.querySelectorAll(".md-mtag")].some(el=>el.textContent.includes("custom-report-model"))'));
+ await until('!_mdSaveFlight && [...document.querySelectorAll(".md-mtag")].some(el=>el.textContent.includes("custom-report-model"))');
+ assert.equal(await js('document.querySelector("[data-pkey]").value'),'fixture-key-not-a-secret');
  await js('fill("[data-padd]","custom-report-model");document.querySelector("[data-madd]").click()');
  assert.equal(await js('[...document.querySelectorAll(".md-mtag")].filter(el=>el.textContent.includes("custom-report-model")).length'),1);
  await js('document.querySelector("[data-ptest]").click()');await until('document.querySelector("[data-ptest]").disabled');
@@ -55,6 +56,16 @@ async function run(){
  await until('saved.at(-1)?.models?.every(item=>item.name!=="custom-report-model")');
  assert.equal(await js('[...document.querySelectorAll(".md-mtag")].some(el=>el.textContent.includes("custom-report-model"))'),false);
  report.cases.push('removing a personal model persists immediately and it does not reappear after reload');
+ await js('window.holdModelSave=true;fill("[data-padd]","reopened-chat");document.querySelector("[data-madd]").click()');
+ await until('typeof window.releaseModelSave==="function"');
+ await js('closeModelsPanel();openModelsPanel()');
+ await js('holdModelSave=false;releaseModelSave()');
+ await until('_mdLoadState==="ready" && !_mdSaveFlight');
+ await js('selectService("personal")');
+ assert.equal(await js('_mdData.revision'),await js('fixture.revision'));
+ assert.ok(await js('[...document.querySelectorAll(".md-mtag")].some(el=>el.textContent.includes("reopened-chat"))'));
+ assert.equal(await js('capabilityCalls.some(call=>call.model==="reopened-chat")'),false);
+ report.cases.push('reopening during a personal model save displays the committed row without probing it');
  await js('testFailure=true;document.querySelector("[data-ptest]").click()');await until('document.querySelector(".md-test-r.is-bad")');
  assert.ok(await js('document.querySelector(".md-test-r").textContent.includes("检查 API 地址")'));
  await js('testFailure=false;document.querySelector("[data-ptest]").click()');await until('document.querySelector(".md-test-r.is-ok")');
@@ -84,7 +95,10 @@ async function run(){
  assert.equal(await js('document.querySelector("[data-purl]").hasAttribute("aria-invalid")'),false);
  assert.equal(await js('document.querySelector(".md-field-error")?.hidden'),true);
  assert.equal(await js('document.querySelector("[data-pkey]")'),null);
- await js('fill("[data-padd]","local-demo");document.querySelector("[data-madd]").click();document.querySelector("[data-ptest]").click()');
+ await js('document.querySelector("#mdSave").click()'); await until('!_mdSaveFlight && !_mdDirty');
+ await js('fill("[data-padd]","local-demo");document.querySelector("[data-madd]").click()');
+ await until('!_mdSaveFlight && _mdMyModels.some(m=>m.name==="local-demo")');
+ await js('document.querySelector("[data-ptest]").click()');
  await until('document.querySelector(".md-test-r.is-ok")');
  report.cases.push('new service, no-key local configuration and test result stay usable');
  await js('selectService("personal");fill("[data-pkey]","draft-on-error");saveFailure=true;document.querySelector("#mdSave").click()');

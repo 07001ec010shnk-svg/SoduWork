@@ -12,6 +12,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import nullcontext
 from collections.abc import Callable
 
 from . import local_spool
@@ -43,6 +44,20 @@ _PI_SETTLE_GRACE_S = 5
 _HOST_EXIT_GRACE_S = 3.0
 _HOST_CLEANUP_GRACE_S = 30.0
 _HOST_EXIT_ERROR = 'Permission-controlled execution host did not exit'
+
+
+def _task_budget_stop(run: dict, now: float) -> bool:
+    """Enforce the same goal budget while a native turn is still streaming."""
+    from . import local_task_goal
+    reason = local_task_goal.budget_reason(run, now=now)
+    if not reason:
+        return False
+    local_task_goal.control(run, 'pause')
+    run['goalState']['reason'] = reason
+    run['stopping'] = True
+    run['failureKind'] = 'task_goal'
+    run['error'] = reason
+    return True
 
 
 def _join_execution_host(ref, spool, code, kill_tree, *, proc=None, pid=None, owner=None,
@@ -226,12 +241,20 @@ def spawn(
     owner = object()
     original_finish = finish
     with _LOCK:
+        from . import local_task_goal
+        current = _RUNS.get(ref) or {}
+        goal_guarded = local_task_goal.enabled(current)
+        goal_owned_turn = bool(current.get('goalTurnOwned', local_task_goal.active(current)))
         if ref in _RUNS:
+            if _RUNS[ref].get('cli') != 'pi':
+                _RUNS[ref]['goalTurnOwned'] = goal_owned_turn
             _RUNS[ref]['_workerIdentity'] = owner
             _RUNS[ref]['executionStartedAt'] = 0
             # Persist the process turn's event boundary before any output is
             # consumed, including when a replacement Runner attaches later.
             _RUNS[ref]['turnStartSeq'] = int(_RUNS[ref].get('seq') or 0)
+            from . import local_task_goal
+            local_task_goal.begin_turn(_RUNS[ref])
             _RUNS[ref]['admissionKey'] = str((cfg or {}).get('_admissionKey') or '')
 
     def finish(ref, code, term, hard_error):
@@ -248,6 +271,15 @@ def spawn(
             return
         try:
             env = _env_for(prof or {}, cfg or {}, runtime_ref=ref)
+            # The task controller owns one durable output-recovery budget.
+            # Never inherit this host-only switch from a shell or model config.
+            with _LOCK:
+                current = _RUNS.get(ref) or {}
+                if current.get('cli') != 'pi':
+                    env.pop('SODUWORK_TASK_OUTPUT_RECOVERY_OWNED', None)
+                    from . import local_task_goal
+                    if local_task_goal.active(current):
+                        env['SODUWORK_TASK_OUTPUT_RECOVERY_OWNED'] = '1'
             # Scope belongs to a real submitted turn. Recovery/compaction keeps
             # round unchanged so Escape cannot be bypassed by an internal retry.
             with _LOCK:
@@ -278,16 +310,37 @@ def spawn(
             # own extraction lifetime instead of sharing the parent's _MEIPASS.
             if getattr(sys, 'frozen', False):
                 env['PYINSTALLER_RESET_ENVIRONMENT'] = '1'
-            proc = subprocess.Popen(
-                launch,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                cwd=ws,
-                env=env,
-                bufsize=0,
-                **({} if _WIN else {'start_new_session': True}),
-            )
+            # Publish the new PID atomically with the last cancellation check.
+            # A stop during preparation must neither miss this process nor let
+            # a paused goal launch a replacement after killing the old PID.
+            with _LOCK if goal_guarded else nullcontext():
+                current = _RUNS.get(ref) or {}
+                cancelled = goal_guarded and (
+                    current.get('_workerIdentity') is not owner
+                    or current.get('state') != 'running' or current.get('stopping')
+                    or goal_owned_turn and not local_task_goal.active(current))
+                if cancelled:
+                    if current.get('_workerIdentity') is owner and current.get('state') == 'running':
+                        current['stopping'] = True
+                    proc = None
+                else:
+                    proc = subprocess.Popen(
+                        launch,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        cwd=ws,
+                        env=env,
+                        bufsize=0,
+                        **({} if _WIN else {'start_new_session': True}),
+                    )
+                    if goal_guarded:
+                        current.update(pid=proc.pid, proc=proc)
+            if proc is None:
+                access_broker.close(ref)
+                local_spool.cleanup(_store_dir(ref), spool)
+                finish(ref, 0, {}, '')
+                return
         except Exception as exc:  # noqa: BLE001
             access_broker.close(ref)
             if spool:
@@ -409,7 +462,9 @@ def recover(
                 current["piFinalResponseAt"] = now
             idle, total = now - last, now - started
             pi_settlement = _pi_settlement_due(current, now)
-            if pi_settlement:
+            if _task_budget_stop(current, now):
+                should_kill = True
+            elif pi_settlement:
                 current['piSettledByWatchdog'] = True
                 should_kill = True
             elif not current.get('timedOut') and (idle > _IDLE_LIMIT_S or total > _HARD_LIMIT_S):
@@ -556,6 +611,17 @@ def _watchdog(ref: str, proc, *, finish: Callable, kill_tree: Callable) -> None:
             if run.get("permissionWaiting"):
                 continue
             now = time.time()
+            with _LOCK:
+                current = _RUNS.get(ref)
+                if (current is run and not current.get('_hostCleanup')
+                        and current.get('proc') is proc and _task_budget_stop(current, now)):
+                    target_pid = current.get('pid')
+                else:
+                    target_pid = None
+            if target_pid:
+                _save_meta(ref)
+                kill_tree(ref, expected_pid=target_pid, expected_proc=proc, skip_host_cleanup=True)
+                return
             if _pi_settlement_due(run, now):
                 with _LOCK:
                     current = _RUNS.get(ref)

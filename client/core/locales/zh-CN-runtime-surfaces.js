@@ -29,6 +29,7 @@
     "workspace.history.localError": "本机历史暂时无法读取",
     "workspace.history.accountError": "部分会话暂时无法读取",
     "workspace.history.loading": "正在加载…",
+    "workspace.history.cloudCache": "本地缓存（只读）",
     "模型请求失败（HTTP {status}）：{detail}": "模型请求失败（HTTP {status}）：{detail}",
     "所选 Linux 执行机的 CPU 缺少 {instructions} 指令集，无法运行 OpenCode。请选择兼容的执行机，或由管理员调整该虚拟机的 CPU 配置。": "所选 Linux 执行机的 CPU 缺少 {instructions} 指令集，无法运行 OpenCode。请选择兼容的执行机，或由管理员调整该虚拟机的 CPU 配置。",
     "模型上下文超限；完整历史已保留，将通过现有会话接续机制恢复。": "模型上下文超限；完整历史已保留，将通过现有会话接续机制恢复。",

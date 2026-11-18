@@ -30,6 +30,7 @@ let _mdManagedDirty = false;
 let _mdLocalKeyIds = new Set();
 let _mdManagedNeedsReload = false;
 let _mdSaveFlight = null;
+let _mdAddingModel = '';
 let _mdDeleteFlight = null;          /* Reopening waits for an admitted deletion to settle. */
 let _mdTest = {};                   /* providerId -> {state:'ing'|'ok'|'bad', detail} */
 let _mdEditor = '';                 /* A native child window edits one provider; empty selection indicates the overview. */
@@ -103,7 +104,7 @@ function openModelsPanel(options) {
 }
 
 function closeModelsPanel() {
-  for (const [key, check] of _mdChecks) if (check.pending) _mdCancelModelCheck(...JSON.parse(key));
+  _mdStopModelChecks();
   ++_mdLoadId;
   if (typeof _mdCloseDeleteDialog === 'function') _mdCloseDeleteDialog();
   _mdLoadState = 'idle';
@@ -115,6 +116,7 @@ function closeModelsPanel() {
 async function _mdLoad(options) {
   const box = document.getElementById('mdBody');
   if (!box) return;
+  if (!options?.saved) _mdStopModelChecks();
   const loadId = ++_mdLoadId;
   const current = () => loadId === _mdLoadId && document.getElementById('mdBody') === box;
   const previous = { data: _mdData, keys: _mdKeyEdits, models: _mdMyModels,
@@ -128,7 +130,9 @@ async function _mdLoad(options) {
   if (!_mdData) box.innerHTML = '<div class="md-load"><i></i><i></i><i></i><span>正在看有哪些模型能用…</span></div>';
   try {
     const r = await Promise.race([
-      Promise.resolve(_mdDeleteFlight).catch(() => {}).then(() => SoduWorkAPI.myModels()),
+      // The ordinary save calls this loader itself. Only its external reloads wait for it.
+      Promise.resolve(options?.saved ? _mdDeleteFlight : _mdSaveFlight).catch(() => {})
+        .then(() => current() ? SoduWorkAPI.myModels() : null),
       new Promise((_, reject) => { timer = setTimeout(() => {
         const error = new Error('Model catalog load timed out');
         error.code = 'MODEL_LOAD_TIMEOUT'; reject(error);
@@ -292,19 +296,16 @@ function _mdRender() {
   const active = visible.filter((p) => ['local', 'mine', 'org'].includes(_mdState(p)));
   const available = visible.filter((p) => _mdState(p) === 'open');
   const advanced = visible.filter((p) => _mdState(p) === 'noaddr');
-  const mineN = usable.filter((m) => m.keyFrom === 'mine').length;
-  const homes = new Set(usable.map((m) => m.providerId)).size;
 
   const html = '<div class="cfg-master-detail md-master-detail">' +
     '<aside class="cfg-master md-master" aria-label="模型服务">' +
-      '<div class="cfg-master-head"><span>模型服务</span>' +
-        '<strong>' + _mdMessage('models.available', '{count} 个可选模型', { count: usable.length }) + '</strong>' +
-        '<small>' + _mdMessage('models.types', '{chat} 个聊天 · {image} 个图片 · {video} 个视频', { chat: chatUsable.length, image: (mediaUsable.image || []).length, video: (mediaUsable.video || []).length }) + '</small>' +
-        '<small>' + _mdMessage('models.providers', '{count} 家服务已配置 · {personal} 个使用个人额度', { count: homes, personal: mineN }) + '</small></div>' +
+      '<div class="cfg-master-head"><div class="md-master-toolbar"><span>模型服务</span>' +
+        '<button type="button" class="cfg-master-add" id="mdAddInline" aria-label="添加服务" title="添加服务"><span aria-hidden="true">＋</span> <span>添加</span></button></div>' +
+        '<strong>' + _mdMessage('models.available', '{count} 个可选模型', { count: usable.length }) + '</strong></div>' +
       '<div class="cfg-master-actions">' +
-        '<label class="cfg-master-search"><span>搜索模型服务</span><input id="mdQ" class="md-q" value="' +
-          esc(_mdQuery) + '" placeholder="搜索服务或模型"></label>' +
-        '<button type="button" class="cfg-master-add" id="mdAddInline">＋ 添加服务</button></div>' +
+        '<label class="cfg-master-search"><span>搜索模型服务</span>' +
+          '<svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4.5 4.5"></path></svg>' +
+          '<input id="mdQ" class="md-q" value="' + esc(_mdQuery) + '" placeholder="服务或模型"></label></div>' +
       '<div class="cfg-master-scroll">' + (visible.length
         ? _mdNavGroupHtml('未保存', visible.filter(p => _mdState(p) === 'draft')) +
           _mdNavGroupHtml('正在使用', active) +
@@ -504,7 +505,7 @@ function _mdTouchProvider(pid, patch) {
     if (error) { error.hidden = true; error.textContent = ''; }
   }
   p._capStale = true;
-  for (const key of _mdChecks.keys()) if (JSON.parse(key)[0] === pid) _mdClearCheck(key);
+  _mdClearProviderChecks(pid);
   _mdMarkOwnedDirty(p);
 }
 
@@ -544,7 +545,7 @@ function _mdBind(box) {
     const pid = el.getAttribute('data-pkey');
     const provider = _mdProvider(pid); if (!_mdCanEdit(provider)) return;
     provider._capStale = true;
-    for (const key of _mdChecks.keys()) if (JSON.parse(key)[0] === pid) _mdClearCheck(key);
+    _mdClearProviderChecks(pid);
     if (el.value.trim()) _mdKeyEdits[pid] = el.value.trim();
     else delete _mdKeyEdits[pid];
     _mdMarkOwnedDirty(provider || pid);
@@ -584,6 +585,7 @@ function _mdBind(box) {
     const pid = el.getAttribute('data-pclear');
     const p = _mdProvider(pid);
     if (!_mdCanEdit(p)) return;
+    _mdClearProviderChecks(pid);
     _mdKeyEdits[pid] = null;    /* null explicitly removes the personal key. */
     _mdMarkOwnedDirty(p || pid);
     el.textContent = '（保存后此地址将没有凭据）';
@@ -670,12 +672,13 @@ function _mdMark() {
   document.getElementById('mdBody')?.querySelectorAll?.('input,select,textarea,button').forEach(control => {
     if (_mdSaveFlight && !control.disabled) { control.disabled = true; control._mdSaveDisabled = true; }
     else if (!_mdSaveFlight && control._mdSaveDisabled) { control.disabled = false; delete control._mdSaveDisabled; }
+    if (_mdAddingModel && control.dataset?.madd === _mdAddingModel) control.textContent = '添加中…';
   });
   const btn = document.getElementById('mdSave');
   if (!btn) return;
   const dirty = _mdDirty || _mdLocalDirty || _mdManagedDirty || Object.keys(_mdKeyEdits).length > 0;
   btn.disabled = !!_mdSaveFlight || !dirty || _mdLoadState !== 'ready';
-  btn.textContent = _mdSaveFlight ? '保存中…' : dirty || _mdLoadState !== 'ready' ? '保存' : '已保存';
+  btn.textContent = _mdSaveFlight && !_mdAddingModel ? '保存中…' : dirty || _mdLoadState !== 'ready' ? '保存' : '已保存';
 }
 
 function _mdPayload(excludeDraft = false) {
@@ -731,7 +734,8 @@ function _mdProviderError(p) {
 
 function _mdSave(closeAfter) {
   if (_mdSaveFlight) return _mdSaveFlight;
-  _mdSaveFlight = Promise.resolve().then(() => _mdSaveChanges(closeAfter)).finally(() => {
+  const loadId = _mdLoadId, scope = SoduWorkAPI.taskStorageKey?.('ops');
+  _mdSaveFlight = Promise.resolve().then(() => _mdSaveChanges(closeAfter, loadId, scope)).finally(() => {
     _mdSaveFlight = null; _mdMark();
     if (_mdValidation) _mdFocusValidation();
   });
@@ -739,11 +743,10 @@ function _mdSave(closeAfter) {
   return _mdSaveFlight;
 }
 
-async function _mdSaveChanges(closeAfter) {
-  const loadId = _mdLoadId, scope = SoduWorkAPI.taskStorageKey?.('ops');
+async function _mdSaveChanges(closeAfter, loadId, scope) {
   const current = () => loadId === _mdLoadId && scope === SoduWorkAPI.taskStorageKey?.('ops');
-  let localSaved = false;
-  let skippedDraft = false;
+  if (!current()) return false;
+  let localSaved = false, skippedDraft = false;
   try {
     const p = _mdProvider(_mdOpen || _mdEditor);
     skippedDraft = !!(_mdNew && p?.id !== _mdNew.id && _mdProviderError(_mdNew));
@@ -862,6 +865,8 @@ function _mdBackgroundRefresh() {
   return flight;
 }
 
+window.addEventListener?.('soduwork-data-scope-changed', _mdStopModelChecks);
+window.addEventListener?.('pagehide', _mdStopModelChecks);
 window.addEventListener?.('soduwork-domain-changed', event => {
   if (event.detail?.domain === 'models') void _mdBackgroundRefresh();
 });

@@ -4,12 +4,22 @@
 // identity and OpenAI-compatible provider are isolated loopback fixtures.
 const electron = require('electron');
 if (typeof electron === 'string') {
+  const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
+  const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-local-parser-e2e-')));
   const env = { ...process.env };
+  env.SODUWORK_LOCAL_PARSE_TEST_ROOT = temporary;
   for (const key of ['ELECTRON_RUN_AS_NODE', 'NODE_OPTIONS', 'CHROME_CRASHPAD_PIPE_NAME',
     'CHROME_CRASHPAD_PIPE_HANDLE', 'ELECTRON_NO_ATTACH_CONSOLE']) delete env[key];
-  const result = require('node:child_process').spawnSync(electron,
-    [__filename, ...process.argv.slice(2), '--no-sandbox', '--disable-gpu'],
-    { env, stdio: 'inherit', timeout: 90000 });
+  let result;
+  try {
+    result = require('node:child_process').spawnSync(electron,
+      [__filename, ...process.argv.slice(2), '--no-sandbox', '--disable-gpu'],
+      { env, windowsHide: true, stdio: 'inherit', timeout: 90000 });
+  } finally {
+    // Chromium holds profile files on Windows until its process has exited.
+    // Only remove the exact temporary directory created by this parent.
+    fs.rmSync(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
   process.exit(result.status ?? 1);
 }
 
@@ -20,7 +30,10 @@ const { pathToFileURL } = require('node:url');
 const output = process.argv[2];
 assert.ok(output && path.isAbsolute(output), 'Absolute evidence directory required');
 fs.mkdirSync(output, { recursive: true });
-const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-local-parser-e2e-')));
+const root = fs.realpathSync(process.env.SODUWORK_LOCAL_PARSE_TEST_ROOT ||
+  fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-local-parser-e2e-')));
+assert.equal(path.dirname(root), fs.realpathSync(os.tmpdir()));
+assert.ok(path.basename(root).startsWith('soduwork-local-parser-e2e-'));
 const client = path.resolve(__dirname, '..'), profile = path.join(root, 'profile');
 fs.mkdirSync(profile);
 app.setAppPath(client); app.setPath('userData', profile); app.disableHardwareAcceleration();
@@ -30,6 +43,7 @@ const report = { ok: false, cases: [], boundary: 'Real Electron process, product
 const hubRequests = [], providerRequests = [], fixtureErrors = [];
 const privateKey = crypto.randomBytes(24).toString('hex');
 let win, hubServer, providerServer, hub, providerUrl, responseMode = 'success', account = '';
+let expectedLanguage = 'Simplified Chinese';
 const js = async code => {
   try { return await win.webContents.executeJavaScript(code, true); }
   catch (error) { throw Error(error.message + '\nRenderer expression: ' + code); }
@@ -48,8 +62,8 @@ function session(device) {
     session: Buffer.from(JSON.stringify({ typ: 'device', uid: account, cid: device, iat: now - 1,
       exp: now + 3600 })).toString('base64url') + '.' + 'a'.repeat(64), user: { id: account, name: account } };
 }
-async function parse(model, kind = 'requirement') {
-  return js(`SoduWorkAPI.parseTaskText('Keep every original requirement.',${JSON.stringify(model)},[],{kind:${JSON.stringify(kind)}})`);
+async function parse(model, kind = 'requirement', input = 'Keep every original requirement.') {
+  return js(`SoduWorkAPI.parseTaskText(${JSON.stringify(input)},${JSON.stringify(model)},[],{kind:${JSON.stringify(kind)}})`);
 }
 
 app.whenReady().then(async () => {
@@ -62,6 +76,10 @@ app.whenReady().then(async () => {
       assert.equal(request.url, '/private-parser/v1/chat/completions');
       assert.equal(body.stream, false); assert.equal(Array.isArray(body.messages), true);
       assert.equal(body.messages[0].role, 'system'); assert.equal(body.messages[1].role, 'user');
+      if (responseMode !== 'timeout') {
+        assert.ok(body.messages[0].content.includes('Output language: ' + expectedLanguage + '.'));
+        assert.match(body.messages[0].content, /Keep JSON keys, enum values, dates, proper names, identifiers, and literal quotations unchanged/);
+      }
       assert.equal(Object.hasOwn(body, 'tools'), false);
       assert.ok(['private-parser-wire', 'private-parser-keyed-wire'].includes(body.model));
       assert.equal(request.headers.authorization, body.model === 'private-parser-wire' ? undefined : 'Bearer ' + privateKey);
@@ -69,7 +87,9 @@ app.whenReady().then(async () => {
       if (responseMode === 'timeout') return;
       if (responseMode === 'error') return reply(response, { error: {
         message: 'private-parser-wire ' + privateKey + ' ' + providerUrl } }, 503);
-      const text = responseMode === 'invalid' ? '{"unexpected":"not a requirement"}' : JSON.stringify({
+      const text = responseMode === 'invalid' ? '{"unexpected":"not a requirement"}' : responseMode === 'locale'
+        ? JSON.stringify({ title: 'Review Project 星河', note: 'Prepare the release for Project 星河. Preserve "原文引用".',
+          checklist: ['Confirm release readiness'], priority: 'normal', kind: 'requirement', due: '2026-12-01', tags: ['release'] }) : JSON.stringify({
         title: 'Local parsed draft', note: body.messages[1].content, checklist: ['Keep local constraints'],
         priority: 'normal', kind: 'requirement', due: '', tags: ['local'] });
       return reply(response, { choices: [{ message: { content: text },
@@ -110,11 +130,15 @@ app.whenReady().then(async () => {
   });
   win.webContents.on('preload-error', (_event, _file, error) => console.error('[parser-preload]', error.message));
   const desk = pathToFileURL(path.join(client, 'desk.html')).href;
+  const parserScripts = [...JSON.parse(fs.readFileSync(path.join(client, 'core/locales/manifest.json'), 'utf8'))
+    .map(file => 'core/locales/' + file), 'core/i18n.js', 'core/api-work-plugins.js', 'api.js'];
   win.webContents.session.protocol.handle('file', request => request.url === desk
-    ? new Response('<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'self\'; connect-src \'none\'; object-src \'none\'"><title>Private requirement parser</title><script src="core/api-work-plugins.js"></script><script src="api.js"></script>',
+    ? new Response('<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'self\'; connect-src \'none\'; object-src \'none\'"><title>Private requirement parser</title>' +
+      parserScripts.map(file => '<script src="' + file + '"></script>').join(''),
       { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
     : net.fetch(request.url, { bypassCustomProtocolHandlers: true }));
   await win.loadURL(desk);
+  await js("SoduWorkI18n.setLocale('zh-CN', {persist:false,broadcast:false})");
   assert.equal(await js('typeof soduWorkAPI.conversationSession.localRequirementParse'), 'function');
   const denied = await parse(localRef);
   assert.match(denied._parseError, /登录.*原文已保留/); assert.equal(providerRequests.length, 0);
@@ -130,6 +154,17 @@ app.whenReady().then(async () => {
   }
   assert.equal((await parse(keyedRef)).title, 'Local parsed draft');
   mark('Key-authenticated private parsing sends the credential only to its configured provider');
+  expectedLanguage = 'English'; responseMode = 'locale';
+  await js("SoduWorkI18n.setLocale('en-US', {persist:false,broadcast:false})");
+  const english = await parse(localRef, 'requirement', '请整理 Project 星河，保留“原文引用”，于 2026-12-01 完成。');
+  assert.equal(english.title, 'Review Project 星河');
+  assert.equal(english.note, 'Prepare the release for Project 星河. Preserve "原文引用".');
+  assert.deepEqual(english.checklist, ['Confirm release readiness']);
+  assert.deepEqual(english.tags, ['release']);
+  assert.equal(english.priority, 'normal'); assert.equal(english.due, '2026-12-01');
+  mark('English UI locale reaches the real provider request and renderer retains English draft fields, proper names and quotations');
+  await js("SoduWorkI18n.setLocale('zh-CN', {persist:false,broadcast:false})");
+  expectedLanguage = 'Simplified Chinese';
   responseMode = 'truncated';
   assert.match((await parse(localRef))._parseError, /长度上限.*原文已保留/);
   responseMode = 'invalid';
@@ -137,6 +172,7 @@ app.whenReady().then(async () => {
   responseMode = 'error';
   const failed = await parse(localRef);
   assert.match(failed._parseError, /本地模型服务返回错误.*原文已保留/);
+  assert.match(failed._parseError, /HTTP 503.*暂时不可用/);
   for (const privateValue of [privateKey, providerUrl, 'private-parser-wire']) assert.equal(JSON.stringify(failed).includes(privateValue), false);
   mark('Truncated, malformed and provider-error responses remain explicit without exposing private diagnostics');
   responseMode = 'timeout';
@@ -162,6 +198,9 @@ app.whenReady().then(async () => {
     console.log(JSON.stringify(report, null, 2));
     win?.destroy();
     for (const server of [hubServer, providerServer]) { server?.closeAllConnections(); server?.close(); }
-    fs.rmSync(root, { recursive: true, force: true });
+    if (!process.env.SODUWORK_LOCAL_PARSE_TEST_ROOT) {
+      try { fs.rmSync(root, { recursive: true, force: true, maxRetries: 3 }); }
+      catch (error) { console.warn('Temporary profile cleanup deferred:', error.code); }
+    }
     app.exit(report.ok ? 0 : 1);
   });
