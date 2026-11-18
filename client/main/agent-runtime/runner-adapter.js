@@ -1479,13 +1479,37 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const cancellation = observationCancellation;
     const owner = handle.deliveryOwner;
     const account = require('../device-auth-request').accountScopeKey(identity);
-    const cancelled = () => Boolean(state.disposed || state.cancelRequested || state.goalPaused || stopRequested() || cancellation !== observationCancellation ||
-      (state.nextAccessPolicy || state.accessPolicy)?.revision !== revision);
+    const stopped = () => Boolean(state.disposed || state.cancelRequested || state.goalPaused || stopRequested() || cancellation !== observationCancellation);
+    const cancelled = () => stopped() || (state.nextAccessPolicy || state.accessPolicy)?.revision !== revision;
+    const checkFailure = (error, beforeAdmission = false) => {
+      // A late worker rejection belongs to its original turn, never a newer
+      // stop, access revision or account/owner. Preserve their control state.
+      const sameOwner = handle.deliveryOwner === owner && require('../device-auth-request').accountScopeKey(identity) === account;
+      if (cancelled() || !sameOwner) {
+        // A confirmed permission change cancels this check after native work
+        // has ended. Retire its synthetic activity without awaiting a later
+        // status poll, while leaving newer owner/stop/pause controls untouched.
+        if (!beforeAdmission && sameOwner && !stopped() && !state.accessChangePending &&
+            !state.pendingPermissions.length && state.terminalConfirmed && !state.recoveryRequired &&
+            !state.turnSubmissionPending && state.status === 'streaming') {
+          state.status = 'aborted'; state.statusText = '\u5df2\u505c\u6b62';
+          state.completion = { reason: 'cancelled' };
+        }
+        return state.goalPaused ? { ok: true, paused: true } : { ok: true, cancelled: true, manualStop: true };
+      }
+      const reason = pluginGeneration.diagnostic({}, error).message;
+      state.status = 'unreachable'; state.statusText = reason;
+      state.turnEndedAt = Date.now();
+      state.completion = { reason: 'error', error: reason };
+      // Only a baseline failure is safe to resubmit: finalization may follow
+      // successful native writes, so it must not replay the original request.
+      return { ok: false, failureKind: 'plugin-validation', retrySafe: beforeAdmission, reason };
+    };
     state.pluginGenerationPreparing = true;
     // Baseline scanning yields before native admission. Fence the previous
     // turn's timers and in-flight observations before that first await.
     invalidateObservation();
-    let gate;
+    let gate, preparationError;
     try {
       gate = await pluginGeneration.begin({ handle, app, identity, cancelled,
         selectedPluginIds: pluginTurn.requestedIds(options),
@@ -1505,12 +1529,23 @@ async function createRunnerHandle(request, defaults, initialSession) {
         },
       });
       if (gate.canStart()) await beginFileJournal('turn:' + state.alias + ':' + (state.turnSerial + 1) + ':' + Date.now().toString(36));
+    } catch (error) {
+      preparationError = error;
     } finally {
       state.pluginGenerationPreparing = false;
       if (state.pendingTaskGoalControl && !state.disposed) requestStop();
     }
-    if (!gate.canStart()) {
-      gate.dispose();
+    if (preparationError) {
+      gate?.dispose();
+      activeFileJournal = null;
+      const result = checkFailure(preparationError, true);
+      if (!result.ok) {
+        emit('failed', { reason: result.reason });
+        return { ...result, snapshot: _snapshot(state) };
+      }
+    }
+    if (!gate?.canStart()) {
+      gate?.dispose();
       activeFileJournal = null;
       const result = state.goalPaused ? { ok: true, paused: true } : { ok: true, cancelled: true, manualStop: true };
       if (state.goalPaused && turnQueue.active()) {
@@ -1525,7 +1560,11 @@ async function createRunnerHandle(request, defaults, initialSession) {
     let native;
     try { native = send(text, attachments, options); }
     catch (error) { gate.dispose(); generationGateActive--; state.pluginGenerationActive = generationGateActive; throw error; }
-    return Promise.resolve(native).then(result => gate.finish(result)).then(result => {
+    return Promise.resolve(native).then(async result => {
+      // Catch only host validation failures here; native send failures retain
+      // their existing admission/recovery and queue semantics.
+      try { result = await gate.finish(result); }
+      catch (error) { return checkFailure(error); }
       if (result?.failureKind === 'plugin-validation') {
         state.status = 'unreachable'; state.statusText = result.reason;
         state.completion = { reason: 'error', error: result.reason };
