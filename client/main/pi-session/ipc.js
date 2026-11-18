@@ -1112,6 +1112,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
     const clearPluginSelection = Boolean(rawOptions &&
       (rawOptions.clearPluginSelection === true || rawOptions.pluginSelection === 'clear'));
     const sendOptions = {
+      ...(automationTurn ? { source: 'automation' } : {}),
       ...(taskTurn?.acceptanceOnly ? { beforeTurn: taskTurn.beforeTurn, afterTurn: taskTurn.afterTurn,
         promptText: taskTurn.text } : {}),
       ...(taskLifecycle ? { taskId, taskTitle: taskTurn.task.title || '',
