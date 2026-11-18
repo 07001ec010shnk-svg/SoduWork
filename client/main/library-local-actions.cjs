@@ -125,18 +125,18 @@ async function execute(store, index, action, payload) {
   if (action === 'list') {
     const scope = ['all', 'folders', 'favorites', 'images', 'trash', 'recommended'].includes(body.scope) ? body.scope : 'recommended';
     const current = ['all', 'folders'].includes(scope) ? folder(index, body.folderId) : null;
-    const query = String(body.query || '').trim().toLowerCase();
+    const query = nameKey(String(body.query || '').trim());
     const itemCounts = new Map(), childCounts = new Map();
     for (const row of index.items) if (!row.deletedAt) itemCounts.set(row.folderId, (itemCounts.get(row.folderId) || 0) + 1);
     for (const row of index.folders) childCounts.set(row.parentId, (childCounts.get(row.parentId) || 0) + 1);
     const folders = ['all', 'folders', 'favorites'].includes(scope) ? index.folders.filter(x =>
-      (scope === 'favorites' ? x.favorite : x.parentId === (current?.id || null)) && x.name.toLowerCase().includes(query)).map(x => ({ ...publicRow(x),
+      (scope === 'favorites' ? x.favorite : x.parentId === (current?.id || null)) && nameKey(x.name).includes(query)).map(x => ({ ...publicRow(x),
         itemCount: itemCounts.get(x.id) || 0,
         childCount: childCounts.get(x.id) || 0 })).sort((a, b) => a.name.localeCompare(b.name)) : [];
     let items = scope === 'folders' ? [] : index.items.filter(x => Boolean(x.deletedAt) === (scope === 'trash') &&
       (!['all', 'folders'].includes(scope) || x.folderId === (current?.id || null)) &&
       (scope !== 'favorites' || x.favorite) && (scope !== 'images' || x.kind === 'image') &&
-      (!query || (x.title + ' ' + x.filename).toLowerCase().includes(query)));
+      (!query || nameKey(x.title + ' ' + x.filename).includes(query)));
     items = items.sort((a, b) => ['recommended', 'images', 'trash'].includes(scope) ? String(b.deletedAt || b.updatedAt).localeCompare(a.deletedAt || a.updatedAt) : a.title.localeCompare(b.title));
     return { ok: true, scope, storage: 'local', folder: current ? publicRow(current) : null, folders, items: items.map(publicRow), trashCount: index.items.filter(x => x.deletedAt).length };
   }

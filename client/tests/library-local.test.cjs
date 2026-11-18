@@ -53,6 +53,18 @@ test('output receipts survive restart, deduplicate legacy bytes and respect dele
   assert.notEqual(replacement.item.id, legacy.id);
 });
 
+test('library search matches canonically equivalent file and folder names without changing their spelling', async t => {
+  const f = fixture(t);
+  const filename = 'Café-notes.txt'.normalize('NFD');
+  const { item } = await f.call('upload', { name: filename, dataBase64: data('notes') });
+  const { folder } = await f.call('createFolder', { name: 'Café records' });
+  for (const query of ['CAFÉ', 'CAFÉ'.normalize('NFD')]) {
+    const result = await f.call('list', { scope: 'all', query });
+    assert.deepEqual(result.items.map(row => [row.id, row.filename]), [[item.id, filename]]);
+    assert.deepEqual(result.folders.map(row => row.id), [folder.id]);
+  }
+});
+
 test('same destination suffixes duplicate imports while creates, folders and trash remain independent', async t => {
   const f = fixture(t);
   const original = (await f.call('upload', { name: 'Report.txt', dataBase64: data('first') })).item;
