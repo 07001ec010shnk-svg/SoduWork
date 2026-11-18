@@ -16,7 +16,14 @@ function references(source) {
     }
     return '';
   }
-  function whitespace() { while (/\s/.test(text[i] || '') && i < text.length) i++; }
+  function whitespace() {
+    while (i < text.length) {
+      if (/\s/.test(text[i])) { i++; continue; }
+      if (!text.startsWith('/*', i)) break;
+      const end = text.indexOf('*/', i + 2);
+      i = end < 0 ? text.length : end + 2;
+    }
+  }
   while (i < text.length) {
     if (text.startsWith('/*', i)) { const end = text.indexOf('*/', i + 2); i = end < 0 ? text.length : end + 2; continue; }
     if (text[i] === '"' || text[i] === "'") { string(); continue; }
