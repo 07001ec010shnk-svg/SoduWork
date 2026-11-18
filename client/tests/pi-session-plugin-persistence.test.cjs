@@ -22,7 +22,7 @@ test('Pi executes inherited plugins with fresh grants, restores selections, cons
     fs.mkdirSync(cwd); fs.mkdirSync(agentDir);
     const resolutions = [], cleanups = [], executions = [], priorResults = [], requests = [], sessions = [];
     const grants = new Set(), archives = new Map();
-    let held = null, holdNext = false, revoked = false, generation = false, generated = 0, failNative = false, freezeWrites = false;
+    let held = null, holdNext = false, revoked = false, generation = false, generated = 0, failNative = false, freezeWrites = false, htmlOnly = false;
     const server = http.createServer((request, response) => {
       let raw = '';
       request.on('data', chunk => { raw += chunk; });
@@ -83,7 +83,16 @@ test('Pi executes inherited plugins with fresh grants, restores selections, cons
           'a follow-up plugin call must receive the previous turn tool result from native history');
         if (generation && (!freezeWrites || args.repair)) {
           const target = path.join(cwd, 'soduwork-plugin-draft.json');
-          fs.writeFileSync(target, ++generated === 1 ? '{invalid final JSON' : JSON.stringify({
+          generated++;
+          if (htmlOnly && !args.repair) {
+            fs.writeFileSync(path.join(cwd, 'report.html'), '<!doctype html><h1>Business report</h1>');
+            if (htmlOnly === 'manifest') {
+              fs.mkdirSync(path.join(cwd, '.soduwork'), { recursive: true });
+              fs.writeFileSync(path.join(cwd, '.soduwork/delivery.json'), JSON.stringify({
+                schemaVersion: 1, deliverables: [{ path: 'report.html' }],
+              }));
+            }
+          } else fs.writeFileSync(target, generated === 1 ? '{invalid final JSON' : JSON.stringify({
             template:'method', key:'native-gate-fixture', name:'Native fixture', version:'1.0.0',
             description:'Synthetic generation validation', instructions:'Read the supplied material.',
           }));
@@ -236,5 +245,21 @@ test('Pi executes inherited plugins with fresh grants, restores selections, cons
     assert.equal(generated,2,'recovery must gate the original changed draft instead of treating it as old');
     assert.equal((await failing.outputSnapshotAsync()).pluginValidation.find(row=>
       row.relative==='soduwork-plugin-draft.json').state,'ready');
+    // Both inferred and explicitly declared one-off HTML results must be
+    // repaired through the actual SDK and live grant at authoring completion.
+    for (const source of ['inferred', 'manifest']) {
+      htmlOnly = source; freezeWrites = false; generated = 0;
+      for (const name of ['soduwork-plugin-draft.json', 'report.html', '.soduwork/delivery.json']) fs.rmSync(path.join(cwd, name), { force: true });
+      const htmlAuthor = await open({ ref: 'html-authoring-' + source }), htmlGrants = resolutions.length;
+      const htmlResult = await htmlAuthor.submit('Make a plugin that produces HTML', [], { pluginIds: ['local:plugin-builder'] }).completion;
+      assert.equal(htmlResult.ok, true, htmlResult.reason);
+      assert.equal(generated, 2, 'one HTML generation and one missing-package repair execute');
+      assert.equal(resolutions.length, htmlGrants + 1, 'missing-package repair retains the original grant');
+      assert.equal(htmlAuthor.snapshot().messages.filter(message => message.role === 'user').length, 1);
+      assert.equal((await htmlAuthor.outputSnapshotAsync()).pluginValidation.find(row =>
+        row.relative === 'soduwork-plugin-draft.json').state, 'ready');
+      assert.equal(grants.size, 0);
+      assert.match(fs.readFileSync(path.join(cwd, 'report.html'), 'utf8'), /Business report/);
+    }
     await require('../main/app-resource-cache.cjs').close();
   });
