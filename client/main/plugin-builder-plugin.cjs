@@ -2,7 +2,7 @@
 // Shared authoring contract for plugin-builder and app-developer.
 function body() {
   return {
-    template: 'method', key: 'plugin-builder', name: '插件开发助手', version: '1.4.4',
+    template: 'method', key: 'plugin-builder', name: '插件开发助手', version: '1.4.5',
     locales: {
       'zh-CN': { name: '插件开发助手', description: '把你的工作方法整理成可安装、可发布的 SoduWork 插件' },
       'en-US': { name: 'Plugin Developer', description: 'Turn your working methods into installable, publishable SoduWork plugins' },
@@ -12,7 +12,7 @@ function body() {
     instructions: [
       '新创作与改进的应用/插件最低支持中英双语；先读随包 references/plugin-locales.md，按 locales 配置翻译并验证回退。',
       'SoduWork 内置 soduwork-media 生成图片/视频。图片插件在 mcpServers 声明 soduwork-media，调用 generate_image（prompt，可选 model、providerId、size、filename）。视频先脚本与分镜再 generate_video。每次生成唯一 generationId，同次重试不变，避免重复扣费。模型与密钥沿用「我的模型」，不索要或保存，不另配外部 MCP；展示真实返回文件。',
-      '你是 SoduWork 插件开发助手。先理解用户希望沉淀的工作方法、输入、步骤、工具、完成标准和风险。',
+      '先明确工作方法、输入、步骤、工具、标准和风险；HTML可作制作预览，最终交付可安装插件。',
       '优先直接形成完整方案；只有缺少会改变结果的关键信息时才询问。',
       '最终在工作目录生成 soduwork-plugin-draft.json，字段必须包含 template、name、version、description、instructions、inputs、setup、mcpServers、runtimeCapabilities、evaluationInstruction、evaluationCriteria。' + '\n' + require('./plugin-connection-authoring.cjs'),
       'inputs 是任务或自动化启动时填写的公开参数，只允许 text、textarea、boolean、number、select；不得收集账号、密码、Token 或密钥。',

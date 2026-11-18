@@ -142,6 +142,9 @@ settleTurnOutcome(driver, {reason:'failed',error:{code:'context.overflow',messag
                 "SODUWORK_KIMI_ACP_OUTCOME": "1",
                 "NODE_OPTIONS": "--import=" + copied.as_uri(),
             }
+            if os.name == "nt":
+                # Node's Windows crypto initialization needs the system directory.
+                env["SystemRoot"] = os.environ["SystemRoot"]
             script = "console.log(JSON.stringify({flag:process.env.SODUWORK_KIMI_ACP_OUTCOME, options:process.env.NODE_OPTIONS}))"
             result = subprocess.run(
                 [node, "-e", script],

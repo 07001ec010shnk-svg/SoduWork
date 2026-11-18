@@ -51,13 +51,21 @@ def check_source_checkout(root: Path) -> None:
 
 def default_state() -> Path:
     if os.name == "nt":
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local"))
+        # os.environ.get() substitutes the default only for an absent variable: an empty
+        # value becomes Path('.') and a relative value stays relative. The launcher then
+        # resolves the default data directory beneath whatever directory it was started
+        # from, and its own safety guard rejects that with advice the user cannot act on.
+        base = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData/Local")
+        if not base.is_absolute():
+            base = Path.home() / "AppData/Local"
         current, previous = base / "SoduWork/source-service", base / "SoduWork/source-service"
     elif sys.platform == "darwin":
         base = Path.home() / "Library/Application Support"
         current, previous = base / "SoduWork/source-service", base / "SoduWork/source-service"
     else:
-        base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share"))
+        base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+        if not base.is_absolute():
+            base = Path.home() / ".local/share"
         current, previous = base / "soduwork/source-service", base / "soduwork/source-service"
     # Preserve existing source-service data in place; only fresh installs use the new name.
     return previous if not current.exists() and (previous / "local-service.json").is_file() else current
@@ -145,6 +153,8 @@ def initialized(state: Path) -> bool:
     db = state / "soduwork.db"
     if not db.exists():
         return False
+    # A database file alone does not mean the first administrator was created.
+    # Inspect existing users read-only so this check cannot initialize the database.
     try:
         with closing(sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)) as conn:
             return bool(conn.execute("SELECT COUNT(*) FROM app_user").fetchone()[0])
@@ -161,7 +171,7 @@ def password_for_start(state: Path, config: dict, stdin: bool) -> str:
     print(f"首次创建管理员 / Create the administrator account: {config['adminUser']}", flush=True)
     if stdin:
         password = sys.stdin.readline().rstrip("\r\n")
-    elif sys.stdin.isatty():
+    else:
         print("请设置并记住自己的密码；输入时不显示字符或星号，输入后按回车。\n"
               "Choose and remember your own password. Typing is hidden; press Enter when done.", flush=True)
         while True:
@@ -172,9 +182,6 @@ def password_for_start(state: Path, config: dict, stdin: bool) -> str:
             if password == getpass.getpass("再输一次 / Confirm password: "):
                 break
             print("两次密码不一致，请重试 / Passwords did not match; please try again.", flush=True)
-    else:
-        raise StartupError("Run from an interactive terminal to choose the administrator password. "
-                           "Automation may explicitly pass --password-stdin.")
     if not 12 <= len(password) <= 128 or password.isspace():
         raise StartupError("Choose an administrator password of 12-128 characters. No default password is provided.")
     return password
@@ -267,10 +274,13 @@ def open_management_page(base: str) -> None:
 def serve(state: Path, config: dict, args) -> None:
     assert_available(args.host, args.port)
     initializing = not initialized(state)
-    password = password_for_start(state, config, args.password_stdin)
+    if initializing and not args.password_stdin and not sys.stdin.isatty():
+        raise StartupError("Run from an interactive terminal to choose the administrator password. "
+                           "Automation may explicitly pass --password-stdin.")
     log = state / "startup.log"
     python, backend = prepare(state, log)
     client = prepare_desktop(state, log) if args.desktop else None
+    password = password_for_start(state, config, args.password_stdin)
     env = runtime_environment(state, config, password, args.host, args.port)
     base = env["HUB_PUBLIC_URL"]
     print("正在启动服务并准备数据库 / Starting SoduWork and applying database migrations...", flush=True)

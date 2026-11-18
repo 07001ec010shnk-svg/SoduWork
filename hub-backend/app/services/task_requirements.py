@@ -321,7 +321,7 @@ async def decorate(session, client, task, api, *, context=None, prepared=None, e
         prepared=prepared.repository_issues if prepared is not None else None)
 
 
-async def apply(session, client, task, data, *, creating=False):
+async def apply(session, client, task, data, *, creating=False, preserve_title=False):
     """Consume preparation fields. Keep execution updates in task_status.mark."""
     from . import task_access
     edit_facts = None
@@ -334,8 +334,11 @@ async def apply(session, client, task, data, *, creating=False):
     if "priority" in data and data["priority"] not in {"low", "normal", "high", "critical"}:
         raise HTTPException(400, "优先级不正确")
     if "title" in data:
-        data["title"] = str(data["title"] or "").strip()[:200]
-        if not data["title"]:
+        # Legacy PUT replay includes complete saved text, including undo after a
+        # successful DELETE. Never shorten that text while acknowledging a save.
+        title = str(data["title"] or "")
+        data["title"] = title if preserve_title else title.strip()[:200]
+        if not data["title"].strip():
             raise HTTPException(400, "请填写需求标题")
     if not creating and task.status != "todo" and {"kind", "acceptanceCriteria"}.intersection(data):
         raise HTTPException(409, "需求已进入执行，不能更改原完成标准")

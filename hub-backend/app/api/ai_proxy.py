@@ -121,6 +121,11 @@ def _err(status: int, msg: str, upstream: str = "") -> JSONResponse:
     if billing:
         body["error"] = {"message": model_errors.billing_message(billing),
                          "type": "soduwork_proxy_error", "status": status, **billing}
+    elif status in (400, 422) and model_errors.output_limit_exceeded(diagnostic):
+        # SDKs may retain only message, so keep the safe classification there too.
+        body["error"] = {"message": "Output token limit exceeded (output_token_limit_exceeded).",
+                         "type": "soduwork_proxy_error", "status": status,
+                         "code": "output_token_limit_exceeded"}
     elif status in (400, 413, 422) and local_context_policy.OVERFLOW.search(diagnostic):
         window = local_context_policy.error_window(diagnostic)
         message = "Context length exceeded."

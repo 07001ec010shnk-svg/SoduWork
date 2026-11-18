@@ -131,7 +131,7 @@
   /* Main navigation lists frequent actions in priority order. */
   const HOME_GROUPS = [
     ['', ['schedules', 'skills', 'library', 'notices']],
-    ['协作', ['history', 'aidesk'], 'collaboration'],
+    ['协作', ['history'], 'collaboration'],
   ];
   /* Account navigation groups personal work, security and preferences. */
   const SETTINGS_GROUPS = [
@@ -157,9 +157,8 @@
     ['schedules', '自动化', 'schedules'],
     ['library', '资料库', 'library'],
   ];
-  /* Team and briefs stay registered while their menu entries are temporarily hidden. */
+  /* AI team, team and briefs stay registered while their menu entries are temporarily hidden. */
   const RAIL_MORE_ITEMS = [
-    ['aidesk', 'AI 团队', 'aidesk'],
     ['memory', '记忆', 'memory'],
   ];
   const RAIL_MORE_KEYS = new Set(RAIL_MORE_ITEMS.map(([key]) => key));
@@ -380,6 +379,7 @@
     global.WorkspaceSidebarApps?.mount();
     refreshNoticeBadge();
     if (updateStatus) applyUpdateState(updateStatus);
+    global.ClientAuth?.renderIdentity?.();
   }
 
 
@@ -399,10 +399,12 @@
       '#wsPinnedToggle span': wsT('pinned', '置顶'),
       '#wsChatsToggle span': wsT('recentChats', '最近聊天'),
       '#wsRecentToggle span': wsT('recentTasks', '最近需求'),
-      '#wsMine .ws-profile-copy b': wsT('my', '我的'),
       '#wsHubState': root.querySelector('#wsMine')?.dataset.connection === 'connected'
         ? wsT('connected', '已连接 SoduWork 服务') : wsT('connecting', '服务连接中'),
     };
+    if (!global.ClientAuth?.snapshot?.().user) {
+      text['#wsMine .ws-profile-copy b'] = wsT('my', '我的');
+    }
     Object.keys(text).forEach((selector) => {
       const node = root.querySelector(selector);
       if (node && node.textContent !== text[selector]) node.textContent = text[selector];
@@ -459,7 +461,7 @@
         '<div class="ws-profile-row">' +
           '<button class="ws-profile" id="wsMine" type="button" data-connection="connecting" title="打开个人信息">' +
             '<span class="ws-avatar" aria-hidden="true"><span data-soduwork-user-initial>我</span></span>' +
-            '<span class="ws-profile-copy"><b>我的</b><small id="wsHubState">正在连接服务</small></span>' +
+            '<span class="ws-profile-copy"><b data-soduwork-user-name>我的</b><small id="wsHubState">正在连接服务</small></span>' +
             '<svg class="ws-profile-go" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>' +
         '</div>' +
       '</aside>' +

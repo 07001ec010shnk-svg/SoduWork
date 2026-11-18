@@ -101,6 +101,7 @@
     "请在 Agent 管理的 DeepSeek Harness 卡片上点「修复安装」。": "Click \"Repair installation\" on the DeepSeek Harness card in Agent Management.",
     "DeepSeek Harness 运行时清单不完整：": "The DeepSeek Harness runtime manifest is incomplete: ",
     "DeepSeek Harness 的 Windows 原生组件不完整（缺少 {value1}）。": "The Windows native components of DeepSeek Harness are incomplete (missing {value1}).",
+    "DeepSeek Harness 的当前平台原生组件不完整（缺少或损坏 {value1}）。": "The native components of DeepSeek Harness for this platform are incomplete (missing or damaged {value1}).",
     "DeepSeek Harness 存储兼容组件缺失，请更新 SoduWork": "The DeepSeek Harness storage compatibility component is missing; update SoduWork",
     "DeepSeek Harness 收到无效权限模式": "DeepSeek Harness received an invalid permission mode",
     "DeepSeek Harness 运行时临时目录必须与工作目录隔离，请调整工作目录或 Runner 数据目录": "The DeepSeek Harness runtime temp directory must be separate from the working directory; adjust the working directory or the Runner data directory",

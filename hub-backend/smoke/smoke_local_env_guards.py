@@ -106,7 +106,9 @@ def t_codex_temp_boundary() -> None:
             ok(again.get("CODEX_HOME") == runtime_home, "同一会话续聊复用同一 Codex 状态目录")
 
             pi_env = local_base._env_for(
-                local_base._PROFILES["pi"], {"local_workspace_root": work})
+                local_base._PROFILES["pi"], {"local_workspace_root": work,
+                    "llm": {"base": "http://127.0.0.1:9/v1", "model": "fixture", "key": "fixture"}},
+                runtime_ref="pi-temp-boundary")
             ok(pi_env.get("TEMP") == os.path.join(work, "temp"),
                "其他底座仍严格使用用户设定工作根下的 temp", pi_env.get("TEMP"))
         finally:
@@ -163,7 +165,10 @@ def t_remote_reinjection() -> None:
             for index in range(2):
                 current = {"llm": {"key": "synthetic-turn-%d" % index}}
                 admission = "comment:smoke-%d" % index
-                prepared = {**current, "_admissionKey": admission, "_inputImages": []}
+                # Remote follow-ups explicitly clear resources from a previous
+                # plugin turn before preparing this turn's inputs.
+                admitted = {**current, "_admissionKey": admission, "pluginResourceBundles": []}
+                prepared = {**admitted, "_inputImages": []}
                 message = {"op": "job.comment", "ref": ref, "text": "continue",
                            "turnId": "smoke-%d" % index, "cfg": current,
                            "_admitted": True, "_admissionKey": admission}
@@ -172,7 +177,7 @@ def t_remote_reinjection() -> None:
                         patch.object(local_stream, "comment_sync", return_value={"ok": True}) as comment:
                     result = asyncio.run(Runner._job(object.__new__(Runner), message))
                 forwarded.append(result.get("ok") is True and
-                    images.call_args.args == ({**current, "_admissionKey": admission},
+                    images.call_args.args == (admitted,
                                               [], os.path.join(store, "inputs")) and
                     comment.call_args.args == (prepared, ref, "continue") and
                     comment.call_args.args[0] is prepared and "_admissionKey" not in current)

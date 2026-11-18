@@ -346,8 +346,24 @@
   if (global.document?.readyState === 'loading') global.addEventListener('DOMContentLoaded', ready, { once: true });
   else ready();
   global.addEventListener('storage', event => {
-    if (event.key === 'soduwork_work_cfg_v5_locale' && event.newValue) setLocale(event.newValue, { persist: false, broadcast: false });
+    if (event.key !== 'soduwork_work_cfg_v5_locale' || !event.newValue) return;
+    // Queued events can contain an older choice. Read the current mirror so
+    // receiving a notification cannot write stale values back to other windows.
+    let latest = event.newValue;
+    try { latest = global.localStorage.getItem('soduwork_work_cfg_v5_locale'); } catch (_) {}
+    if (latest) setLocale(latest, { persist: false, broadcast: false });
   });
-  global.soduWorkAPI?.onLocaleChange?.(value => setLocale(value, { persist: false, broadcast: false }));
+  global.soduWorkAPI?.onLocaleChange?.(value => {
+    // Renderers save explicit choices before sending IPC. A delayed native echo
+    // must not replace that choice; other windows publish theirs to the same mirror.
+    let latest = value;
+    try {
+      if (global.localStorage.getItem('soduwork_work_cfg_v5_locale_explicit') === '1') {
+        const chosen = global.localStorage.getItem('soduwork_work_cfg_v5_locale');
+        if (LOCALES[chosen]) latest = chosen;
+      }
+    } catch (_) {}
+    setLocale(latest, { persist: false, broadcast: false });
+  });
   setLocale(currentLocale, { persist: false, initial: true });
 })(window);

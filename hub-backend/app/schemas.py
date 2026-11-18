@@ -108,8 +108,8 @@ class TaskCreate(BaseModel):
     visibility: str = "related"
     workScenarioName: str = ""
     workRouting: dict[str, Any] = Field(default_factory=dict)
-    title: str = "未命名"
-    source: str = ""
+    title: str = Field(default="未命名", max_length=200)
+    source: str = Field(default="", max_length=120)
     note: str = ""
     status: str = "todo"
     urgent: Optional[bool] = None
@@ -138,6 +138,17 @@ class TaskCreate(BaseModel):
     deps: list[str] = Field(default_factory=list)  # Prerequisite task IDs; all must complete before this task is ready.
 
 
+class TaskSyncCreate(TaskCreate):
+    """Replay pre-validation desktop outboxes and undo completed deletes losslessly.
+
+    PUT cannot distinguish an unsent legacy task from a new client-generated ID.
+    Its text fields intentionally retain the old contract; POST and PATCH enforce
+    current input limits. Ownership and managed-source checks still apply to PUT.
+    """
+    title: str = "未命名"
+    source: str = ""
+
+
 class TaskUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
     kind: Optional[str] = None
@@ -149,8 +160,8 @@ class TaskUpdate(BaseModel):
     requirementVersion: Optional[int] = None
     workScenarioName: Optional[str] = None
     workRouting: Optional[dict[str, Any]] = None
-    title: Optional[str] = None
-    source: Optional[str] = None
+    title: Optional[str] = Field(default=None, max_length=200)
+    source: Optional[str] = Field(default=None, max_length=120)
     note: Optional[str] = None
     status: Optional[str] = None
     urgent: Optional[bool] = None

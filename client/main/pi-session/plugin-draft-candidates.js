@@ -119,7 +119,9 @@ function describe(cwd, file) {
 function withinSnapshot(file, snapshot) {
   const since = Number(snapshot && (snapshot.pluginSince ?? snapshot.since)) || 0;
   if (!since) return true;
-  try { return fs.statSync(file.path).mtimeMs >= since; } catch (_) { return false; }
+  // Match the output inventory's millisecond precision so an indexed boundary
+  // draft cannot disappear before validation. Recheck the actual file time.
+  try { return Math.round(fs.statSync(file.path).mtimeMs) >= since; } catch (_) { return false; }
 }
 
 function sessionSince(manager) {

@@ -13,6 +13,11 @@ from ..services import audit, model_capabilities as capabilities, model_capabili
 router = APIRouter(prefix="/api/v1", tags=["models"])
 
 
+def _revision_conflict():
+    return HTTPException(409, "模型配置在检测期间已变更，请重新检测",
+                         headers={"X-Error-Code": "model_config_revision_changed"})
+
+
 async def _target(session, client, provider_id, model):
     providers = await model_catalog.effective_provider_map(session, client)
     if client is not None and provider_id in providers and not providers[provider_id].get("personal"):
@@ -68,7 +73,7 @@ async def _revalidate_principal(session, client_binding, admin_binding, request)
 
 
 async def check_saved(body, session, client=None, *, request=None, admin_binding=None):
-    if set(body) - {"providerId", "model", "checks"}:
+    if set(body) - {"providerId", "model", "checks", "expectedConfigRevision"}:
         raise HTTPException(400, "能力检测只接受已保存的服务和模型标识")
     provider_id, model = body.get("providerId"), body.get("model")
     checks = body.get("checks", list(probe.CHECKS))
@@ -77,6 +82,8 @@ async def check_saved(body, session, client=None, *, request=None, admin_binding
             or any(not isinstance(item, str) or item not in probe.CHECKS for item in checks)):
         raise HTTPException(400, "请选择已保存的模型和有效的检测项目")
     row, conf, slot, revision = await _target(session, client, provider_id, model)
+    if "expectedConfigRevision" in body and body["expectedConfigRevision"] != revision:
+        raise _revision_conflict()
     global_scope = capabilities.principal_scope(client, row, conf.get("keyFrom")) == "organization"
     client_binding = (client.id, client.user_ref, int(client.auth_version or 1)) if client is not None else None
     # Release the read transaction before waiting for network work.
@@ -91,7 +98,7 @@ async def check_saved(body, session, client=None, *, request=None, admin_binding
         client = await _revalidate_principal(session, client_binding, admin_binding, request)
         current, _, current_slot, current_revision = await _target(session, client, provider_id, model)
         if current_revision != revision or current_slot != slot:
-            raise HTTPException(409, "模型配置在检测期间已变更，请重新检测")
+            raise _revision_conflict()
         result.update({"providerId": provider_id, "model": model, "configRevision": revision})
         result = await capabilities.persist(session, slot, result, lease=lease)
         stored = True

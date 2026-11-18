@@ -31,11 +31,13 @@ if (typeof electron === 'string') {
   }
   app.whenReady().then(async () => {
     const fixture = path.join(root, 'bootstrap.html');
-    const scripts = ['components/client-auth/account-ui.js', 'components/client-auth/email-auth.js', 'components/client-auth/client-auth.js'];
+    const localeFiles = JSON.parse(fs.readFileSync(path.join(client, 'core/locales/manifest.json'), 'utf8'));
+    const scripts = [...localeFiles.map(file => 'core/locales/' + file), 'core/i18n.js',
+      'components/client-auth/account-ui.js', 'components/client-auth/email-auth.js', 'components/client-auth/client-auth.js'];
     const styles = ['theme/variables.css', 'components/client-auth/client-auth.css', 'components/client-auth/account-center.css'];
     fs.writeFileSync(fixture, '<!doctype html><html><head><meta charset="utf-8"><base href="' + pathToFileURL(client + path.sep).href + '">' +
       styles.map(file => '<link rel="stylesheet" href="' + file + '">').join('') + '</head><body><script>' +
-      `window.requests=[];window.fixtureDevice='u-unknown';window.mailReady=true;
+      `localStorage.setItem('soduwork_work_cfg_v5_locale','zh-CN');window.requests=[];window.fixtureDevice='u-unknown';window.mailReady=true;
       window.fixtureParams=new URLSearchParams(location.search);window.policyFailures=Number(fixtureParams.get('failures')||0);
       window.fixtureHub='http://fixture.invalid';window.fixtureUser=fixtureParams.has('transition')&&sessionStorage.getItem('fixture-active')==='yes'?{id:'fixture-account'}:null;
       window.loginReplies=[];window.SoduWorkAPI={hubBase:()=>fixtureHub,hubConfig:()=>({editable:false}),
@@ -51,6 +53,13 @@ if (typeof electron === 'string') {
     win.webContents.session.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_request, callback) => callback({ cancel: true }));
     await win.loadFile(fixture);
     await until('ClientAuth.snapshot().policy?.mailReady === true');
+    const statusText = 'document.querySelector(".soduwork-auth-status").textContent';
+    await js(`SoduWorkI18n.setLocale('en-US', {persist:false,broadcast:false});
+      dispatchEvent(new CustomEvent('soduwork-client-auth-required',{detail:{error:'TypeError: fetch failed'}}));`);
+    assert.equal(await js(statusText), 'Cannot connect to SoduWork. Check your network and try again.');
+    await js("SoduWorkI18n.setLocale('zh-CN', {persist:false,broadcast:false})");
+    assert.equal(await js(statusText), '暂时无法连接 SoduWork 服务，请检查网络后重试。');
+    report.cases.push('offline status is localized immediately and repaints when login language changes');
     await click('[data-auth-mode="register"]');
     await click('#soduWorkAuthAccount'); await win.webContents.insertText('new-user@example.test');
     assert.equal(await js("document.querySelector('[data-send-code]').disabled"), false);

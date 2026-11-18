@@ -50,6 +50,8 @@ python3 quality_gate.py --list
 
 `live` 层可能连接真实 Hub、Runner、代码平台、模型或业务库，默认拒绝执行，不能用来替代离线发布门禁。详细口径见 [`../docs/release-scope.md`](../docs/release-scope.md)。
 
+离线检查拥有各自的子进程树，并在清理完成后返回，包括命令先于后代进程退出的情况。在 Windows 上，门禁复用仓库中的 Windows PowerShell Job 辅助程序，确认 Job 分配成功后才允许命令执行。输出采集到私有临时文件，避免后代继承输出句柄导致超时后无限等待；失败报告保留超时前产生的输出。运行 `py -m unittest test_quality_gate_cleanup` 可验证当前平台上的真实进程清理回归。
+
 受权限控制的回合在结算或开始下一轮前，必须确认执行宿主已退出。已有可靠的 Agent 退出记录时，正常收尾最多等待 30 秒，例如冻结程序清理自己的解压目录；取消和权限变更仍使用较短的停止期限。终止无法确认时继续跟踪原进程并阻止替换，不能仅凭已有回答或终止请求成功就判定完成。可运行 `python3 -m unittest test_local_process_cleanup`，使用隔离子进程验证延迟退出与终止未确认的行为。
 
 冒烟脚本集中在 [`smoke/`](smoke/) 目录。单独运行时，在 `hub-backend/` 目录使用模块命令，例如 `python3 -m smoke.smoke_capabilities`；质量门禁会选择已登记的模块。单元测试和 `tests/` 集成辅助脚本保留现有位置。
@@ -66,6 +68,13 @@ DeepSeek ACP 适配器 0.4.40 和 0.4.41 可能在子代理仍运行时返回完
 
 工具活动结束后，DeepSeek Harness 可在原会话中从已保存的结果接着做，并使用更小的工具调用。自动恢复最多续跑一次，只有原生压缩成功后才能再续跑一次。持续达到上限时，会显示本轮未完成并保留进度，不再作为协议错误呈现。续跑成功会清除旧截断状态；协议错误和宿主清理失败仍优先处理。
 
+DeepSeek 运行时预检按归档锁定版本检查 Windows、macOS 和 Linux 的 x64/arm64
+sharp、koffi 和 ripgrep 包；macOS/Linux 还检查 libvips，Linux 区分 glibc 与 musl
+二进制。清单缺失、版本错误或关键加载器/二进制缺失会阻止激活临时安装，并使缓存的
+就绪结果失效。修复失败保留原运行时。执行 `python3 -m smoke.smoke_dsh_runtime`
+可验证离线平台矩阵、激活和缓存回归。这些静态检查不能证明任意二进制损坏或
+macOS Gatekeeper 已通过；目标平台仍需实际验证 ACP 和工具执行。
+
 ## 其他底座的终止结果
 
 托管安装和更新固定使用已验证版本：DeepSeek ACP 0.4.41、Kimi Code 2.6.2、Qwen Code 0.27.4。版本检查也以这些目标为准，包括本机已安装更高版本的情况。SoduWork 完成兼容性验证后再升级固定版本；读取安装状态不会替换本机软件。
@@ -78,7 +87,42 @@ Codex ACP 协商带版本的 `sessionFailure` 能力，在接受 `end_turn` 前�
 
 可在后端测试环境执行 `python3 -m unittest test_kimi_runtime test_qwen_runtime test_codex_acp_outcome test_acp_error_messages test_local_turn_outcome`。独立夹具 `e2e_kimi_outcome.py`、`e2e_qwen_turn_outcome.py` 和 `e2e_codex_acp_outcome.py` 使用明确指定的已安装底座及隔离本机回环模型，所需路径见各自 `--help`。Codex 验收还检查真实审批的批准、拒绝和命令输出，不调用付费模型服务。
 
+## 任务文本兼容
+
+通过 `POST /api/v1/tasks` 新建任务，以及 `PATCH` 或批量更新中明确提交的字段，
+标题最多 200 个字符、来源最多 120 个字符；超长输入会在写入前返回 422。
+读取历史记录、修改无关字段时保留原有文本。
+
+`PUT /api/v1/tasks/{id}` 是桌面端幂等同步和撤销删除使用的接口。
+升级前尚未同步的任务、删除后恢复的任务都可能没有服务端记录，因此该接口接收完整历史文本，
+有意不套用 POST/PATCH 的文本长度限制；账号所有权和平台管理来源限制继续生效。
+
+迁移 `0092_task_text_storage` 无损扩容 PostgreSQL 的任务文本列，
+也覆盖尚未使用版本化迁移的旧数据库；已有 SQLite 表不需要重建。
+先部署 Hub 并完成迁移，再升级桌面端。桌面端保留完整文本，
+对仅因旧长度校验而阻塞的 PUT 队列记录重试一次；再次被拒绝则保留阻塞，等待明确处理。
+存在超长数据时，降级会拒绝缩窄字段。升级前请备份数据库和匹配版本的程序。
+
 ## 连数据库
+
+领域排序接受 32 位有符号整数及旧客户端使用的十进制整数字符串。非法值、
+布尔值、小数和越界值会在修改记录前返回 HTTP 400。PATCH 省略排序或传入 null
+时保留原排序，创建时仍默认使用 0。调度数字字段和客户端更新进度使用相同的
+整数校验，并保留原有范围限制和可选字段默认值。新提交的调度时区必须是有效的
+IANA 时区；省略时保留原配置，null 或空字符串沿用默认时区。历史无效时区仍可
+通过默认时区回退正常读取。
+
+迁移 `0091_domain_sort_validation` 修复 SQLite 中存储类型或范围异常的历史领域
+排序，保留正常排序、领域 ID 和关联关系。排序仍有空间时，修复项排列在正常项
+之后；若已达到上限，则在上限并列，并按创建时间和 ID 排序。每次修复会在同一
+事务中先写入 `domain.sort_repair`
+审计记录，保存原存储类型、原值的无损表示及替换值。首次接管旧版未使用 Alembic
+的数据库时也会执行此修复，重复运行不会重复处理。PostgreSQL 的领域数据保持不变。
+升级前请备份数据库；降级不会恢复异常值。管理员可通过审计记录复核并调整排序。
+
+离线回归命令：`python3 -m unittest test_api_integer_validation
+test_domain_sort_validation test_domain_sort_migration
+test_schedule_update_input_validation`。这些测试已登记到发布质量检查清单。
 
 在 `.env` 里设 `DATABASE_URL`：
 
@@ -95,6 +139,18 @@ Codex ACP 协商带版本的 `sessionFailure` 能力，在接受 `end_turn` 前�
 `skills_cfg` 记录中初始化版本化策略。新安装和旧策略首次升级会开放所有内置技能，
 包括管理员以前关闭的项。升级后管理员再次关闭的项会跨重启保留，后来新增的内置
 技能默认开放。个人选择与导入包审批保持独立。详见[技能加载说明](../skills/README.zh-CN.md)。
+
+## OpenCode 数据隔离与旧会话
+
+受管 OpenCode 的数据库、数据、状态和缓存均存放在 Runner 数据目录下的 `agents/opencode/` 中。继承的 `OPENCODE_DB` 和 XDG 路径不能再将受管执行指向个人 OpenCode。父 Runner 与独立 ACP 桥使用同一个私有数据库；用户主目录和本轮注入的模型配置保持不变。
+
+新建和恢复会话都会在启动前检查目录，拒绝逃出此私有目录的子路径，以及数据库和 SQLite 附属文件的硬链接。明确重定向的 Runner 根目录，以及仍位于其 OpenCode 目录内的链接继续支持。不安全的目录布局会阻止 OpenCode 启动，也不会新建替代会话，需要修复后重试。
+
+归档的 SoduWork 会话续聊时，以已有原生会话 ID 和工作目录确定需要恢复的历史。从稳定的只读文件快照中，将兼容的 v1 会话、消息、内容片段和待办记录，以及相关子会话导入私有数据库。不导入个人账号、凭据或项目权限，也不修改原数据库及其附属文件。找不到原会话、所选会话或子会话含不兼容的 v2 历史、存在进行中的撤销状态或远端工作区绑定时，会停止恢复并说明原因；不会静默新建空会话或降级个人数据库。即使数据库仍含 v1 表，也能识别相关 v2 历史，同时不会阻止无关的 v1 会话迁移。如果读取快照期间个人数据库仍在变化，请关闭个人 OpenCode 后重试。已有会话归档和原生 ID 保留。
+
+若私有会话已经存在但为空，能够核实的原始历史会阻止继续使用该空会话，同时保留私有数据库。个人存储缺失或不可用时，合法的私有会话仍可恢复。压缩期间取消执行，即使同时发生历史恢复错误，也会正确结算为已停止；过期的恢复过程不能覆盖新一轮执行。
+
+使用固定的受管二进制和准备好的 SDK 依赖，运行 `SODUWORK_TEST_OPENCODE_BIN=/absolute/path/to/opencode python3 -m unittest test_opencode_native_config`，可通过本地回环模型验证原生及 ACP 数据隔离和续聊。检查使用合成数据库，不访问个人历史或生产模型。
 
 ## OpenCode 回合完成状态
 

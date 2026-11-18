@@ -98,6 +98,7 @@
     "请在 Agent 管理的 DeepSeek Harness 卡片上点「修复安装」。": "Agent 管理 の DeepSeek Harness カードで「インストールを修復」をクリックしてください。",
     "DeepSeek Harness 运行时清单不完整：": "DeepSeek Harness ランタイムのマニフェストが不完全です：",
     "DeepSeek Harness 的 Windows 原生组件不完整（缺少 {value1}）。": "DeepSeek Harness の Windows ネイティブコンポーネントが不完全です（{value1} が不足）。",
+    "DeepSeek Harness 的当前平台原生组件不完整（缺少或损坏 {value1}）。": "DeepSeek Harness の現在のプラットフォーム用ネイティブコンポーネントが不完全です（{value1} が不足または破損）。",
     "DeepSeek Harness 存储兼容组件缺失，请更新 SoduWork": "DeepSeek Harness のストレージ互換コンポーネントが不足しています。SoduWork を更新してください",
     "DeepSeek Harness 收到无效权限模式": "DeepSeek Harness が無効な権限モードを受け取りました",
     "DeepSeek Harness 运行时临时目录必须与工作目录隔离，请调整工作目录或 Runner 数据目录": "DeepSeek Harness ランタイムの一時ディレクトリは作業ディレクトリと分離する必要があります。作業ディレクトリか Runner のデータディレクトリを調整してください",

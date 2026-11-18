@@ -449,7 +449,8 @@ async def seed_domains(session: AsyncSession) -> None:
 
 
 async def list_domains(session: AsyncSession) -> list[dict]:
-    res = await session.execute(select(models.Domain).order_by(models.Domain.sort, models.Domain.created_at))
+    res = await session.execute(select(models.Domain).order_by(
+        models.Domain.sort, models.Domain.created_at, models.Domain.id))
     return [domain_to_api(d) for d in res.scalars().all()]
 
 

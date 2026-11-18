@@ -85,7 +85,7 @@ function create({ app, session, identityOf = () => require('./requirement-contex
     const current = currentActor(captured);
     return row && scoped.readable(row, current) ? row : null;
   }
-  async function lifecycle(id, action, identity) {
+  async function lifecycle(id, action, identity, options) {
     const captured = scoped.actor();
     if (identity && access.readScope(identity) !== captured.readScope) throw Error('账号或服务已切换，请重新读取会话');
     const row = await resolve(id, captured);
@@ -98,8 +98,27 @@ function create({ app, session, identityOf = () => require('./requirement-contex
     }
     scoped.guard(captured);
     const result = await store.lifecycle(row.id, action, { account: accountId(captured.identity),
-      hub: captured.identity?.hub, device: captured.identity?.clientId });
+      hub: captured.identity?.hub, device: captured.identity?.clientId }, options);
     scoped.guard(captured); return result;
+  }
+  async function deleteCloudCaches(sourceIds) {
+    const captured = scoped.actor(), ids = [...new Set(sourceIds)], removed = [];
+    for (let offset = 0; offset < ids.length; offset += 200) {
+      const batch = ids.slice(offset, offset + 200);
+      const copies = await store.sourceCopies(batch);
+      currentActor(captured);
+      for (const copy of copies) {
+        // Reuse the display proof: an import or explicitly saved copy is not
+        // the automatic cache, even when it points at the same cloud source.
+        if (!batch.includes(cloudCacheSourceId(copy, captured.identity))) continue;
+        currentActor(captured);
+        const result = await lifecycle(copy.id, 'delete', captured.identity, { preserveCopies: true });
+        currentActor(captured);
+        if (!result?.ok) throw Error('清理云端会话的自动缓存失败，请重试');
+        removed.push(copy.id);
+      }
+    }
+    return removed;
   }
   async function accountDisplayLinks(items, identity) {
     if (!identity?.clientId || !identity?.session || !accountId(identity)) return [];
@@ -343,7 +362,7 @@ function create({ app, session, identityOf = () => require('./requirement-contex
     scoped.guard(captured);
     return scoped.directory(after, limit, captured);
   }
-  return { resolve, read, open, register, projectRows, lifecycle, remoteLifecycle, accountDisplayLinks, capture, observe, store, directory, preserveLegacyOutbox,
+  return { resolve, read, open, register, projectRows, lifecycle, deleteCloudCaches, remoteLifecycle, accountDisplayLinks, capture, observe, store, directory, preserveLegacyOutbox,
     captureScope: () => scoped.actor(), guardScope: captured => scoped.guard(captured),
     async indexedRow(id) {
       const captured = scoped.actor(), row = await store.get(id);

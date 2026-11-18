@@ -20,10 +20,12 @@ function fixture() {
   box.window = box; vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../api.js'), 'utf8'), box);
   return { api: box.SoduWorkAPI, bridge: box.soduWorkAPI.localModels, requests, localChecks };
 }
-test('desktop Hub capability requests serialize only the three allowed public fields', async () => {
+test('desktop Hub capability requests forward the optional target revision and omit local IPC fields', async () => {
   const f = fixture();
   await f.api.checkMyModelCapabilities({ providerId: 'managed', model: 'saved-model', checks: ['imageInput'], localOnly: false, requestId: 'ui-request' });
   assert.deepEqual(f.requests[0].body, { providerId: 'managed', model: 'saved-model', checks: ['imageInput'] });
+  await f.api.checkMyModelCapabilities({ providerId: 'managed', model: 'saved-model', expectedConfigRevision: 'saved-revision', requestId: 'ui-request' });
+  assert.deepEqual(f.requests[1].body, { providerId: 'managed', model: 'saved-model', expectedConfigRevision: 'saved-revision' });
 });
 test('device capability checks use the exact saved opaque model reference and its target revision', async () => {
   const f = fixture();

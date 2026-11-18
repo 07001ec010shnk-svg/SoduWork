@@ -1,5 +1,10 @@
 (function (global) {
   const messages = {
+    "model.detail.请求的最大输出 Token 超过模型服务限制；请在模型配置中调整“最大输出 Token”，并核对“上下文窗口”": "The requested output budget exceeds the model service limit. Adjust “Maximum output tokens” in model settings and check “Context window”.",
+    "留空时使用 16384 Token。请按服务实际限制填写；能力检测不验证最大输出上限。": "When blank, 16384 tokens are used. Set this to your provider’s actual limit; capability tests do not verify the maximum output limit.",
+    "原设备凭据无法验证": "The original device credentials could not be verified.",
+    "原设备凭据无法验证，已保留原记录": "The original device credentials could not be verified. The original record has been preserved.",
+    "原设备凭据尚未迁移，请重试连接": "The original device credentials have not been migrated yet. Please retry the connection.",
     "待整理的需求；“待补充”表示仍需完善背景或完成标准": "Issues to organize; “More information needed” means the background or acceptance criteria still need to be completed",
     "全部可见": "All visible",
     "我提出、负责或执行的需求，以及待我确认或我作为仓库成员参与的需求。": "Issues I created, own, or execute, plus issues awaiting my confirmation or involving me as a repository member.",
@@ -129,6 +134,8 @@
     "model.detail.当前上下文超过模型容量，历史和本轮输入已保留": "The context exceeds the model's capacity. Your history and current input are saved.",
     "model.detail.当前模型不接受图片输入，请切换支持图片的模型或启用视觉适配": "This model does not accept images. Choose an image-capable model or enable vision adaptation.",
     "model.detail.模型服务拒绝了当前凭据或模型权限": "The model service rejected these credentials or model permissions.",
+    "model.detail.模型请求被拒绝": "The model request was rejected.",
+    "model.detail.工具已完成，请求模型继续生成时被拒绝": "The tool completed, but the request to continue generating was rejected.",
     "model.detail.模型服务地址或模型不存在": "The model service URL or model does not exist.",
     "model.detail.模型服务当前繁忙或额度受限": "The model service is busy or its allowance is limited.",
     "model.detail.模型服务暂时不可用": "The model service is temporarily unavailable.",
@@ -194,6 +201,7 @@
   "当前对话尚未接入插件依赖的连接器：{names}。请在插件或连接器设置中完成连接并启用后重试": "This chat is missing connectors required by the plugin: {names}. Connect and enable them in plugin or connector settings, then retry.",
   "当前对话底座不支持插件声明的能力：{names}": "This chat's agent does not support capabilities required by the plugin: {names}.",
   "这一轮没发出去（{reason}）": "This run was not sent ({reason})",
+  "这一轮没跑成（{reason}）": "This turn failed ({reason})",
   "打不开对话（{reason}）": "Could not open chat ({reason})",
   "开不了对话（{reason}）": "Could not open chat ({reason})",
   "需求执行失败（{reason}）": "Issue execution failed ({reason})",

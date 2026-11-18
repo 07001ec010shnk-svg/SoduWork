@@ -11,7 +11,7 @@ function renderer(deps = {}) {
   return window.renderMemoryForTest;
 }
 test('memory preview parses Markdown and passes all generated HTML through a restricted sanitizer', () => {
-  const marked = require('../vendor/markdown/marked.umd.js');
+  const marked = require('../core/markdown.js');
   let calls = 0;
   const render = renderer({ marked, DOMPurify: { sanitize(html, options) {
     calls++;

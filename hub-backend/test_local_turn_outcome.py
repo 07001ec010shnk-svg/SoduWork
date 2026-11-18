@@ -98,8 +98,9 @@ class TurnOutcomeTests(unittest.TestCase):
 
     def test_model_diagnostics_classify_without_publishing_provider_body(self):
         for value, expected in (
-            ('401 {"secret":"private-key"}', "HTTP 401"),
-            ({"error": {"status": 403, "message": "Bearer private-key"}}, "HTTP 403"),
+            ('401 {"secret":"private-key"}', "请检查模型授权"),
+            ({"error": {"status": 403, "message": "Bearer private-key"}}, "模型请求被拒绝（HTTP 403）"),
+            ({"error": {"status": 403, "code": "1113", "message": "private-key"}}, "供应商错误码 1113"),
             ('404 status code (no body)', "HTTP 404"),
             ('429 {"error":{"code":"limited","message":"private-key"}}', "HTTP 429"),
             ('502 <html>private-key https://internal.test</html>', "HTTP 502"),
@@ -112,6 +113,19 @@ class TurnOutcomeTests(unittest.TestCase):
                 self.assertIn(expected, public)
                 self.assertNotIn("private-key", public)
                 self.assertNotIn("internal.test", public)
+
+    def test_unclassified_pi_403_projects_only_the_safe_refusal_in_the_runner_receipt(self):
+        terminal = {}
+        message = {"role": "assistant", "content": [], "stopReason": "error",
+                   "errorMessage": '403 {"error":{"message":"Bearer fixture-key https://fixture.invalid fixture-prompt"}}'}
+        for event in ({"type": "message_end", "message": message},
+                      {"type": "turn_end", "message": message},
+                      {"type": "agent_end", "messages": [message]}):
+            local_stream._on_line(self.ref, json.dumps(event), terminal)
+        self.finish(terminal).assert_not_called()
+        page = ai_local.session_sync({}, self.ref)
+        self.assertEqual(page["status"], "failed")
+        self.assertEqual(page["error"], "模型请求被拒绝（HTTP 403）")
 
     def test_pi_error_never_overwrites_an_unrelated_terminal_failure(self):
         terminal = {"isError": True, "result": "execution policy rejected"}

@@ -84,6 +84,83 @@ test('two failed repairs block completion and retain privacy-safe diagnostics',a
   assert.equal(record.diagnostic.file,candidates.DRAFT_NAME);
   assert.doesNotMatch(JSON.stringify(record),/secret-value|plugin-static-gate-/);
 });
+test('repair runtime rejection reaches the queue receipt without replacing static draft diagnostics',async t=>{
+  const {createTurnQueue}=require('../main/pi-session/turn-queue');
+  const f=fixture(t),observed=[];let repairs=0;
+  const queue=createTurnQueue();
+  const item=queue.add({text:'Generate plugin',options:{afterTurn:(state,result)=>observed.push({state,result})}});
+  const reason='模型请求被拒绝（HTTP 403）';
+  const snapshot={status:'unreachable',completion:{reason:'error',error:reason,retryable:false}};
+  const result=await queue.run(queue.take(),async()=>{
+    const turn=await gate.begin({handle:f.handle,repair:async()=>{
+      repairs++;return {ok:false,reason,retrySafe:false,snapshot};
+    }});
+    fs.writeFileSync(f.file,'{invalid');
+    return turn.finish({ok:true,modelRecoveryGoal:true});
+  });
+  assert.equal(result.ok,false);assert.equal(result.failureKind,'plugin-repair');
+  assert.equal(result.reason,reason);assert.equal(result.snapshot,snapshot);
+  assert.equal(result.modelRecoveryGoal,true);assert.equal(result.retrySafe,false);
+  assert.equal(repairs,1);assert.equal(fs.readFileSync(f.file,'utf8'),'{invalid');
+  assert.equal(observed[0].state,'failed');assert.equal(observed[0].result.reason,reason);
+  assert.equal(queue.state().failure.reason,reason);
+  assert.equal(queue.active(),null);assert.equal(await item.completion,result);
+  const record=gate.records(f.handle)[0];
+  assert.equal(record.state,'invalid');assert.doesNotMatch(record.diagnostic.message,/HTTP 403|repair did not complete/);
+});
+test('repair exceptions publish only classified safe diagnostics and stop after one attempt',async t=>{
+  for(const error of [Error('403 <html>https://fixture.invalid/private?token=synthetic-secret</html>'),
+    Error('unclassified synthetic-secret')]) {
+    const f=fixture(t);let calls=0;
+    const turn=await gate.begin({handle:f.handle,repair:async()=>{calls++;throw error;}});
+    fs.writeFileSync(f.file,'{invalid');const result=await turn.finish({ok:true});
+    assert.equal(result.failureKind,'plugin-repair');assert.equal(result.ok,false);
+    assert.equal(calls,1);assert.equal(result.retrySafe,false);
+    assert.doesNotMatch(JSON.stringify(result),/synthetic-secret|fixture.invalid|html/);
+    assert.equal(result.reason,error.message.startsWith('403')?'模型请求被拒绝（HTTP 403）':'Plugin repair failed');
+  }
+});
+test('repair retains Runner failure metadata and native cancellation, pause and recovery receipts',async t=>{
+  const failures=[
+    {ok:false,failureKind:'model-auth',reason:'Expired model ticket',retrySafe:true,requiresModelChange:true},
+    {ok:true,cancelled:true,manualStop:true},
+    {ok:true,paused:true,reason:'Waiting for approval'},
+    {ok:true,recovering:true,reason:'Native recovery pending'},
+    {ok:false,paused:true,reason:'Native failure while paused',retrySafe:false},
+  ];
+  for(const native of failures) {
+    const f=fixture(t);let calls=0;
+    const snapshot={status:native.ok?'waiting-user':'unreachable'};
+    const turn=await gate.begin({handle:f.handle,repair:async()=>{calls++;return {...native,snapshot};}});
+    fs.writeFileSync(f.file,'{invalid');const result=await turn.finish({ok:true,modelRecoveryGoal:false});
+    assert.deepEqual(result,{ok:true,modelRecoveryGoal:false,...native,snapshot});
+    assert.equal(calls,1);assert.equal(gate.records(f.handle)[0].state,'invalid');
+  }
+});
+test('changed ownership still fences a late runtime repair failure',async t=>{
+  const f=fixture(t);
+  const turn=await gate.begin({handle:f.handle,repair:async()=>{
+    f.handle.deliveryOwner={account:'replacement'};
+    return {ok:false,reason:'Previous account runtime error',snapshot:{status:'unreachable'}};
+  }});
+  fs.writeFileSync(f.file,'{invalid');const result=await turn.finish({ok:true});
+  assert.equal(result.cancelled,true);assert.equal(result.manualStop,true);
+  assert.equal(result.reason,undefined);assert.deepEqual(gate.records(f.handle),[]);
+});
+test('a stopped repair preserves a confirmed pause only while its permission revision remains current',async t=>{
+  for(const changedPolicy of [false,true]) {
+    const f=fixture(t);let stopped=false,revision=1;
+    const turn=await gate.begin({handle:f.handle,cancelled:()=>stopped,
+      pauseConfirmed:()=>revision===1,repair:async()=>{
+        stopped=true;if(changedPolicy)revision++;
+        return {ok:true,paused:true,snapshot:{status:'aborted'}};
+      }});
+    fs.writeFileSync(f.file,'{invalid');const result=await turn.finish({ok:true});
+    assert.equal(result.ok,true);
+    assert.equal(result.paused,changedPolicy ? undefined : true);
+    assert.equal(result.cancelled,changedPolicy ? true : undefined);
+  }
+});
 test('cancellation during preflight stops repair and never publishes ready',async t=>{
   const f=fixture(t);let cancelled=false,calls=0;
   const turn=await gate.begin({handle:f.handle,cancelled:()=>cancelled,

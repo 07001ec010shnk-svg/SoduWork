@@ -9,12 +9,25 @@ async function fixture(t, fixes, options = {}) {
   const file = path.join(root, 'soduwork-plugin-draft.json'), calls = [], observed = [];
   let round = 1, exposedInvalidCompletion = false;
   const body = { template: 'method', key: 'draft-check', name: 'Draft check', version: '1.0.1', description: 'Fixture', instructions: 'Summarize input' };
-  const write = valid => fs.writeFileSync(file, valid ? JSON.stringify(body) : '{"name":"invalid "quote""}');
+  const write = valid => {
+    fs.writeFileSync(file, valid ? JSON.stringify(body) : '{"name":"invalid "quote""}');
+    if (Number.isFinite(options.writeAt)) fs.utimesSync(file, options.writeAt / 1000, options.writeAt / 1000);
+    else if (options.fileTime) fs.utimesSync(file, options.fileTime, options.fileTime);
+  };
+  if (options.existingInvalid) write(false);
   const runtime = { async rpc(op, value) {
     calls.push({ op, value });
     if (op === 'job.dispatch') {
       fs.writeFileSync(path.join(root, 'requested-report.txt'), 'Requested report');
-      write(Boolean(options.validFirst));
+      if (options.htmlOnly) {
+        fs.writeFileSync(path.join(root, 'report.html'), '<!doctype html><h1>Preview</h1>');
+        if (options.htmlOnly === 'manifest') {
+          fs.mkdirSync(path.join(root, '.soduwork'));
+          fs.writeFileSync(path.join(root, '.soduwork/delivery.json'), JSON.stringify({
+            schemaVersion: 1, deliverables: [{ path: 'report.html' }],
+          }));
+        }
+      } else if (!options.leaveDraftUntouched) write(Boolean(options.validFirst));
       return { ok: true, data: { ok: true, ref: _uuidV5('9af442c8-cd1d-4b91-a668-22da2b2635bf', value.dispatchId) } };
     }
     if (op === 'job.comment') { round++; write(options.goalScenario && round === 2 ? false : fixes); if (options.switchOwnerOnRepair) handle.deliveryOwner = 'changed-owner'; return { ok: true, data: { ok: true, state: 'running' } }; }
@@ -27,7 +40,10 @@ async function fixture(t, fixes, options = {}) {
   const model = { ok: true, model: { id: 'fixture', key: 'fixture', input: ['text'] } }, app = { getPath: () => root };
   const adapter = createRunnerRuntimeAdapter({ app, runnerRuntime: runtime, runtimeSpec: { ...catalog.runtime('opencode'), goalMode: 'native' },
     modelConfig: { fetchModel: async () => model, fetchSelection: async () => model } });
-  const session = await adapter.createSession({ identity: {}, native: { runner: { openOptions: { app, cwd: root, ref: 'chat-plugin-gate', intent: options.goalScenario ? 'goal' : '' } } } });
+  const session = await adapter.createSession({ identity: {}, native: { runner: { openOptions: {
+    app, cwd: root, ref: 'chat-plugin-gate', intent: options.goalScenario ? 'goal' : '',
+    resolvePlugins: async ids => ({ items: ids.map(pluginId => ({ pluginId, name: 'Plugin Developer', context: 'Create a reusable plugin package.' })) }),
+  } } } });
   const handle = getRunnerSessionDetails(session).handle;
   handle.on((_event, snapshot) => {
     if (snapshot.status === 'idle' && fs.existsSync(file)) {
@@ -35,9 +51,21 @@ async function fixture(t, fixes, options = {}) {
     }
   });
   t.after(async () => { await session.dispose(); await delay(20); fs.rmSync(root, { recursive: true, force: true }); });
-  const turn = handle.submit('Make a plugin', [], { afterTurn: (state, result) => observed.push({ state, result }) });
+  const turn = handle.submit('Make a plugin', [], { pluginIds: options.htmlOnly ? ['local:plugin-builder'] : [],
+    afterTurn: (state, result) => observed.push({ state, result }) });
   return { turn, handle, calls, observed, file, invalidCompletion: () => exposedInvalidCompletion };
 }
+
+for (const source of ['manifest', 'inferred']) test('Runner selected authoring plugin cannot complete with only ' + source + ' HTML', async t => {
+  const f = await fixture(t, true, { htmlOnly: source }), result = await f.turn.completion;
+  assert.equal(result.ok, true, result.reason);
+  assert.equal(f.calls.filter(row => row.op === 'job.comment').length, 1);
+  assert.equal(f.calls.find(row => row.op === 'job.comment').value.recordUser, false);
+  assert.equal(JSON.parse(fs.readFileSync(f.file, 'utf8')).key, 'draft-check');
+  assert.equal(f.handle.outputSnapshot().pluginValidation[0].state, 'ready');
+  assert.equal(f.observed.length, 1);
+  assert.match(fs.readFileSync(path.join(path.dirname(f.file), 'report.html'), 'utf8'), /Preview/);
+});
 test('Runner repairs the final draft before logical success and without a duplicate user message', async t => {
   const f = await fixture(t, true), result = await f.turn.completion;
   assert.equal(result.ok, true);
@@ -64,11 +92,53 @@ test('Runner stops after two invalid repairs and reports logical failure', async
   assert.equal(f.observed[0].state, 'failed');
   assert.equal(f.handle.outputSnapshot().pluginValidation[0].state, 'invalid');
 });
+test('Runner validates draft writes at the rounded session boundary', async t => {
+  const since = 1700000000123;
+  t.mock.method(Date, 'now', () => since);
+  for (const fixes of [false, true]) {
+    const f = await fixture(t, fixes, { writeAt: since - 0.125 });
+    const result = await f.turn.completion;
+    const mtime = fs.statSync(f.file).mtimeMs;
+    assert.ok(mtime < since && Math.round(mtime) === since, 'The fixture must exercise fractional filesystem precision');
+    assert.equal(result.ok, fixes);
+    assert.equal(f.calls.filter(row => row.op === 'job.comment').length, fixes ? 1 : 2);
+    assert.equal(f.observed[0].state, fixes ? 'completed' : 'failed');
+    assert.equal(f.handle.outputSnapshot().pluginValidation[0].state, fixes ? 'ready' : 'invalid');
+    if (!fixes) assert.equal(result.failureKind, 'plugin-validation');
+  }
+});
 test('Runner identity change during draft repair ends validation as cancelled', async t => {
   const f = await fixture(t, true, { switchOwnerOnRepair: true }), result = await f.turn.completion;
   assert.equal(result.cancelled, true);
   assert.equal(f.handle.snapshot().status, 'aborted');
   assert.equal(f.observed[0].state, 'stopped');
+});
+
+test('new invalid drafts cannot bypass Runner validation when file time precedes the conversation', async t => {
+  const fileTime = new Date(Date.now() - 60000);
+  const f = await fixture(t, false, { fileTime }), result = await f.turn.completion;
+  assert.equal(result.ok, false);
+  assert.equal(result.failureKind, 'plugin-validation');
+  assert.equal(f.calls.filter(row => row.op === 'job.comment').length, 2);
+  assert.equal(f.observed[0].state, 'failed');
+  assert.equal(f.handle.outputSnapshot().pluginValidation[0].state, 'invalid');
+});
+
+test('backdated draft repair still cancels when the Runner owner changes', async t => {
+  const f = await fixture(t, true, { fileTime: new Date(Date.now() - 60000), switchOwnerOnRepair: true });
+  assert.equal((await f.turn.completion).cancelled, true);
+  assert.equal(f.handle.snapshot().status, 'aborted');
+  assert.equal(f.observed[0].state, 'stopped');
+});
+
+test('an untouched invalid draft predating a Runner conversation is not repaired or exposed', async t => {
+  const f = await fixture(t, false, { fileTime: new Date(Date.now() - 60000),
+    existingInvalid: true, leaveDraftUntouched: true });
+  assert.equal((await f.turn.completion).ok, true);
+  assert.equal(f.calls.filter(row => row.op === 'job.comment').length, 0);
+  const snapshot = f.handle.outputSnapshot();
+  assert.equal(snapshot.files.some(row => row.path === f.file), false);
+  assert.deepEqual(snapshot.pluginValidation, []);
 });
 test('Runner resumed native goal validates the generated draft before completing', async t => {
   const f = await fixture(t, true, { validFirst: true, goalScenario: true });

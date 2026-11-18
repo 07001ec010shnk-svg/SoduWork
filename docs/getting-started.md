@@ -18,14 +18,16 @@
    | macOS | 双击 `start-desktop.command` |
    | Linux 图形桌面 | 在该目录打开终端，运行 `sh start.sh --desktop` |
 
-4. 第一次为账号 `admin` 设置自己的密码，长度 **12–128 个字符**，再输入一次确认。密码输入时没有字符或星号；输入完按回车即可。输错会提示重新输入，不需要关闭窗口。之后启动不会重新设置密码。
-5. 保持窗口打开。启动器自动安装依赖、构建管理页面、准备数据库并打开客户端。首次依赖下载可能耗时数分钟；长步骤每隔约 15 秒显示仍在进行。可以从窗口打印的 `startup.log` 路径查看详情。
+4. 保持窗口打开，等待启动器安装依赖、构建管理页面并准备桌面运行环境。首次下载可能需要几分钟，耗时较长的步骤每隔约 15 秒显示进度。如果准备失败，请查看窗口给出的 `startup.log`，排除故障后重新运行同一条命令。
+5. 准备成功后，为账号 **`admin`** 设置 **12–128 个字符**的密码，再输入一次确认。输入时不会显示字符或星号，每次输完按回车。输错会提示重新输入。随后启动器初始化数据库并打开客户端。账号创建成功后，后续启动沿用这个密码。
 
 不需要手动创建数据库、安装 Docker、安装 Git、准备 `.env` 或分别运行三个工程的安装命令。首次需联网下载依赖，后续复用已安装内容。
 
 启动器会在专用 `venv/` 中安装 Hub 和 Runner 两套依赖，检查 Runner 所需的 Python 模块，并把同一解释器交给桌面端。使用此入口无需另建 `hub-backend/.venv`。如果 Agent 管理提示源码 Runner 环境不完整，请退出源码启动会话后重跑同一入口，保留原数据目录。
 
-Windows 桌面启动还会在本实例的应用副本中准备并校验命令运行环境（PortableGit），供 Agent 使用 Bash、Git 和常用命令。无需单独安装 Git 或配置 WSL。后续启动会保留运行环境和下载缓存，并再次检查可用性；准备失败时查看 `startup.log`，修复网络后重跑同一入口。
+服务端和桌面端准备期间，npm、pip 和 Electron 下载缓存默认分别写入数据目录下的 `cache/npm`、`cache/pip` 和 `cache/electron`。非空的 `npm_config_cache`、`PIP_CACHE_DIR` 和 `electron_config_cache` 设置会保留其显式指定的位置，这些位置可以在数据目录之外。所有平台的准备流程还会创建 `cache/tmp`，并为子进程设置 `TMPDIR`、`TEMP` 和 `TMP`，让下载、解包和构建使用所选磁盘，不再沿用系统临时目录；当前终端的环境变量不变。停止启动器后，备份或迁移时可以跳过可再生的 `cache/`。
+
+Windows 桌面启动还会在本实例的应用副本中准备并校验命令运行环境（PortableGit），供 Agent 使用 Bash、Git 和常用命令。无需单独安装 Git 或配置 WSL。后续启动会保留运行环境和下载缓存，并再次检查可用性；准备失败时查看 `startup.log`，解决日志报告的问题后重跑同一入口。
 
 ## 怎么判断启动成功
 
@@ -112,6 +114,17 @@ Administrator: admin
 .\start.cmd --check --desktop
 ```
 
+检查通过后，在 PowerShell 中运行 `.\start.cmd --desktop`；在命令提示符（CMD）中运行 `start.cmd --desktop`。两种终端都可使用，不需要避开 CMD。
+
+Git Bash 中的 `sh start.sh --desktop` 并非无效命令，但它通过 `PATH` 查找 Python，与 Windows 入口的选择方式不同。`start.cmd` 在有 Python 启动器 `py` 时先尝试 Python 3.12，再尝试 `py -3`；没有 `py` 时才使用 `PATH` 中的 `python`。安装了 Python 3.13 等受支持版本，不代表两个终端会选中同一个解释器。
+
+提示 Python 版本过低或找不到解释器时，先在原终端查看 `python --version`；装有 `py` 时再查看 `py -0p` 列出的版本和路径。必要时用已安装的原生 Windows Python 3.12+ 的完整路径检查，检查通过后用相同解释器启动（替换示例路径）：
+
+```powershell
+& 'C:\Path\To\Python\python.exe' .\start.py --check --desktop
+& 'C:\Path\To\Python\python.exe' .\start.py --desktop
+```
+
 ### macOS 打不开启动文件
 
 打开终端，输入 `cd `（末尾留一个空格），把解压后的源码文件夹拖进终端，再按回车。然后执行：
@@ -127,9 +140,15 @@ sh start.sh --desktop
 
 密码不显示字符或星号是正常的，输入完按回车。短于 12 个字符或两次不一致时会重新提示。账号是 `admin`；没有共享默认密码。忘记已有密码时不要删数据库，以免丢失数据。
 
+### 首次设置密码时提示标准输入不是终端
+
+未初始化的实例需要设置管理员密码；默认方式要求 Python 将标准输入识别为交互终端（TTY）。Git Bash 窗口可见，并不保证原生 Windows Python 会将它识别为 TTY；管道、重定向或某些集成终端也可能触发此检查。这与密码输入不显示字符是两种情况。
+
+先在原生 PowerShell 或 CMD 的交互窗口中，从源码目录运行 Windows 入口，不加管道或输入重定向。自动化或确实需要非交互输入时，显式添加 `--password-stdin`，通过受保护的标准输入提供首次密码；该参数不会自动生成密码，也不用于重置已有密码。不要把密码写进命令参数、脚本或日志。保留现有数据目录，无需删除数据库重试。
+
 ### 安装很慢、失败或提示网络错误
 
-长步骤的「Still running」表示安装进程尚未结束，并不代表下载已经成功。查看终端打印的 `startup.log`；检查网络、代理及 npm/Python 包下载是否可用，修正后重跑同一入口。不要删除数据目录。首次 Electron 下载也需要联网。
+长步骤的「Still running」表示安装进程尚未结束，并不代表下载已经成功。重试前先查看终端打印的 `startup.log` 中失败的步骤。提示「磁盘空间不足 / Disk full」时，应释放数据目录或显式指定缓存所在磁盘的空间；重复下载不会释放空间。依赖版本不存在、权限不足等错误也需要分别处理，仅在日志报告连接失败时检查网络、代理及包下载访问。修正后重跑同一入口，已完成的步骤会复用。不要删除数据目录。首次 Electron 下载也需要联网。
 
 npm 注册表与二进制下载使用不同的地址。设置 npm 镜像只改变 npm 包的来源，不会同时改变 Electron 或 PortableGit 的下载地址：
 
@@ -138,6 +157,18 @@ npm 注册表与二进制下载使用不同的地址。设置 npm 镜像只改�
 | npm 包 | `npm_config_registry` 或 npm 的 `registry` 配置 |
 | Electron 二进制 | `ELECTRON_MIRROR`，见下面的桌面启动排障 |
 | Windows PortableGit 归档 | `SODUWORK_PORTABLE_GIT_MIRROR`，见下面的镜像与离线说明 |
+
+#### Git 克隆或依赖下载出现证书错误
+
+先区分失败发生在哪一步：
+
+- **`git clone` 报 schannel `0x80092012` / 撤销检查失败**：这是 Git 获取源码时的证书撤销检查问题，发生在启动器运行之前。核对系统时间、可信证书链、代理及证书撤销服务的可达性；受管理的网络应请管理员确认代理证书与访问策略。切换 `sh` / `cmd` 启动入口不能修复克隆失败。不建议设置全局 `http.schannelCheckRevoke=false`，它会关闭撤销检查并影响后续 Git 请求。
+- **Electron 或 PortableGit 下载报 `UNABLE_TO_VERIFY_LEAF_SIGNATURE` 等证书链错误**：检查对应下载地址及代理提供的证书链。企业 TLS 代理需要由管理员提供可信 CA，并按所用 Git / Node 下载工具的方式配置信任；Git 的证书配置不等于 Node 的配置。不要用 `NODE_TLS_REJECT_UNAUTHORIZED=0` 绕过校验；即使某个归档有固定摘要，也不能保护同一安装过程中所有请求。
+- **只看到 `TypeError: fetch failed`**：这是通用网络错误，不足以判断是 GitHub 不可达或证书问题。查看 `startup.log` 中同一失败步骤的底层错误（如 `cause.code`）及下载地址，再分别核查 DNS、代理、超时或 TLS。
+
+网络受限时，按本节的代理说明、[PortableGit 镜像与离线归档](#windows-portablegit-镜像与离线归档)或[Electron 镜像说明](#浏览器能打开桌面端打不开)处理。镜像返回 `404` / `403` 时，先核对具体版本、架构、文件路径及访问权限，不要据此推断所有镜像都不可用。修正配置后保持证书校验开启，重新运行同一入口。
+
+需要求助时，提供失败步骤、终端类型、Python / Node / Git 版本，以及相关错误和底层错误码；先移除日志中的密码、令牌、代理凭据和私有地址。
 
 #### 使用代理下载
 
@@ -235,6 +266,8 @@ start.cmd --desktop
 
 请以当前登录桌面的普通用户启动应用。首次访问密钥环可能出现系统创建或解锁提示，应使用受保护的密钥环；不要设置空密码或通过关闭沙箱绕过启动错误。密钥环被锁定或服务暂不可用时，现有设备凭据应予保留，恢复系统服务后完全退出并重新打开应用。不要删除 `device-auth.json`、密钥环项目或把凭据改成明文。
 
+源码启动器的 Linux 桌面模式会提前拒绝 root 用户（包括通过 `sudo` 启动），在创建实例数据或安装依赖前给出提示；`--check --desktop` 和 `--prepare-only --desktop` 也会执行此检查。请在普通用户的图形会话中运行 `sh start.sh --desktop`；服务器只需运行 `sh start.sh`。
+
 Linux 安装验收先检查 `.deb` / `.rpm` 的首次安装是否已提供密钥服务依赖，再使用隔离的真实 GNOME 密钥环检查首次启动、重启和升级后的密文读取。当前升级场景复用首次安装的依赖，不证明旧环境升级时能自动补齐新增依赖；容器验收也不替代 GNOME/KDE、Wayland/X11 的真实桌面登录与解锁验证。
 
 需要先看管理端时，Windows 双击 `start.cmd`，macOS 双击 `start.command`，Linux 运行 `sh start.sh`。浏览器管理端用于管理配置，不是桌面的 AI 对话工作区。
@@ -266,7 +299,7 @@ macOS 桌面进程保留当前用户的系统主目录，以便访问默认钥�
 | 不自动打开浏览器 | `sh start.sh --desktop --no-browser` |
 | 指定独立的数据目录 | `sh start.sh --desktop --data-dir "D:/SoduWork-data"` |
 
-准备和启动应使用同一个数据目录。自动化脚本可显式用 `--password-stdin` 从标准输入提供首次密码；不要将密码写进命令参数或脚本。Windows 设置 `SODUWORK_NO_PAUSE=1` 可在失败时直接返回错误码。
+准备和启动应使用同一个数据目录。指定 `--password-stdin` 后，启动器只在准备成功后才从标准输入读取首次密码。请勿将密码写入命令参数或脚本。Windows 在此模式下失败会直接返回错误码。其他无人值守的启动命令可设置 `SODUWORK_NO_PAUSE=1` 跳过失败后的按键等待。
 
 开发者需要分别调试前后端时，见[开发指南](development.md)。Vite 开发代理默认连接 `http://127.0.0.1:9080`，连接本启动器时使用 `SODUWORK_DEV_HUB=http://127.0.0.1:18989`。本指南默认只供当前电脑访问；团队部署见 [Docker 自托管](../ops/self-host/README.zh-CN.md)。
 
@@ -277,6 +310,10 @@ macOS 桌面进程保留当前用户的系统主目录，以便访问默认钥�
 | Windows | `%LOCALAPPDATA%\SoduWork\source-service` |
 | macOS | `~/Library/Application Support/SoduWork/source-service` |
 | Linux | `$XDG_DATA_HOME/soduwork/source-service`，未设置时为 `~/.local/share/soduwork/source-service` |
+
+在 Windows 上，`LOCALAPPDATA` 为空或为相对路径时按未设置处理，回退到 `%USERPROFILE%\AppData\Local`。绝对路径形式的 `LOCALAPPDATA` 保持不变。所选数据目录仍须位于源码目录之外，并且为空或已由此启动器初始化。
+
+在 Linux 上，`XDG_DATA_HOME` 未设置、为空或为相对路径时，回退到 `~/.local/share`。绝对路径（包括含空格的路径）保持不变，显式指定的 `--data-dir` 优先。已有数据不会迁移；如果之前使用相对 XDG 目录保存数据，可通过 `--data-dir` 指定其绝对路径继续使用。源码目录安全检查仍然生效。
 
 也可以明确指定独立目录和端口：
 
