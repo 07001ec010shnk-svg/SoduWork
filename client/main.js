@@ -15,6 +15,7 @@ const _distribution = require('./main/distribution.cjs');
  * Set it before any userData path consumers.
  */
 require('./main/userdata-path.cjs').initializeUserData(app);
+require('./main/requirement-diagnostics.cjs').install({app,ipcMain});
 if (require('./main/keychain-startup.cjs').dispatch({ app, BrowserWindow, shell, nativeImage })) return;
 const _hubEndpoint = require('./main/hub-endpoint.cjs');
 _hubEndpoint.initialize(app);

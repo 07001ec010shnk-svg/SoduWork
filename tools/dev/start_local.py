@@ -395,6 +395,9 @@ def launch_desktop(state: Path, client: Path, env: dict, base: str, output) -> s
             json.dump({'workDir': str(work)}, stream)
     desktop_env = {key: value for key, value in env.items()
                    if key not in {'ADMIN_USER', 'ADMIN_PASS', 'AUTH_SECRET', 'DATABASE_URL'}}
+    # Explicit diagnostic output is desktop-only; do not broaden the Hub environment allowlist.
+    if os.environ.get('SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR'):
+        desktop_env['SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR'] = os.environ['SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR']
     if sys.platform == 'darwin':
         # macOS resolves the user's default Keychain through HOME. Isolate the
         # application profile, not the native desktop's operating-system home.

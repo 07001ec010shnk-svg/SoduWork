@@ -710,6 +710,8 @@ class Runner:
             return self._content_stores[realm]
 
     async def _local_rpc_dispatch(self, message: dict) -> dict:
+        from app.services.runner_event_scope import ingress
+        message = ingress(message, local=True)
         if message.get("op") == "runtime.content.read":
             store = await self._conversation_content_store(message.get("realm"))
             return await asyncio.to_thread(store.handle, {**message, "op": "content.read"})
@@ -876,14 +878,16 @@ class Runner:
             self.max_concurrent = resource.limit
             while True:
                 from app.services import ai_local
+                from app.services.runner_event_scope import is_local
                 with ai_local._LOCK:
                     running_refs = {ref for ref, run in ai_local._RUNS.items()
                                     if run.get("state") == "running"}
+                    local_refs = {ref for ref, run in ai_local._RUNS.items() if is_local(run, ref)}
                 active = _busy_count() + self._admission.starting_count()
                 item = self._admission.claim_next(
                     active, resource.limit,
-                    resource.can_start and not getattr(self, "_outbox_blocked", False),
-                    blocked_refs=running_refs)
+                    resource.can_start, blocked_refs=running_refs,
+                    hub_blocked=getattr(self, "_outbox_blocked", False), local_refs=local_refs)
                 if item is None:
                     break
                 task = asyncio.create_task(self._run_admitted(item))
@@ -898,6 +902,12 @@ class Runner:
 
     async def _admit(self, message: dict, *, key: str, ref: str,
                      category: str, operation: str) -> dict:
+        if operation == "comment":
+            from app.services import local_base, runner_event_scope
+            with local_base._LOCK:
+                run = dict(local_base._RUNS.get(ref) or {})
+            message = {**message, "_eventDestination":
+                       "local" if runner_event_scope.is_local(run, ref) else "hub"}
         try:
             accepted, reason, item = self._admission.submit(
                 key, ref, category, operation, message)
@@ -1090,6 +1100,13 @@ class Runner:
 
     async def _capture_sessions(self) -> None:
         async with self._snap_lock:
+            try:
+                await self._recover_local_events()
+            except Exception as exc:
+                # Recovery storage is separate from live Hub retention. A failed
+                # archive must preserve local packets without suppressing Hub facts.
+                log.warning("Local event recovery paused; retaining packets: %s", type(exc).__name__)
+                self._outbox_blocked = await asyncio.to_thread(self._event_outbox.at_capacity)
             sessions, advances = await asyncio.to_thread(self._session_snapshots)
             stored = False
             for snapshot, mark in zip(sessions, advances):
@@ -1101,8 +1118,33 @@ class Runner:
             if stored:
                 self._outbox_blocked = await asyncio.to_thread(self._event_outbox.at_capacity)
 
+    async def _recover_local_events(self) -> None:
+        """Called under the snapshot lock; retain evidence before freeing capacity."""
+        from app.services import ai_local, runner_event_scope
+        # Startup admission reclaim loads owned archives before scheduling.
+        with ai_local._LOCK:
+            bindings = runner_event_scope.local_bindings(ai_local._RUNS)
+        self._local_event_bindings = bindings
+        checked = getattr(self, "_local_event_bindings_checked", {})
+        pending = {ref: task for ref, task in bindings.items() if checked.get(ref) != task}
+        if not pending:
+            return
+        retired = await asyncio.to_thread(self._event_outbox.archive_local, pending)
+        self._local_event_bindings_checked = {**checked, **pending}
+        if retired:
+            self._outbox_blocked = await asyncio.to_thread(self._event_outbox.at_capacity)
+            log.warning("Archived %d desktop-local event packets; Hub retention blocked=%s",
+                        retired, self._outbox_blocked)
+            self._admission_wake.set()
+
     async def _deliver_sessions(self) -> None:
         """Retain packets until ACK; replay every packet on legacy connections."""
+        async with self._snap_lock:
+            try:
+                await self._recover_local_events()
+            except Exception as exc:
+                self._outbox_blocked = await asyncio.to_thread(self._event_outbox.at_capacity)
+                log.warning("Local event recovery paused; retaining packets: %s", type(exc).__name__)
         if self._session_ack:
             packets = [(None, packet) for packet in await asyncio.to_thread(
                 self._event_outbox.pending, 12, getattr(self, "_delivery_after_ref", ""))]
@@ -1117,6 +1159,8 @@ class Runner:
                 self._delivery_after_ref = packet["ref"]
             else:
                 self._legacy_delivery_cursor = replay_cursor
+            if getattr(self, "_local_event_bindings", {}).get(packet["ref"]) == packet["snapshot"].get("taskId"):
+                continue
             key = (packet["streamId"], packet["deliverySeq"])
             attempt, retry_at = self._delivery_attempts.get(key, (0, 0))
             if now < retry_at:
@@ -1190,6 +1234,11 @@ class Runner:
                 break
             ref = str(run.get("ref") or "")
             if not ref:
+                continue
+            from app.services.runner_event_scope import is_local
+            with local_base._LOCK:
+                owned_scope = dict(local_base._RUNS.get(ref) or run)
+            if is_local(owned_scope, ref):
                 continue
             state, seq = str(run.get("state") or ""), int(run.get("seq") or 0)
             # A silent Agent launch changes neither output sequence nor state
@@ -1437,6 +1486,8 @@ class Runner:
             t = _Task(m.get("task") or {})
             cfg = dict(m.get("cfg") or {})
             cfg["_admissionKey"] = str(m.get("_admissionKey") or "")
+            from app.services.runner_event_scope import payload_destination
+            cfg["_eventDestination"] = payload_destination(m)
             cfg["local_cli"] = m.get("cli") or cfg.get("local_cli") or "opencode"
             ctx = dict(m.get("ctx") or {})
             from app.services import dispatch_identity, execution_capabilities
@@ -1973,10 +2024,8 @@ class Runner:
         return {"ok": False, "error": "不认识的质量门禁操作: " + op}
 
     async def _on(self, m: dict) -> None:
-        # This entry is network-owned. Only _local_rpc_dispatch may confer the
-        # parent-process marker; remote JSON must never impersonate that pipe.
-        m = dict(m)
-        m.pop("_localParent", None)
+        from app.services.runner_event_scope import ingress
+        m = ingress(m, local=False)
         op = str(m.get("op") or "")
         if op.startswith("content."):
             try:

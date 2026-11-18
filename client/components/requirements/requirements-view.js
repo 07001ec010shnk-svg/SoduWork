@@ -49,10 +49,10 @@
     return '<span class="rq-stage is-' + R.column(task) + '">' + esc(task.status === 'cancel' ? '已取消' :
       R.columns.find(row => row[0] === R.column(task))?.[1] || '待开始') + '</span>';
   }
-  function cardLabels(task) {
+  function cardLabels(task, ctx) {
     return '<span class="rq-card-labels"><span class="rq-kind" data-kind="' + esc(task.kind || 'other') + '">' + esc(R.kinds[task.kind] || R.kinds.other) + '</span>' +
       (R.stage(task) === 'clarifying' ? '<span class="rq-flag">待补充</span>' : '') +
-      (R.blocked(task) ? '<span class="rq-flag">' + (task.status === 'paused' ? '已暂停' : '执行异常') + '</span>' : '') + '</span>';
+      (R.blocked(task, ctx) ? '<span class="rq-flag">' + (R.deliveryProgress(task, ctx)?.text || (task.status === 'paused' ? '已暂停' : '执行异常')) + '</span>' : '') + '</span>';
   }
   function tags(task) {
     const values = [...new Set((Array.isArray(task.tags) ? task.tags : [])
@@ -88,7 +88,7 @@
     const id = esc(task.id);
     const moving = state.movingId === String(task.id);
     return '<article class="rq-card" data-hbid="' + id + '" aria-busy="' + moving + '" draggable="' + (!moving && state.group === 'stage' && R.canTriage(task)) + '">' +
-      '<div class="rq-card-top">' + cardLabels(task) + priorityFlag(task) + menuButton(task) + '</div>' +
+      '<div class="rq-card-top">' + cardLabels(task, ctx) + priorityFlag(task) + menuButton(task) + '</div>' +
       '<button type="button" class="rq-card-open" data-rq-open="' + id + '"><span class="rq-card-title" data-user-content title="' +
       esc(R.content(task).title) + '">' + esc(R.content(task).title || '未命名需求') + '</span>' +
       tags(task) +
@@ -134,7 +134,7 @@
     const limit = state.limits.list || 80;
     return '<div class="rq-table-wrap"><table class="rq-table"><thead><tr><th>需求</th><th>阶段</th><th>负责人 / 执行者</th><th>创建人</th><th>项目</th><th>优先级</th><th>截止日期</th><th>最近更新</th><th><span class="rq-sr-only">操作</span></th></tr></thead><tbody>' +
       rows.slice(0, limit).map(task => '<tr data-hbid="' + esc(task.id) + '"><td><button class="rq-list-title" type="button" data-rq-open="' + esc(task.id) +
-        '"><span class="rq-list-title-text" data-user-content>' + esc(R.content(task).title || '未命名需求') + '</span><span class="rq-list-labels">' + cardLabels(task) + tags(task) + '</span></button></td><td>' + stageBadge(task) + '</td><td>' +
+        '"><span class="rq-list-title-text" data-user-content>' + esc(R.content(task).title || '未命名需求') + '</span><span class="rq-list-labels">' + cardLabels(task, ctx) + tags(task) + '</span></button></td><td>' + stageBadge(task) + '</td><td>' +
         owner(task) + '</td><td>' + creator(task) + '</td><td><span class="rq-table-project"' + (task.projectId || task.projectName ? ' data-user-content' : '') + ' title="' + esc(project(task, ctx)) + '">' + esc(project(task, ctx)) + '</span></td><td>' +
         esc(R.priorities[task.priority] || '普通') + '</td><td>' + (due(task) || '—') + '</td><td>' + timestamp(task) + '</td><td>' + menuButton(task) + '</td></tr>').join('') + '</tbody></table></div>' +
       (rows.length > limit ? '<button type="button" class="rq-more-cards" data-rq-more="list">再显示 ' + Math.min(80, rows.length - limit) + ' 条</button>' : '');
