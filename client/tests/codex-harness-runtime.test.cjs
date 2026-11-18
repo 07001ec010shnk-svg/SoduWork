@@ -216,7 +216,7 @@ test('Codex Harness queues follow-ups FIFO, keeps transcript order and supports 
     assert.equal(commented.payload.cfg.local_cli, 'codex-harness');
     assert.deepEqual(commented.payload.cfg.llm, {
       base: 'http://model.invalid', key: 'secret', model: 'fixture-coding-large-model',
-      maxOutputTokens: 65536,
+      maxOutputTokens: 16384,
       input: ['text', 'image'], imageRouting: 'native',
       contextWindow: 128000, contextWindowKnown: true,
       contextWindowEstimated: true, contextWindowSource: 'safe-default',
@@ -714,7 +714,7 @@ test('Codex Harness restores its in-memory model grant after Runner restart', as
       requiredCapabilities: ['terminal', 'files'],
       llm: {
         base: 'http://model.invalid', key: 'secret', model: 'dev-think-large-agent-soduwork',
-        maxOutputTokens: 65536,
+        maxOutputTokens: 16384,
         contextWindow: 128000, contextWindowKnown: true,
         contextWindowEstimated: true, contextWindowSource: 'safe-default',
       },

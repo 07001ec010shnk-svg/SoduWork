@@ -538,7 +538,7 @@ async def put_local_task(session: AsyncSession, owner_id: str, tid: str, data: d
     if current is not None:
         if not task_access.is_owner(current, client) or current.origin != "local":
             return None
-        return await update_task(session, owner_id, tid, data)
+        return await update_task(session, owner_id, tid, data, preserve_sync_text=True)
     try:
         return await create_task(session, owner_id, data, origin="local", task_id=tid)
     except IntegrityError:  # Another window may have inserted this ID during concurrent PUT replay.
@@ -551,10 +551,11 @@ async def put_local_task(session: AsyncSession, owner_id: str, tid: str, data: d
             raise
         if not task_access.is_owner(current, client) or current.origin != "local":
             return None
-        return await update_task(session, owner_id, tid, data)
+        return await update_task(session, owner_id, tid, data, preserve_sync_text=True)
 
 
-async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dict) -> dict | None:
+async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dict,
+                      *, preserve_sync_text: bool = False) -> dict | None:
     from . import task_access
     await task_access.reserve_task_write(session, tid, owner_id)
     client = await session.get(models.Client, owner_id)
@@ -583,7 +584,8 @@ async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dic
     requirement_edit = "requirementVersion" in patch
     from . import requirement_projects
     await requirement_projects.prepare_update(session, client, t, patch)
-    edit_facts = await task_requirements.apply(session, client, t, patch)
+    edit_facts = await task_requirements.apply(session, client, t, patch,
+                                              preserve_title=preserve_sync_text)
     if requirement_edit and t.requirement_content:
         content = dict(t.requirement_content)
         for key in {"title", "note"}.intersection(patch):

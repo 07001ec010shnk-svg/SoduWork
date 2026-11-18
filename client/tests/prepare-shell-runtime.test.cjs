@@ -6,7 +6,8 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { RELEASE, selectRelease, prepareArchive, prepare } = require('../scripts/prepare-shell-runtime.cjs');
+const { execFileSync, spawnSync } = require('node:child_process');
+const { RELEASE, selectRelease, prepareArchive, prepare, selfTest } = require('../scripts/prepare-shell-runtime.cjs');
 
 const digest = content => crypto.createHash('sha256').update(content).digest('hex');
 function directory(t) {
@@ -211,10 +212,54 @@ function existingManifest(root, arch = 'x64') {
 
 test('a ready manifest still runs the real-runtime probe before skipping archive preparation', async t => {
   const root = directory(t), runtime = existingManifest(root), probes = [];
-  await prepare({ root, platform: 'win32', arch: 'x64', environment: {}, archiveOf: unexpected,
-    download: unexpected, run: unexpected, test: location => probes.push(location), log: quiet });
+  const environment = { TMPDIR: path.join(root, 'cache', 'tmp') };
+  await prepare({ root, platform: 'win32', arch: 'x64', environment, archiveOf: unexpected,
+    download: unexpected, run: unexpected, test: (location, env) => {
+      assert.equal(env, environment); probes.push(location);
+    }, log: quiet });
   assert.deepEqual(probes, [runtime]);
 });
+
+test('shell self-test retains only the selected temporary directories and required OS settings', t => {
+  const root = directory(t), temporary = path.join(root, 'cache', 'tmp');
+  fs.mkdirSync(path.join(root, 'bin')); fs.writeFileSync(path.join(root, 'bin', 'bash.exe'), 'fixture');
+  fs.mkdirSync(temporary, { recursive: true });
+  const environment = { TMPDIR: temporary, TEMP: temporary, TMP: temporary,
+    SystemRoot: 'C:\\Windows', WINDIR: 'C:\\Windows', PATH: 'untrusted tools', PRIVATE_FIXTURE: 'not inherited' };
+  const before = { ...process.env };
+  let called = false;
+  selfTest(root, environment, (command, args, options) => {
+    called = true;
+    assert.equal(command, path.join(root, 'bin', 'bash.exe'));
+    assert.deepEqual(options.env, { SystemRoot: environment.SystemRoot, WINDIR: environment.WINDIR,
+      PATH: path.join(environment.SystemRoot, 'System32'), CHERE_INVOKING: '1', MSYS_NO_PATHCONV: '1',
+      TMPDIR: temporary, TEMP: temporary, TMP: temporary });
+    return { status: 0, stdout: 'SODUWORK_SHELL_OK\n' };
+  });
+  assert.equal(called, true);
+  assert.equal(JSON.stringify({ ...process.env }) === JSON.stringify(before), true,
+    'The parent environment must remain unchanged');
+});
+
+test('native Windows shell self-test creates its actual Git probe in the selected temporary directory',
+  { skip: process.platform !== 'win32' }, t => {
+    const root = path.resolve(execFileSync('git', ['--exec-path'], { encoding: 'utf8', windowsHide: true }).trim(), '../../..');
+    const temporary = path.join(directory(t), 'cache', 'tmp with spaces');
+    fs.mkdirSync(temporary, { recursive: true });
+    const environment = { ...process.env, TMPDIR: temporary, TEMP: temporary, TMP: temporary };
+    let observed;
+    selfTest(root, environment, (command, args, options) => {
+      const script = args[1].replace('cd "$work";',
+        'printf "SODUWORK_SHELL_TEMP=%s\\n" "$(cygpath -aw "$work")"; cd "$work";');
+      const result = spawnSync(command, [args[0], script], options);
+      const marker = String(result.stdout).split(/\r?\n/).find(line => line.startsWith('SODUWORK_SHELL_TEMP='));
+      observed = marker?.slice('SODUWORK_SHELL_TEMP='.length);
+      return result;
+    });
+    assert.ok(observed, 'The actual mktemp directory must be observed');
+    assert.equal(path.dirname(observed), temporary);
+    assert.equal(fs.existsSync(observed), false, 'The probe must remove its temporary Git repository');
+  });
 
 test('preparation executes the verified .exe path, post-installs, prunes and probes before publishing its manifest', async t => {
   const root = directory(t), archive = path.join(root, 'verified offline archive.7z.exe'), calls = [], probes = [];
@@ -240,7 +285,8 @@ test('preparation executes the verified .exe path, post-installs, prunes and pro
       assert.deepEqual(args, ['/d', '/c', path.join(runtime, 'post-install.bat')]);
       fs.rmSync(path.join(runtime, 'post-install.bat')); return { status: 1 };
     },
-    test: location => {
+    test: (location, env) => {
+      assert.equal(env, environment);
       probes.push(location); assert.equal(fs.existsSync(path.join(runtime, 'usr', 'bin', 'vim.exe')), false);
       assert.equal(fs.existsSync(path.join(runtime, 'bin', 'bash.exe')), true);
       assert.equal(fs.existsSync(path.join(runtime, '.soduwork-shell-runtime.json')), false);

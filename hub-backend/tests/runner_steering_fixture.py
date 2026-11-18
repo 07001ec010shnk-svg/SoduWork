@@ -60,7 +60,13 @@ async def run():
     local_process._command_argv = argv
     # Never read/copy account credentials or contact any configured model. The
     # peer's model boundary is synthetic; broker/process/spool are unmodified.
-    local_process._env_for = lambda *_args, **_kwargs: dict(os.environ)
+    def peer_environment(*_args, **_kwargs):
+        if agent == "opencode":
+            from opencode_peer_session import environment
+            return environment(work / "data")
+        return dict(os.environ)
+
+    local_process._env_for = peer_environment
     local_stream._llm_gate_check = lambda *_args: ""
     machine = runner_main.Runner("http://127.0.0.1:1", "fixture", "fixture", "fixture", str(workspace))
     # Exercise steering through real admission without depending on host load.

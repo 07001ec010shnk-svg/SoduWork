@@ -17,6 +17,7 @@ function safeError(value) {
   const info = require('./model-errors').describe(value);
   const recovery = require('./context-recovery');
   const prefix = info.status ? 'HTTP ' + info.status + ': ' : '';
+  if (info.code === 'output_token_limit_exceeded') return prefix + info.code;
   if (recovery.OVERFLOW.test(info.raw)) {
     const size = recovery.errorWindow(value);
     return prefix + 'context_length_exceeded' + (size ? '; maximum context length is ' + size : '');

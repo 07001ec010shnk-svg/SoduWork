@@ -110,7 +110,7 @@ async function open(surface = 'legacy') {
     preload: path.join(client, 'preload.js'), contextIsolation: true, nodeIntegration: false, offscreen: true, backgroundThrottling: false } });
   win.webContents.on('preload-error', (_event, _path, error) => { report.preloadError = String(error); });
   win.webContents.on('console-message', event => { if (event.level === 'error') process.stderr.write('Renderer: ' + event.message + '\n'); });
-  await win.loadFile(path.join(root, surface + '-connection.html'));
+  await win.loadFile(path.join(client, 'desk.html'), {query:{fixture:surface}});
   // Offscreen fixtures have no OS focus. Emulate Chromium focus so native
   // keyboard events exercise the focused input without stealing a user window.
   win.webContents.debugger.attach('1.3');
@@ -152,7 +152,6 @@ app.whenReady().then(async () => {
   fs.copyFileSync(path.join(client, 'icon.png'), path.join(root, 'icon.png'));
   for (const surface of ['legacy', 'email']) fs.writeFileSync(path.join(root, surface + '-connection.html'), `<!doctype html><html><meta charset="utf-8">
     <link rel="stylesheet" href="${url('theme/variables.css')}">
-    <link rel="stylesheet" href="${url('components/panels/panels-detail.css')}">
     <link rel="stylesheet" href="${url('components/settings/settings.css')}">
     <link rel="stylesheet" href="${url('components/client-auth/client-auth.css')}">
     ${surface === 'email' ? '<link rel="stylesheet" href="' + url('components/client-auth/account-center.css') + '">' : ''}
@@ -163,7 +162,7 @@ app.whenReady().then(async () => {
       addEventListener('unhandledrejection',event=>fixtureErrors.push(String(event.reason)));
       if (!localStorage.getItem('fixture-history')) {
         localStorage.setItem('soduwork_work_hub_environment_v1', 'development');
-        localStorage.setItem('soduwork_work_hub_url', 'http://127.0.0.1:18989');
+        localStorage.setItem('soduwork_work_hub_url', ${JSON.stringify(b.url)});
         localStorage.setItem('soduwork_work_device_secret', 'fixture-old-local-key');
         localStorage.setItem('fixture-history', 'preserved');
       }
@@ -172,6 +171,13 @@ app.whenReady().then(async () => {
     <script src="${url('components/settings/settings.js')}"></script>
     ${surface === 'email' ? ['account-ui.js', 'email-auth.js'].map(file => '<script src="' + url('components/client-auth/' + file) + '"></script>').join('') : ''}
     <script src="${url('components/client-auth/client-auth.js')}"></script></body></html>`);
+  session.defaultSession.protocol.handle('file', request => {
+    const url = new URL(request.url), surface = url.searchParams.get('fixture');
+    if (url.pathname === new URL(pathToFileURL(path.join(client, 'desk.html'))).pathname && ['legacy','email'].includes(surface)) {
+      return new Response(fs.readFileSync(path.join(root, surface + '-connection.html')), {headers:{'Content-Type':'text/html; charset=utf-8'}});
+    }
+    return electron.net.fetch(request.url, {bypassCustomProtocolHandlers:true});
+  });
   await open();
   await until('document.querySelector(".soduwork-auth-retry") && !document.querySelector(".soduwork-auth-retry").hidden');
   assert.equal(await run('SoduWorkAPI.hubBase()'), endpoint.PRODUCTION_HUB);
@@ -192,6 +198,7 @@ app.whenReady().then(async () => {
   assert.equal(requests.length, 0, 'offline product verification never reaches a backend');
   assert.equal(await run('localStorage.getItem("soduwork_work_device_secret")'), null,
     'retired plaintext device keys are removed from renderer storage even while offline');
+  assert.equal(fs.readFileSync(path.join(root,'profile/device-auth.json'),'utf8').includes('fixture-old-local-key'), false);
   await click('.soduwork-auth-retry');
   await until('!document.querySelector(".soduwork-auth-retry").disabled');
   assert.equal(await run('SoduWorkAPI.hubBase()'), endpoint.PRODUCTION_HUB);
@@ -365,6 +372,8 @@ app.whenReady().then(async () => {
   await until('document.querySelector("#soduWorkClientAuthGate").hidden && SoduWorkAPI.clientAuthSnapshot().user?.id === "bob"');
   assert.equal(await run('document.querySelector("#soduWorkAuthPassword").value'), '');
   assert.equal(auth.identity(app).hub, b.url);
+  assert.equal(b.secrets.get('fixture-renderer'), 'fixture-old-local-key');
+  assert.ok(requests.filter(row => row.key === 'fixture-old-local-key').every(row => row.label === 'bob'));
   assert.deepEqual(await run('fixtureErrors'), []);
   report.cases.push('fixed EmailAuth login and registration show only a plain host footer with no editor at normal and narrow widths; secure account/password login and foreign IPC rejection still work');
   report.requests = { fixture: requests.length, aliceFixture: requests.filter(row => row.label === 'alice').length,

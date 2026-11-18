@@ -1,5 +1,11 @@
 (function (global) {
   const messages = {
+    "授权对话和插件使用企业微信，远程发送任务指令请在「手机远程对话」中连接机器人并绑定任务": "Authorize chats and plugins to use WeCom. To send task instructions, connect a bot and link a task under Remote conversations.",
+    "手机远程对话": "Remote conversations",
+    "绑定任务": "Link a task",
+    "尚无进入任务的消息。": "No messages have reached a task yet.",
+    "此连接收到过来自未配对会话的消息。要让某个私聊的消息进入任务，请点击「绑定任务」→ 选择执行电脑 → 在目标企微私聊发送一次性配对命令。": "This connection has received messages from an unpaired chat. To link a WeCom direct chat, select Link a task, choose the computer that will run it, and send the one-time pairing command in that chat.",
+    "命令有效期 {value1} 分钟，仅可使用一次。在目标企微私聊中发送此命令。配对成功后即可在该私聊发送任务指令。": "This one-time command expires in {value1} minutes. Send it in the WeCom direct chat you want to link. Once paired, use that chat to send task instructions.",
     "模型服务来源暂时无法确认，请刷新目录后重试": "The model service ownership could not be verified. Refresh the catalog and try again.",
     "服务端同步的模型服务为只读，请添加自己的服务": "Server-managed model services are read-only. Add your own service instead.",
     "模型服务不存在或来源无法确认，请刷新目录后重试": "The model service is missing or its ownership could not be verified. Refresh the catalog and try again.",

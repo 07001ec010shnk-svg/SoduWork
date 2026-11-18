@@ -56,11 +56,23 @@ python3 quality_gate.py --profile extended --scope all
 
 The manifest in `quality_manifest.py` registers checks and their profiles. Unregistered checks block the gate. `live` checks connect to real Hubs, Runners, providers, or business data; they are not part of default offline acceptance.
 
+Offline checks own their subprocess trees and finish cleanup before returning, including when a command exits before its descendants. On Windows, the gate uses the repository's Windows PowerShell Job helper and releases the command only after Job assignment succeeds. Output is captured in a private temporary file so inherited output handles cannot extend a timeout indefinitely; failure reports retain output produced before the timeout. Run `python3 -m unittest test_quality_gate_cleanup` for real process cleanup regressions on the current platform.
+
 Permission-controlled turns confirm that their execution host has exited before settlement or a replacement turn. A reliable Agent exit receipt allows up to 30 seconds for normal host cleanup, such as a frozen executable removing its extraction directory; cancellation and permission changes retain the shorter stop deadline. If termination cannot be confirmed, the original process remains tracked and blocks replacement. An answer or a successful kill request alone does not establish successful completion. Run `python3 -m unittest test_local_process_cleanup` to verify delayed shutdown and failed-termination behavior with isolated subprocesses.
 
 Smoke checks live in [`smoke/`](smoke/). To run one directly, use its module from the `hub-backend/` directory, for example `python3 -m smoke.smoke_capabilities`. The quality gate selects the appropriate registered modules. Unit tests and `tests/` integration helpers keep their existing locations.
 
 ## DeepSeek Harness turn completion
+
+DeepSeek runtime preflight checks the archive-locked sharp, koffi and ripgrep
+packages for Windows, macOS and Linux on x64/arm64. macOS/Linux also require
+libvips; Linux selects the glibc or musl binaries. Missing manifests, mismatched
+versions and missing critical loaders/binaries prevent stage activation and
+invalidate cached readiness. Failed repair leaves the active runtime intact.
+Run `python3 -m smoke.smoke_dsh_runtime` for the offline platform matrix and
+activation/cache regressions. These static checks do not certify arbitrary binary
+corruption or macOS Gatekeeper acceptance; native ACP and tool execution still
+require validation on the target platform.
 
 DeepSeek ACP adapters 0.4.40 and 0.4.41 can return while their child agents are
 still running. SoduWork's host-only preload waits for progressing descendants
@@ -135,7 +147,54 @@ explicitly selected installed runtimes and isolated loopback providers; see thei
 `--help` for required paths. Codex acceptance also checks real permission
 approvals/denials and command output. They do not exercise paid model services.
 
+## Task text compatibility
+
+Task creation with `POST /api/v1/tasks` and fields explicitly supplied to `PATCH`
+or batch updates validate titles up to 200 characters and sources up to 120;
+longer input returns 422 before writes. Reading historical records and updating
+unrelated fields retain their original text.
+
+`PUT /api/v1/tasks/{id}` is the desktop's idempotent synchronization and undo
+contract. It accepts complete historical text because an unsent legacy task and
+a task restored after deletion have no existing server row to identify them.
+This compatibility endpoint intentionally does not enforce the POST/PATCH text
+limits; account ownership and managed-source restrictions still apply.
+
+Migration `0092_task_text_storage` widens PostgreSQL task text columns without
+truncation, including adoption of unversioned databases. Existing SQLite tables
+need no rebuild. Deploy the Hub migration before the updated desktop. The desktop
+preserves full text and retries a queued PUT blocked solely by the old length
+validation once; another rejection remains blocked for explicit review. Downgrade
+refuses to narrow columns while overlong data exists. Back up the database and
+matching application before upgrading.
+
 ## Database configuration
+
+Domain ordering accepts signed 32-bit integers and legacy decimal strings.
+Malformed values, booleans, fractions and overflow return HTTP 400 before any
+record is changed. Omitting a rank or sending null keeps the existing rank on
+PATCH; creation retains its zero default. Schedule numeric fields and client
+update progress use the same integer validation, with their existing clamping
+and optional-field defaults. New schedule timezone values must name a valid
+IANA zone; omitted values keep the previous configuration, while null or empty
+text selects the existing default. Historical invalid zones remain readable
+through the default timezone fallback.
+
+Migration `0091_domain_sort_validation` repairs historical SQLite domain ranks
+whose stored type or range is invalid. Valid ranks, domain IDs and associations
+are preserved. Repaired entries are placed after valid ranks when space remains;
+if the maximum rank is exhausted, entries tie at that maximum and are ordered
+by creation time and ID. Each repair first records
+the original storage type, lossless original value and replacement in a
+`domain.sort_repair` audit entry in the same transaction. The repair also runs
+when adopting a pre-Alembic database and is idempotent. PostgreSQL domain data
+is unchanged. Back up the database before upgrading; downgrade does not restore
+invalid values. Administrators can review the audit entries and adjust ordering.
+
+Offline regressions: `python3 -m unittest test_api_integer_validation
+test_domain_sort_validation test_domain_sort_migration
+test_schedule_update_input_validation`. These suites are registered in the
+release quality gate.
 
 Set `DATABASE_URL` in private configuration when overriding the SQLite default:
 
@@ -154,6 +213,14 @@ bundled skills available, including ones previously closed by administrators.
 Later administrator opt-outs persist across restarts, and new bundled skills
 default to available. Personal choices and imported-package approval remain
 independent. See the [skill loading guide](../skills/README.md).
+
+## OpenCode data isolation and existing conversations
+
+Managed OpenCode keeps its database, data, state and cache under the Runner data root's `agents/opencode/` directory. Inherited `OPENCODE_DB` and XDG paths cannot redirect managed execution into a personal OpenCode installation. The parent Runner and standalone ACP bridge select the same private database; the user's home directory and injected model configuration remain unchanged.
+
+When an archived SoduWork conversation resumes, its recorded native session ID and workspace identify the history to recover. Compatible v1 session, message, part and todo records are imported from a stable, read-only file snapshot into the private database, together with related child sessions. Personal accounts, credentials and project permissions are not imported, and the original database and sidecars are not modified. A missing session, unsupported v2-only history, active revert or remote workspace binding stops recovery with an explanation; it never silently starts a blank replacement session or downgrades the personal database. If the personal database is changing during the snapshot, close personal OpenCode and retry. Existing conversation archives and native IDs remain available.
+
+Run `SODUWORK_TEST_OPENCODE_BIN=/absolute/path/to/opencode python3 -m unittest test_opencode_native_config` with the pinned managed binary and prepared SDK dependencies for native/ACP isolation and resume checks against a loopback model. These checks use synthetic databases and do not access personal history or a production model.
 
 ## OpenCode turn completion
 

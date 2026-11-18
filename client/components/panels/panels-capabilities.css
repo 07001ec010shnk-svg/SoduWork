@@ -566,3 +566,17 @@ button.cap-card{cursor:pointer}
   .cap-tab-connections .cap-mcp-manage-bar{flex-wrap:wrap}
   .cap-tab-connections .cap-mcp-manage-bar>div{flex-basis:100%}
 }
+
+/* 中文：获取技能入口保持轻量，推荐站点可换行以适配窄窗口与深色主题。
+ * English: Keep discovery lightweight; wrap source URLs in narrow windows using theme colors. */
+.cap-skill-help{align-self:flex-start;border:0;background:transparent;color:var(--accent);font:inherit;padding:0;margin:0 0 6px;cursor:pointer}
+/* 中文：与下方标题共用排版参数，悬停保持蓝色且不添加下划线。
+ * English: Match the section heading typography; keep the accent color without a hover underline. */
+.cap-skill-help{font-family:inherit;font-size:16px;font-weight:600;line-height:1.4;letter-spacing:-.015em;text-decoration:none}
+.cap-skill-help:hover{text-decoration:none}
+.cap-skill-help:focus-visible,.cap-skill-source:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+.cap-skill-sources{display:grid;gap:12px}
+.cap-skill-source{display:flex;flex-direction:column;gap:6px;padding:16px;border:1px solid var(--line);border-radius:12px;color:var(--ink);text-decoration:none}
+.cap-skill-source:hover{background:var(--bg-2)}
+.cap-skill-source b{color:var(--accent)}
+.cap-skill-source span,.cap-skill-source small{color:var(--ink-3);overflow-wrap:anywhere}

@@ -14,12 +14,36 @@
     legacy_recheck_required: '旧版检测结果需要重新验证',
     billing_unavailable: '模型服务计费额度不可用，请检查供应商账户',
     budget_exhausted: '检测预算已用尽，能力仍未确认', response_too_large: '检测响应超过大小限制',
-    response_limit: '检测响应超过大小限制', stream_interrupted: '流式响应未正常完成', stream_incomplete: '流式响应未正常完成'
+    response_limit: '检测响应超过大小限制', stream_interrupted: '流式响应未正常完成', stream_incomplete: '流式响应未正常完成',
+    stream_error: '服务在逐步返回回复时报告错误', stream_not_observed: '未收到逐步返回的回复，暂不能确认能力',
+    response_truncated: '回复提前结束，未能完成检测', content_filtered: '服务拦截了检测回复，暂不能确认能力',
+    transport_interrupted: '连接中断，未能完成检测'
+  };
+  const stages = {
+    output: '检测阶段：检查回复内容', stream: '检测阶段：逐步接收回复',
+    tool_call: '检测阶段：请求工具执行', tool_result: '检测阶段：读取工具结果'
+  };
+  const detailDiagnostics = {
+    tool_finish_reason_mismatch: '模型未按要求发起工具调用', tool_call_count_mismatch: '模型未按要求调用一次工具',
+    tool_call_invalid: '未收到可用的工具调用', tool_arguments_invalid: '工具调用信息不符合检测要求',
+    tool_receipt_mismatch: '模型未正确确认工具执行结果', tool_result_finish_reason_mismatch: '模型读取工具结果后未正常完成回复',
+    invalid_stream_shape: '逐步返回的回复格式无法识别', expected_output_mismatch: '回复内容与检测要求不符'
   };
   // The workspace's esc is a lexical binding, not a window property. Keep this
   // shared component independent of how its host exposes formatting helpers.
   const e = value => String(value ?? '').replace(/[&<>"']/g,
     char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
+  // Older reports lack detail codes; unknown provider values must never become UI copy.
+  const knownMessage = (messages, key) => typeof key === 'string' && Object.hasOwn(messages, key) ? messages[key] : '';
+  function checkDiagnostic(key, check, retained) {
+    const stage = knownMessage(stages, check.stage);
+    const detail = key === 'imageInput' && check.detailCode === 'expected_output_mismatch'
+      ? '未收到与图片中六位数字完全一致的回复'
+      : knownMessage(detailDiagnostics, check.detailCode) || knownMessage(diagnostics, check.code);
+    const message = retained && check.status === 'unsupported' ? '服务拒绝了本次图片请求。对话沿用上次通过的结果，你仍可发图。' : detail;
+    return (stage ? '<small>' + e(stage) + '</small>' : '') + (message ? '<small>' + e(message) + '</small>' : '') +
+      (retained && check.status === 'inconclusive' ? '<small>对话沿用上次通过的结果，你仍可发图。</small>' : '');
+  }
   function select(key, label, options, value) {
     return '<label class="md-cap-field"><span>' + label + '</span><select class="md-in" data-mdfield="' + key + '">' +
       Object.entries(options).map(([id, text]) => '<option value="' + id + '"' + (id === value ? ' selected' : '') + '>' + text + '</option>').join('') + '</select></label>';
@@ -34,11 +58,44 @@
         : profile[key] || { state: 'unknown', source: 'unknown' }];
     }));
   }
-  function badges(model) {
+  function badgeLabel(kind, value) {
+    const translate = text => global.SoduWorkI18n?.translateText?.(text) || text;
+    if (kind === 'verified') return ['supported', 'unsupported'].includes(value)
+      ? translate(value === 'supported' ? '上次验证：支持' : '上次验证：不支持') : '';
+    const templates = { configured: '手动配置：{0}', 'legacy-native': '已有配置：{0}', latest: '最近检测：{0}' };
+    const template = knownMessage(templates, kind), label = knownMessage(kind === 'latest' ? statusNames : states, value);
+    return template && label ? translate(template).replace('{0}', translate(label)) : '';
+  }
+  function badgeLabelHtml(tag, kind, value) {
+    return '<' + tag + ' data-user-content data-md-cap-label="' + kind + '" data-md-cap-value="' + value + '">' +
+      e(badgeLabel(kind, value)) + '</' + tag + '>';
+  }
+  function retainedImageSupport(model, result, imageProfile) {
+    const latest = result?.checks?.imageInput;
+    return model && model.enabled !== false && (!model.modality || model.modality === 'chat') &&
+      model.config?.imageRouting !== 'vision-fallback' && imageProfile?.source === 'verified' && imageProfile.state === 'supported' &&
+      !result?.pending && result?.verifiedChecks?.imageInput?.status === 'passed' &&
+      (latest?.status === 'unsupported' || (latest?.status === 'inconclusive' && latest.detailCode === 'expected_output_mismatch'));
+  }
+  function badges(model, result = model.capabilityCheck) {
     if (model.modality && model.modality !== 'chat') return '';
-    return '<div class="md-cap-badges">' + Object.entries(profile(model)).map(([key, value]) =>
-      '<span class="md-cap-badge is-' + (value.state === 'supported' ? 'supported' : 'neutral') + '" title="' + e(sources[value.source] || '未确认') + '">' +
-      names[key] + '<b>' + (states[value.state] || states.unknown) + '</b>' + (value.conflict ? '<small title="配置与最近检测结果不一致">配置冲突</small>' : '') + '</span>').join('') + '</div>';
+    return '<div class="md-cap-badges">' + Object.entries(profile(model)).map(([key, value]) => {
+      const latest = result?.checks?.[key] ?? model.capabilityCheck?.checks?.[key];
+      const status = latest?.status ?? value.checkStatus, lastLabel = knownMessage(statusNames, status);
+      const knownState = ['supported', 'unsupported'].includes(value.state);
+      const attemptState = status === 'passed' ? 'supported' : status === 'unsupported' ? 'unsupported' : 'unknown';
+      // Progress reports an observation, never a replacement for saved proof.
+      const pending = Boolean(result?.pending && result.checks?.[key]);
+      const retained = key === 'imageInput' && retainedImageSupport(model, result, value);
+      const divergent = !retained && knownState && lastLabel && (pending || attemptState !== value.state);
+      const attributed = divergent && ['verified', 'configured', 'legacy-native'].includes(value.source);
+      const label = attributed ? badgeLabelHtml('b', value.source, value.state)
+        : '<b>' + e(knownMessage(states, value.state) || states.unknown) + '</b>';
+      const recent = lastLabel && (divergent || !knownState) ? badgeLabelHtml('small', 'latest', status) : '';
+      return '<span class="md-cap-badge is-' + (value.state === 'supported' ? 'supported' : 'neutral') + '" title="' +
+        e(knownMessage(sources, value.source) || sources.unknown) + '">' + names[key] + label + recent +
+        (value.conflict ? '<small title="配置与最近检测结果不一致">配置冲突</small>' : '') + '</span>';
+    }).join('') + '</div>';
   }
   function fields(model) {
     const config = model.config || {};
@@ -48,7 +105,7 @@
       select('imageRouting', '图片处理方式', { auto: '自动选择', native: '模型原生识图', 'vision-fallback': '独立视觉服务' }, config.imageRouting || 'auto') +
       '<label class="md-cap-field"><span>上下文窗口</span><input class="md-in" data-mdfield="ctxWindow" type="number" min="1024" max="10000000" step="1" placeholder="自动" value="' +
         e(model.contextWindowKnown === false ? '' : model.ctxWindow || model.contextWindow || '') + '"></label>' +
-      '<label class="md-cap-field"><span>最大输出 Token</span><input class="md-in" data-mdfield="maxOutputTokens" type="number" min="1024" max="262144" step="1" placeholder="16384" value="' + e(config.maxOutputTokens || '') + '"></label>' +
+      '<label class="md-cap-field"><span>最大输出 Token</span><input class="md-in" data-mdfield="maxOutputTokens" type="number" min="1024" max="262144" step="1" placeholder="16384" value="' + e(config.maxOutputTokens || '') + '"><small>留空时使用 16384 Token。请按服务实际限制填写；能力检测不验证最大输出上限。</small></label>' +
       select('thinkingFormat', '思考协议格式', { '': '自动识别（按模型名）', openai: 'OpenAI reasoning_effort',
         deepseek: 'DeepSeek thinking', qwen: 'Qwen enable_thinking', 'qwen-chat-template': 'Qwen chat_template_kwargs',
         'chat-template': '自定义 chat_template_kwargs', zai: 'Z.ai thinking', openrouter: 'OpenRouter reasoning',
@@ -79,7 +136,7 @@
     if (output) config.maxOutputTokens = output; else delete config.maxOutputTokens;
     return { config, ctxWindow: context };
   }
-  function report(result) {
+  function report(result, model) {
     if (!result) return '<span class="md-cap-unchecked">能力尚未检测</span>';
     if (result.pending) return '<div role="status" class="md-cap-unchecked"><span>正在检测能力…</span>' +
       Object.entries(result.checks || {}).map(([key, check]) => '<div><span>' + (names[key] || '服务连接') + '</span> · <span>' +
@@ -88,16 +145,21 @@
     const rows = Object.entries(result.checks || {}).filter(([key]) => key === 'connection' || names[key]);
     const date = result.checkedAt ? new Date(result.checkedAt) : null;
     const time = date && !Number.isNaN(date.getTime()) ? date.toLocaleString(global.SoduWorkI18n?.getLocale?.() || undefined) : '';
-    const history = (key, check) => {
+    const retainedImage = retainedImageSupport(model, result, model && profile(model).imageInput);
+    const history = (key, check, retained) => {
       const previous = result.verifiedChecks?.[key];
       if (!previous || previous.status === check.status && previous.checkedAt === check.checkedAt) return '';
-      return '<small><span>' + (previous.status === 'passed' ? '上次验证：支持' : '上次验证：不支持') + '</span>' +
-        (previous.checkedAt ? '<time data-user-content data-md-checked-at="' + e(previous.checkedAt) + '">' + e(new Date(previous.checkedAt).toLocaleString(global.SoduWorkI18n?.getLocale?.() || undefined)) + '</time>' : '') + '</small>';
+      const label = retained ? '上次通过' : (previous.status === 'passed' ? '上次验证：支持' : '上次验证：不支持');
+      return '<small><span>' + label + '</span>' +
+        (previous.checkedAt ? ' <time data-user-content data-md-checked-at="' + e(previous.checkedAt) + '">' + e(new Date(previous.checkedAt).toLocaleString(global.SoduWorkI18n?.getLocale?.() || undefined)) + '</time>' : '') + '</small>';
     };
     return '<details class="md-cap-report"><summary>检测结果' + (time ? '<time data-user-content data-md-checked-at="' + e(result.checkedAt) + '">' + e(time) + '</time>' : '') + '</summary><dl>' +
-      rows.map(([key, check]) => '<div><dt>' + (names[key] || '服务连接') + '</dt><dd class="is-' + e(check.status) + '">' +
-        (statusNames[check.status] || statusNames.inconclusive) + '</dd>' +
-        (diagnostics[check.code] ? '<small>' + diagnostics[check.code] + '</small>' : '') + history(key, check) + '</div>').join('') +
+      rows.map(([key, check]) => {
+        const retained = key === 'imageInput' && retainedImage;
+        const status = retained && check.status === 'unsupported' ? '本次检测未通过' : statusNames[check.status] || statusNames.inconclusive;
+        return '<div><dt>' + (names[key] || '服务连接') + '</dt><dd class="is-' + e(check.status) + '">' + status + '</dd>' +
+          checkDiagnostic(key, check, retained) + history(key, check, retained) + '</div>';
+      }).join('') +
       '</dl><p>检测结果仅适用于当前服务和模型配置；超时或网络异常不代表模型不支持。</p></details>';
   }
   function evidenceWarning(model) {
@@ -105,6 +167,10 @@
   }
   global.ModelCapabilitiesUI = { names, states, profile, badges, fields, read, report, evidenceWarning };
   global.addEventListener?.('soduwork-locale-change', () => {
+    global.document?.querySelectorAll('[data-md-cap-label]').forEach(element => {
+      const label = badgeLabel(element.dataset.mdCapLabel, element.dataset.mdCapValue);
+      if (label) element.textContent = label;
+    });
     global.document?.querySelectorAll('[data-md-checked-at]').forEach(element => {
       const date = new Date(element.dataset.mdCheckedAt);
       if (!Number.isNaN(date.getTime())) element.textContent = date.toLocaleString(global.SoduWorkI18n?.getLocale?.() || undefined);

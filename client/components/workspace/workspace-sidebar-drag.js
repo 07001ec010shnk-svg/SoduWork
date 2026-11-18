@@ -55,7 +55,8 @@
       const box = row.getBoundingClientRect(), lower = y > box.top + box.height / 2;
       marker.classList.add(lower ? 'is-drop-after' : 'is-drop-before');
       const next = lower ? row.nextElementSibling?.querySelector('.ws-chat') : row.querySelector('.ws-chat');
-      before = next?.dataset.sidebarChatId || next?.dataset.chatId || '';
+      before = next?.dataset.sidebarChatId || next?.dataset.chatId ||
+        (lower ? row.parentElement.dataset.sidebarNextChatId : '') || '';
     });
     root.addEventListener('drop', event => {
       if (!source) return;

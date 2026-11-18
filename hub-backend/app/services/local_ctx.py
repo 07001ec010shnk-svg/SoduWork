@@ -9,6 +9,8 @@ import time
 import uuid
 from pathlib import Path
 
+from .opencode_session_migration import OpenCodeSessionMigrationError
+
 from .local_base import (_COMPACT_AT, _CTX_WINDOW_DEFAULT, _LOCK, _MEM_LINES, _PROFILES,
                          _RUNS, _WIN, _append_events)
 from .local_base import _env_for, _opencode_bin
@@ -44,6 +46,10 @@ def _oc_compact(run: dict) -> bool:
     env = _env_for(_PROFILES["opencode"], run.get("cfg") or {})
     srv = None
     try:
+        from .opencode_session_migration import migrate_session
+        migrate_session(env, sid, run["ws"], exe)
+        if run.get("stopping"):
+            return False
         srv = subprocess.Popen([exe, "serve", "--port", str(port), "--hostname", "127.0.0.1"],
                                cwd=run["ws"], env=env, stdout=subprocess.DEVNULL,
                                stderr=subprocess.DEVNULL,
@@ -67,6 +73,8 @@ def _oc_compact(run: dict) -> bool:
             headers={"Content-Type": "application/json"}, method="POST")
         with opener.open(req, timeout=120) as r:
             return r.status == 200
+    except OpenCodeSessionMigrationError:
+        raise
     except Exception as e:  # noqa: BLE001
         log.warning("压缩上下文失败 %s: %s", (run.get("cliSid") or "")[:12], type(e).__name__)
         return False
@@ -124,6 +132,8 @@ def _try_compact(ref: str, why: str) -> bool:
     ok = False
     try:
         ok = bool(prof["compact"](run))
+    except OpenCodeSessionMigrationError:
+        raise
     except Exception as e:
         log.warning("压缩失败 %s: %s", ref[:8], type(e).__name__)
     finally:
@@ -380,8 +390,10 @@ def prepare_resume(ref: str, text: str, cfg: dict | None, *, recovery: bool = Fa
                text, run["ws"], ref, run.get("cfg") or {}, prof)
         return {"ok": True}
     except Exception as error:
+        message = (str(error) if isinstance(error, OpenCodeSessionMigrationError)
+                   else "上下文恢复失败：" + type(error).__name__)
         with _LOCK:
-            run.update(state="failed", error="上下文恢复失败：" + type(error).__name__)
+            run.update(state="failed", error=message)
         _save_meta(ref)
         return {"ok": False, "error": run["error"]}
 
@@ -415,6 +427,9 @@ def _recover_overflow(ref: str) -> bool:
         if _settle_cancel(ref):
             return True
         return _relay(ref, prompt)
+    except OpenCodeSessionMigrationError as error:
+        _note(ref, str(error))
+        return False
     except Exception as error:
         log.warning("上下文恢复失败 %s: %s", ref[:8], type(error).__name__)
         return False

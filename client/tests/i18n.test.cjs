@@ -5,6 +5,43 @@ const fs = require('node:fs');
 const path = require('node:path');
 const script = fs.readFileSync(path.join(__dirname, '../core/i18n.js'), 'utf8');
 
+test('installation verification guidance is available in every supported locale', () => {
+  const c = client();
+  for (const phrase of ['验证范围',
+    '安装检查仅验证包结构与声明，不代表真实 AI 或业务功能已验证。',
+    '请查看交付总结中的未测项，在实际使用前确认关键功能。']) {
+    const variants = ['zh-CN', 'en-US', 'ja-JP', 'ko-KR'].map(locale => c.api.translateText(phrase, locale));
+    assert.equal(new Set(variants).size, 4, phrase);
+  }
+});
+
+test('WeCom remote task guidance follows every supported locale', () => {
+  const c = client();
+  const phrases = [
+    '授权对话和插件使用企业微信，远程发送任务指令请在「手机远程对话」中连接机器人并绑定任务',
+    '尚无进入任务的消息。',
+    '此连接收到过来自未配对会话的消息。要让某个私聊的消息进入任务，请点击「绑定任务」→ 选择执行电脑 → 在目标企微私聊发送一次性配对命令。',
+    '命令有效期 10 分钟，仅可使用一次。在目标企微私聊中发送此命令。配对成功后即可在该私聊发送任务指令。',
+    '绑定任务',
+  ];
+  for (const phrase of phrases) {
+    const variants = ['zh-CN', 'en-US', 'ja-JP', 'ko-KR'].map(locale => c.api.translateText(phrase, locale));
+    assert.equal(new Set(variants).size, 4, phrase);
+  }
+});
+
+test('legacy credential recovery guidance follows every supported locale', () => {
+  const c = client();
+  for (const phrase of [
+    '原设备凭据无法验证',
+    '原设备凭据无法验证，已保留原记录',
+    '原设备凭据尚未迁移，请重试连接',
+  ]) {
+    const variants = ['zh-CN', 'en-US', 'ja-JP', 'ko-KR'].map(locale => c.api.translateText(phrase, locale));
+    assert.equal(new Set(variants).size, 4, phrase);
+  }
+});
+
 test('device and account history controls retain all four locale translations', () => {
   const c = client();
   const expected = {

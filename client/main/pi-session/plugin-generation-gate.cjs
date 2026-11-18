@@ -30,7 +30,10 @@ function repairPrompt(failed, attempt) {
   return '<soduwork-internal-plugin-repair>\n' +
     'The host static installation check rejected the final on-disk plugin draft. Repair attempt ' + attempt + '/2 in this same logical turn.\n' +
     failed.map(row => JSON.stringify(row.diagnostic)).join('\n') + '\n' +
-    'Read the named draft and referenced resources, then correct only these generation defects. Serialize JSON with JSON.stringify/json.dump; do not blindly replace quotes. ' +
+    (failed.some(row => row.file?.requiredAuthoringDraft)
+      ? 'The selected Plugin Developer attempted to complete authoring without producing a plugin package. Create soduwork-plugin-draft.json and its resources for the requested reusable method; a one-off business report is not the plugin. Preserve existing HTML previews and include reusable templates as package resources where appropriate. '
+      : 'Read the named draft and referenced resources, then correct only these generation defects. ') +
+    'Serialize JSON with JSON.stringify/json.dump; do not blindly replace quotes. ' +
     'Public user inputs belong in root inputs; node inputs require key/fromNode/outputKey and a direct dependsOn edge. ' +
     'Keep the existing request, selected runtime, tools, permissions, account and conversation. Do not install, publish, run bundled scripts, request wider permissions, or claim readiness. ' +
     'The host will reread the exact files and repeat static preflight after this repair.\n</soduwork-internal-plugin-repair>';
@@ -40,6 +43,7 @@ function missingDrafts(previous, latest) {
   const existing = new Set(previous.map(file => file.path));
   const replacements = latest.filter(file => !existing.has(file.path));
   return previous.filter(original => {
+    if (original.requiredAuthoringDraft && latest.some(file => !file.skillPackage && !file.requiredAuthoringDraft)) return false;
     if (latest.some(file => file.path === original.path)) return false;
     const match = replacements.findIndex(file => original.pluginKey
       ? original.pluginKey === file.pluginKey && original.skillPackage === file.skillPackage
@@ -50,6 +54,7 @@ function missingDrafts(previous, latest) {
   });
 }
 async function validateFile(handle, file, app, preflight) {
+  if (file.requiredAuthoringDraft) throw Error('Final authoring delivery has no installable plugin draft');
   let draft;
   try {
     const skillRuntimeEntry = require('../conversation/skill-frontmatter').runtimeEntry(app, true);
@@ -103,27 +108,55 @@ async function inspect({handle, snapshot, files: indexedFiles, app, preflight} =
   inspections.set(handle,{signature,promise});
   try{return await promise;}finally{if(inspections.get(handle)?.promise===promise)inspections.delete(handle);}
 }
-async function begin({handle, app, identity, logicalOwner, outputSnapshot, cancelled = () => false, repair, changed = () => {}, preflight} = {}) {
+// Preview reads never call finish. At successful authoring completion, even
+// inferred HTML is a preview of the method, not its installable plugin package.
+function finalDeliveryRevision(snapshot) {
+  const delivery = snapshot?.delivery;
+  if (!delivery || delivery.presentation === 'summary') return '';
+  const files = delivery.source === 'manifest' ? delivery.items || []
+    : delivery.source === 'inferred' ? (snapshot.files || []).filter(file => /\.html?$/i.test(file.relative || file.name || '')) : [];
+  if (!files.length) return '';
+  return JSON.stringify([delivery.source, delivery.summary, files.map(file =>
+    [file.relative, file.size, file.at, file.primary, file.kind]).sort((a, b) => String(a[0]).localeCompare(String(b[0])))]);
+}
+async function begin({handle, app, identity, logicalOwner, outputSnapshot, selectedPluginIds = [], cancelled = () => false, pauseConfirmed = () => false, repair, changed = () => {}, preflight} = {}) {
   if (!handle?.cwd) return { canStart: () => !cancelled(), finish: async result => result, dispose() {} };
   const cwd=handle.cwd, sessionId=handle.sessionId, owner=handle.deliveryOwner;
   const scope = () => JSON.stringify([handle.deliveryOwner, identity?.hub, identity?.clientId,
     identity ? require('../device-auth-request').accountScopeKey(identity) : '']);
   const logicalToken=logicalOwner && typeof logicalOwner==='object' ? logicalOwner : {};
   const readSnapshot = outputSnapshot || (() => handle.outputSnapshotAsync?.() ?? handle.outputSnapshot?.() ?? {});
-  const scan = async () => candidates.collectAsync(cwd, await readSnapshot());
+  const scan = async () => {
+    const snapshot = await readSnapshot();
+    return { snapshot, files: await candidates.collectAsync(cwd, snapshot) };
+  };
   let logical=logicalTurns.get(logicalToken);
   if(!logical){
-    logical={handle,scope:scope(),baseline:new Map((await scan())
-      .map(file=>[file.path,file.pluginRevision])),touched:new Set(),repairs:0};
+    const initial = await scan();
+    logical={handle,scope:scope(),baseline:new Map(initial.files
+      .map(file=>[file.path,file.pluginRevision])),touched:new Set(),repairs:0,
+      authoring: selectedPluginIds.includes('local:plugin-builder') && !initial.files.some(file => !file.skillPackage),
+      deliveryRevision: finalDeliveryRevision(initial.snapshot), requiresDraft: false};
     logicalTurns.set(logicalToken,logical);
   }
   const originalScope = logical.scope;
   let disposed=false;
-  const current=()=>!disposed && logical.handle===handle && handle.cwd === cwd && handle.sessionId === sessionId && handle.deliveryOwner === owner && scope() === originalScope && !cancelled();
+  const owned=()=>!disposed && logical.handle===handle && handle.cwd === cwd && handle.sessionId === sessionId && handle.deliveryOwner === owner && scope() === originalScope;
+  const current=()=>owned() && !cancelled();
   const baseline=logical.baseline, touched=logical.touched;
   const collectTargets=async()=>{
-    const files=(await scan()).filter(file=>!file.pluginSuperseded &&
+    const latest = await scan();
+    const files=latest.files.filter(file=>!file.pluginSuperseded &&
       (baseline.get(file.path)!==file.pluginRevision || touched.has(file.path)));
+    const deliveryRevision = finalDeliveryRevision(latest.snapshot);
+    if (logical.authoring && deliveryRevision && deliveryRevision !== logical.deliveryRevision) logical.requiresDraft = true;
+    // Latch this obligation: deleting the manifest or HTML during repair cannot
+    // turn a failed authoring completion into success. Existing drafts keep their
+    // stricter identity/resource checks in missingDrafts.
+    if (logical.requiresDraft && !latest.files.some(file => !file.pluginSuperseded && !file.skillPackage)) files.push({
+      path: path.join(cwd, candidates.DRAFT_NAME), relative: candidates.DRAFT_NAME,
+      pluginRevision: 'missing-authoring-draft', requiredAuthoringDraft: true,
+    });
     files.forEach(file=>touched.add(file.path));
     return files;
   };
@@ -212,12 +245,29 @@ async function begin({handle, app, identity, logicalOwner, outputSnapshot, cance
         for(const row of failed)put(row.file,'repairing',logical.repairs,row.diagnostic);
         let repaired;
         try {repaired=await repair(repairPrompt(failed,attempt+1),{attempt:attempt+1,recordUser:false});}
-        catch(_) {repaired={ok:false};}
-        if(!current())return stopped();
+        catch(error) {
+          // Exceptions can contain provider payloads. Only the model classifier's
+          // safe public diagnostic may enter the turn receipt or queue banner.
+          const issue = require('./model-errors').describe(error);
+          repaired = {ok:false, retrySafe:issue.retryable,
+            reason:issue.publicText || 'Plugin repair failed'};
+        }
+        if(!current()) {
+          // Native pause also stops validation. Retain that confirmed waiting
+          // receipt while still fencing cancellation and a changed owner.
+          if(owned() && repaired?.ok===true && repaired.paused && !repaired.cancelled && pauseConfirmed())return {...result,...repaired};
+          return stopped();
+        }
         if(!completed(repaired)) {
           for(const row of failed)put(row.file,'invalid',attempt+1,row.diagnostic);
-          return repaired?.cancelled ? stopped() : {...result,ok:false,retrySafe:false,failureKind:'plugin-validation',
-            reason:failed[0].diagnostic.file + ': repair did not complete'};
+          if(repaired?.cancelled)return {...result,...repaired};
+          // A runtime rejection is not a new static package defect. Preserve
+          // native failure/control receipts, including Runner-specific fields.
+          if(repaired?.paused || repaired?.recovering)return {...result,...repaired};
+          return {...result,...repaired,ok:false,retrySafe:repaired?.retrySafe===true,
+            failureKind:repaired?.failureKind || 'plugin-repair',
+            reason:repaired?.reason || repaired?.snapshot?.completion?.error ||
+              failed[0].diagnostic.file + ': repair did not complete'};
         }
         // A sibling cannot satisfy a missing draft's validation obligation.
         const latest=await collectTargets();

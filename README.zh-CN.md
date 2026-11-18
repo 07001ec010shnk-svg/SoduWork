@@ -376,7 +376,7 @@ SoduWork 不替代 Agent Harness，而是把它们接进团队工作台，补上
 - **社区交流**：[Discord](https://discord.gg/AXYNrAYHy)
 - **问题反馈与功能建议**：[GitHub Issues](https://github.com/mdiri-ai/SoduWork/issues)
 - **使用交流与想法**：[GitHub Discussions](https://github.com/mdiri-ai/SoduWork/discussions)
-- **企业合作**：私有化部署、系统集成与技术支持，请发邮件至 [soduwork@outlook.com](mailto:soduwork@outlook.com)
+- **企业合作**：私有化部署、系统集成与技术支持，请发邮件至 [contact@soduwork.ai](mailto:contact@soduwork.ai)
 
 ## 参与贡献
 

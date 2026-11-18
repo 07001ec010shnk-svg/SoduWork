@@ -26,6 +26,7 @@ try:
     from .acp_process import close_process, ProcessCleanupError, OwnedProcessGroup
     from . import runtime_images
     from . import opencode_runtime_config
+    from . import opencode_session_migration
     from . import opencode_turn_outcome
     from . import qwen_runtime
     from . import opencode_model_selection
@@ -36,6 +37,7 @@ except ImportError:  # direct script entry used by source Runner
     from acp_process import close_process, ProcessCleanupError, OwnedProcessGroup
     import runtime_images
     import opencode_runtime_config
+    import opencode_session_migration
     import opencode_turn_outcome
     import qwen_runtime
     import opencode_model_selection
@@ -239,11 +241,16 @@ class AcpBridge:
         agent_env.pop(_TASK_OUTPUT_RECOVERY_ENV, None)
         if self.agent_name == "opencode":
             # Reapply in the child entry for already-running source Runners.
-            # Guard/model config and native session/database paths stay intact.
+            # Keep guard/model config, but never open the personal database.
             try:
                 opencode_runtime_config.prepare_environment(agent_env)
+                if self.session_id:
+                    opencode_session_migration.migrate_session(
+                        agent_env, self.session_id, self.cwd, self.argv[0])
+            except opencode_session_migration.OpenCodeSessionMigrationError as exc:
+                raise BridgeError(str(exc)) from exc
             except OSError as exc:
-                raise BridgeError("OpenCode 受管配置目录无法创建，请检查 Runner 数据目录权限。") from exc
+                raise BridgeError("OpenCode 受管数据目录无法创建，请检查 Runner 数据目录权限。") from exc
             self.outcome = opencode_turn_outcome.Observer()
             agent_env = self.outcome.environment(agent_env)
         try:

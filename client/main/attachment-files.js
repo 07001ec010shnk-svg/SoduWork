@@ -6,7 +6,7 @@
    chooses a safe native preview or an explicit system-app handoff. */
 const fs = require('fs');
 const path = require('path');
-const { marked } = require('../vendor/markdown/marked.umd.js');
+const { marked } = require('../core/markdown.js');
 
 const ATTACHMENT_PATH = /^\/api\/v1\/attachments\/([A-Za-z0-9-]{8,64})$/;
 const TICKET = /^[A-Za-z0-9._~-]{16,4096}$/;

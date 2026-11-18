@@ -237,18 +237,29 @@ async def put_my_models(
             elif pid and nm:
                 raise HTTPException(status_code=400, detail="模型服务不存在，请刷新后重试")
         client.models = historical_models + out
+
+    async def usable_lists():
+        return {
+            "usable": await model_catalog.usable(session, client, "chat"),
+            "mediaUsable": {
+                "image": await model_catalog.usable(session, client, "image"),
+                "video": await model_catalog.usable(session, client, "video"),
+            },
+        }
+
+    receipt = None
+    if body.get("returnRevision") is True:
+        # Capture every list under the same write lock as the revision.
+        await session.flush()
+        receipt = await usable_lists()
+        receipt["revision"] = model_config_guard.revision(client)
     await session.commit()
     await session.refresh(client)
     from ..services.client_domain_events import device_changed
     await device_changed(client, "models")
-    return {
-        "ok": True,
-        "usable": await model_catalog.usable(session, client, "chat"),
-        "mediaUsable": {
-            "image": await model_catalog.usable(session, client, "image"),
-            "video": await model_catalog.usable(session, client, "video"),
-        },
-    }
+    if receipt is None:
+        receipt = await usable_lists()
+    return {"ok": True, **receipt}
 
 
 @router.post("/my-models/test")

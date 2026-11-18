@@ -96,7 +96,7 @@ test('temporary chat keeps one UI identity when the real session id arrives', ()
 });
 
 test('chat rendering patches keyed rows instead of clearing the scrolling list', () => {
-  assert.match(source, /function _syncChatList\(target, items, isPinned, pool\)/);
+  assert.match(source, /function _syncChatList\(target, items, isPinned, pool, emptyText\)/);
   assert.match(source, /const scrollTop = scroller\.scrollTop/);
   assert.match(source, /scroller\.scrollTop = scrollTop/);
   assert.doesNotMatch(source, /chats\.innerHTML\s*=\s*['"]['"]/);

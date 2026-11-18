@@ -275,15 +275,26 @@ async send(text, turnAttachments, sendOptions) {
         if (!(turn.internal && turn.runtimeRecovery) || !ctx.run.pluginGenerationTurn) ctx.run.pluginGenerationTurn = {};
         const pluginGenerationTurn = ctx.run.pluginGenerationTurn;
         const permissionRevision = ctx.accessPolicy?.revision;
+        const repairCancelled = () => interrupted() || ctx.closed || ctx.goalCancelled ||
+          ctx.liveAccess.changing() || Boolean(ctx.accessChanges.pending()) || ctx.accessPolicy?.revision !== permissionRevision;
         pluginGate = await require('./plugin-generation-gate.cjs').begin({
           handle: ctx.handle, app: ctx.opts.app, identity: ctx.identity, logicalOwner: pluginGenerationTurn,
-          cancelled: () => interrupted() || ctx.closed || ctx.goalCancelled || Boolean(ctx.run.stopReason) ||
-            ctx.liveAccess.changing() || Boolean(ctx.accessChanges.pending()) || ctx.accessPolicy?.revision !== permissionRevision,
+          selectedPluginIds: effectivePluginIds,
+          cancelled: () => repairCancelled() || Boolean(ctx.run.stopReason),
+          pauseConfirmed: () => Boolean(ctx.limitRequest) && !repairCancelled(),
           changed: () => ctx._emit({ kind: 'plugin-validation' }),
           repair: async prompt => {
             await ctx._promptComplete(prompt, { pluginRepair: true });
-            return { ok: ctx.acc.status() === 'idle' && !ctx.run.stopReason,
-              cancelled: interrupted() || ctx.closed || ctx.goalCancelled };
+            const snapshot = ctx._snapshot();
+            const completion = snapshot.completion || {};
+            const cancelled = repairCancelled();
+            const paused = Boolean(ctx.limitRequest);
+            return { ok: cancelled || paused && completion.reason !== 'error' ||
+                ctx.acc.status() === 'idle' && !ctx.run.stopReason,
+              cancelled, paused, snapshot,
+              ...(completion.reason === 'error' ? {
+                reason: completion.error, retrySafe: completion.retryable === true,
+              } : {}) };
           },
         });
         if (!pluginGate.canStart()) return { ok: true, cancelled: true, manualStop: true };
