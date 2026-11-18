@@ -261,9 +261,11 @@ Check `desktop.log` in the same data directory. Resolve Electron download proble
 
 ### Linux installation and secure sign-in
 
-Install `.deb` or `.rpm` packages through your distribution's software installer, or use `apt install ./package.deb` / `dnf install ./package.rpm`, so the package manager resolves dependencies. Packages declare D-Bus, libsecret, and alternative GNOME Keyring / KWallet service dependencies. An existing matching service satisfies the dependency without replacing the user's keyring. The `tar.gz` and source modes do not manage system dependencies; launch them from a graphical desktop session with these services configured.
+Install `.deb` or `.rpm` packages through your distribution's software installer, or use `apt install ./package.deb` / `dnf install ./package.rpm`, so the package manager resolves dependencies. Packages declare D-Bus, libsecret, and alternative GNOME Keyring / KWallet service dependencies. An existing matching service satisfies the dependency without replacing the user's keyring. The `tar.gz` and source modes do not manage system dependencies; launch them from a graphical desktop session.
 
 Start the application as the ordinary user logged into that desktop. First access may show the system's keyring creation or unlock dialog; use a protected keyring. Do not choose an empty password or disable the sandbox to bypass startup errors. If the keyring is locked or its service is temporarily unavailable, preserve the existing device credentials, restore the system service, then fully quit and reopen the application. Do not delete `device-auth.json`, remove keyring items, or convert credentials to plaintext.
+
+On a profile without existing device credentials, if the system keyring is unavailable, SoduWork offers an encrypted local vault for device sign-in. Choose a separate passphrase of 12–256 characters and keep it safe. You will need it every time you start the desktop, including after installing a keyring. The passphrase stays on this computer and cannot be recovered through the Hub. Other integrations that require the system keyring still need that service.
 
 The source launcher's Linux desktop mode rejects root users (including launches through `sudo`) before creating instance data or installing dependencies. This check also applies to `--check --desktop` and `--prepare-only --desktop`. Run `sh start.sh --desktop` in an ordinary user's graphical session; use `sh start.sh` for a headless server.
 
