@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { attachmentUrl, prepare, request } = require('../main/pi-session/task-input');
+const { attachmentUrl, latestDeliveryAttachments, prepare, request } = require('../main/pi-session/task-input');
 
 test('rework of a dispatched task keeps its Runner workspace even after an old native follow-up', async t => {
  const context = require('../main/conversation/requirement-context');
@@ -365,7 +365,31 @@ test('rework turn carries the rejection feedback in the input, plain follow-up s
  assert.match(full.text,/AI味过于强烈，不够直白。/);
 });
 
-test('new rework session loads only the latest delivery batch and preserves attachment IDs', async t => {
+test('later requirement uploads do not replace the current delivery batch', () => {
+ const input = {id:'brief', role:'input', createdAt:'2026-11-18T01:00:00Z'};
+ const output = {id:'current', role:'output', sourceRef:'delivery-1', round:1, createdAt:'2026-11-18T02:00:00Z'};
+ const added = {id:'added', role:'input', createdAt:'2026-11-18T03:00:00Z'};
+ assert.deepEqual(latestDeliveryAttachments([input, output]), [input, output]);
+ assert.deepEqual(latestDeliveryAttachments([input, output, added]), [input, output, added]);
+});
+
+test('undated requirement uploads do not change delivery selection by list position', () => {
+ const old = {id:'old', role:'output', sourceRef:'old-batch', round:5};
+ const current = {id:'current', role:'output', sourceRef:'new-batch', round:1};
+ const added = {id:'added', role:'input'};
+ assert.deepEqual(latestDeliveryAttachments([old, current, added]), [current, added]);
+});
+
+test('unversioned rework attachments retain legacy inputs and outputs', () => {
+ const input = {id:'brief', role:'input', createdAt:300};
+ const output = {id:'legacy-output', role:'output', createdAt:100};
+ const rework = {id:'previous-rework', role:'rework_input', createdAt:400};
+ assert.deepEqual(latestDeliveryAttachments([output, input, rework]), [output, input]);
+ assert.deepEqual(latestDeliveryAttachments([input]), [input]);
+ assert.deepEqual(latestDeliveryAttachments([]), []);
+});
+
+test('new rework session loads the latest delivery and later requirement uploads', async t => {
  const taskRow = {id:'t', title:'T', note:'原需求', ownerClientId:'d', workRouting:{reworkPending:{feedback:'只修正文，不要从头重做。',actor:'验收人'}}};
  const calls=[];
  t.mock.method(global,'fetch',async(url,options)=>{
@@ -378,12 +402,14 @@ test('new rework session loads only the latest delivery batch and preserves atta
     {id:'new-v1',filename:'交付说明.md',size:3,url:'/api/v1/attachments/new-v1?ticket=new-v1',role:'output',sourceRef:'conversation:new',createdAt:300,evidenceMeta:{round:1}},
     {id:'new-v2',filename:'交付说明.md',size:3,url:'/api/v1/attachments/new-v2?ticket=new-v2',role:'output',sourceRef:'conversation:new',createdAt:400,evidenceMeta:{round:2}},
     {id:'new-proof',filename:'验收证据.json',size:3,url:'/api/v1/attachments/new-proof?ticket=new-proof',role:'verification',sourceRef:'conversation:new',createdAt:400,evidenceMeta:{round:2}},
+    {id:'added-brief',filename:'additional-brief.md',size:3,url:'/api/v1/attachments/added-brief?ticket=added-brief',role:'input',createdAt:500},
   ]);
   if(value.includes('/attachments/brief?')) return new Response('brief');
   if(value.includes('/attachments/old?')) return new Response('old');
   if(value.includes('/attachments/new-v1?')) return new Response('new-v1');
   if(value.includes('/attachments/new-v2?')) return new Response('new-v2');
   if(value.includes('/attachments/new-proof?')) return new Response('new-proof');
+  if(value.includes('/attachments/added-brief?')) return new Response('added-brief');
   if(value.includes('/attachments/old-rework?')) return new Response('old-rework');
   if(value.includes('/conversation-turn')) return Response.json({turn:{state:'queued'},task:taskRow});
   return Response.json({});
@@ -394,18 +420,21 @@ test('new rework session loads only the latest delivery batch and preserves atta
    {followUp:false, reworkSession:true},
    {handle:{sessionId:'new-chat'},app:{getPath:()=>require('node:os').tmpdir()}});
  assert.match(input.text,/只修正文，不要从头重做。/);
- assert.deepEqual(input.attachments.map(file=>file.attachmentId),['brief','new-v2','new-proof']);
- assert.deepEqual(input.attachments.map(file=>file.data.toString()),['brief','new-v2','new-proof']);
+ assert.deepEqual(input.attachments.map(file=>file.attachmentId),['brief','new-v2','new-proof','added-brief']);
+ assert.deepEqual(input.attachments.map(file=>file.data.toString()),['brief','new-v2','new-proof','added-brief']);
  assert.ok(calls.some(value => value.includes('/attachments/brief?')));
  assert.ok(calls.some(value => value.includes('/attachments/new-v2?')));
  assert.ok(calls.some(value => value.includes('/attachments/new-proof?')));
+ assert.ok(calls.some(value => value.includes('/attachments/added-brief?')));
  assert.ok(!calls.some(value => value.includes('/attachments/old?')));
+ assert.ok(!calls.some(value => value.includes('/attachments/new-v1?')));
  assert.ok(!calls.some(value => value.includes('/attachments/old-rework?')));
  const attachments=require('../main/pi-session/attachments');
  const staged=await attachments.stage(require('node:os').tmpdir(),input.attachments,{stagingDir:require('node:os').tmpdir() + '/soduwork-rework-test'});
  const prompt=attachments.prompt(staged.files);
  assert.match(prompt,/new-v2/); assert.match(prompt,/new-proof/); assert.match(prompt,/附件 ID: new-v2/);
  assert.match(prompt,/需求素材\.md/); assert.match(prompt,/交付说明\.md/); assert.match(prompt,/验收证据\.json/);
+ assert.match(prompt,/additional-brief\.md/); assert.match(prompt,/附件 ID: added-brief/);
  assert.doesNotMatch(prompt,/old-rework/);
 });
 
