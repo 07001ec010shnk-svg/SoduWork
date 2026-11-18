@@ -728,6 +728,7 @@ def _dispatch_sync_once(cfg: dict, t, files: list | None = None,
         _RUNS[sid] = {
             "cli": key, "ws": ws, "state": "running", "started": time.time(), "ended": None,
             "taskId": getattr(t, "id", ""), "title": getattr(t, "title", ""),
+            "eventDestination": cfg.get("_eventDestination") or "hub",
             "model": model,
             "modelLocalOnly": dict(cfg.get("llm") or {}).get("localOnly") is True,
             "reasoningEffort": reasoning_effort,

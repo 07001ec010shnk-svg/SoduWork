@@ -493,6 +493,7 @@ _PERSIST_KEYS += ("conversationMode", "turnStartSeq", "admissionKey", "reasoning
 _PERSIST_KEYS += ("goalContract", "goalState", "goalUserPending", "goalTurnOwned")
 _PERSIST_KEYS += ("turnEndIdentity", "admissionStartSeq")
 _PERSIST_KEYS += ("usageReceipts", "modelLocalOnly", "activeUsageOwner")
+_PERSIST_KEYS += ("eventDestination",)
 
 
 def _save_meta(ref: str) -> None:

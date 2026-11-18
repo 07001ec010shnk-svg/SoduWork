@@ -665,7 +665,10 @@
     if (!o.signal) o.signal = _abortSignal(DEFAULT_TIMEOUT);
     var res;
     try { res = await fetch(apiUrl(path), o); }
-    catch (error) { if (!opts?.signal?.aborted || error?.name !== 'AbortError') mark(false); throw error; }
+    catch (error) {
+      global.RequirementDiagnostics?.http(global.RequirementDiagnostics.emit,path,o.body,{},0);
+      if (!opts?.signal?.aborted || error?.name !== 'AbortError') mark(false); throw error;
+    }
     try { trace?.response?.(res); } catch (_) {}
     /*
      * Any HTTP response proves reachability; 4xx/5xx are request failures, not offline status.
@@ -673,6 +676,7 @@
      */
     mark(true);
     var txt = await res.text();
+    try { global.RequirementDiagnostics?.http(global.RequirementDiagnostics.emit,path,o.body,JSON.parse(txt),res.status); } catch (_) {}
     if (requestScope !== taskStorageKey('ops')) throw staleTaskScope();
     assertRequestAuth(auth, false);
     /*

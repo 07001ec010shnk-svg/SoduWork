@@ -35,6 +35,25 @@ Direct development uses local configuration and data; keep it separate from real
 
 API documentation: **http://127.0.0.1:9080/docs**. Health check: `GET /healthz`.
 
+## Desktop-local Runner event recovery
+
+Desktop-local Runner executions persist their event destination separately from the
+conversation alias. Their history does not enter Hub task delivery, and Hub outbox
+pressure does not block local work; CPU, memory and execution concurrency still apply.
+Queued desktop turns display queue wording instead of model-processing wording.
+
+On upgrade, Runner recognizes old local chat streams only when their alias, runtime
+and deterministic execution reference agree. Confirmed local packets are copied to
+private `local-events-*.archive` recovery files before removal from the active outbox;
+Windows payloads retain DPAPI protection. Collection marks are preserved. Ambiguous
+streams and real Hub events remain untouched, and NACK is never treated as ACK.
+Recovery files are bounded to three times the configured outbox byte budget, including
+encoding overhead. Archive failures retain the original packets and emit a diagnostic;
+unrelated Hub delivery and collection continue subject to actual outbox capacity.
+Keep these recovery files private and retain them until their contents have been reviewed.
+Run `python3 -m unittest test_runner_event_scope test_runner_event_delivery` to verify
+routing, restart recovery, interrupted archive writes, and Hub delivery preservation.
+
 ## Managed Pi execution
 
 Managed Pi execution binds each Runner execution record to its own configuration and session directory under the Runner data root. Startup and follow-up turns use the same explicit path, independent of inherited desktop Pi settings or the operating system home-directory lookup. Model files contain an environment-variable reference for the credential; missing model configuration or failed file publication stops execution before Pi starts. Personal Pi and desktop-local model files are not modified. On upgrade, only the exact native session identified by the Runner record and matching workspace can be copied into the private directory; its original file remains unchanged. Established follow-up turns require an existing session rather than silently starting a new one.
@@ -44,6 +63,8 @@ After a Runner restart, recovery terminals bind the same owned history without r
 To verify this path with a real Runner and Pi subprocess against a disposable authenticated Hub and loopback model, install the client dependencies and run `python3 e2e_pi_dispatch_config.py --output /absolute/evidence/directory` from the backend test environment. The check covers dispatch, follow-up, output files, native terminal recovery after restart, and preservation of personal model configuration. It does not exercise a production model or native desktop UI.
 
 ## Offline quality gate
+
+Native requirement preparation can save `executionSubmissionChoice` independently of the effective `executionSubmissionMode`. For the `infer` choice, completed and validated primary artifacts resolve the mode to automatic review submission; explicit manual and ambiguous legacy manual values retain their behavior. Review remains a human action owned by the requirement creator. Current-turn delivery issues expose interrupted capture, invalid output or an unavailable creator without changing approval permissions. Upgrade desktop and Hub together for the new choice acknowledgment and issue receipts.
 
 Use the dedicated test environment, not a production service environment:
 

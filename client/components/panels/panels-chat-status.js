@@ -112,6 +112,7 @@
     const snap = snapshot || {};
     const execution = snap.execution || {};
     if (!pending && waiting(snap)) return notice(snap.statusText || execution.controlled?.reason || '等待输入');
+    if (snap.status === 'queued') return notice(snap.statusText || '排队中');
     const harness = execution.harness || {};
     if (snap.modelRetry && snap.modelRetry.active) {
       const remaining = Math.ceil((Number(snap.modelRetry.retryAt) - Date.now()) / 1000);
@@ -428,7 +429,7 @@
     }
     function metricsHtml(busy) {
       const tokens = tokenInfo();
-      const label = busy ? '处理中' : '已处理';
+      const label = busy ? (state().snap?.status === 'queued' ? '排队中' : '处理中') : '已处理';
       return '<div data-chat-node="turn-metrics" class="nturn-metrics" aria-label="' + escape(tx('当前工作统计')) + '">' +
         '<span class="nstatus-metric"><span data-thinking-label>' + tx(label) + '</span> ' +
         '<b data-thinking-elapsed>' + elapsedText(elapsedMs()) + '</b></span><span class="nstatus-divider">·</span>' +

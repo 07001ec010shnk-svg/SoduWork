@@ -492,6 +492,9 @@ const Store={
   /* Merge WebSocket and integration events into local state without echoing them back to the server. */
   applyServerEvent(ev){
     if(!ev||!ev.type)return;
+    if(ev.task && (ev.type==='task.created'||ev.type==='task.updated')) {
+      try { window.RequirementDiagnostics?.emit('renderer.task',window.RequirementDiagnostics.task(ev.task)); } catch (_) {}
+    }
     if((ev.type==='task.created'||ev.type==='task.updated')&&ev.task?.projectionPending){
       const canonical=TaskSync.mergeSaveReceipt(this._shadow[ev.task.id],ev.task);
       delete canonical.statusTransition;
