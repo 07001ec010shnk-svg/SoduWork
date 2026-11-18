@@ -154,7 +154,12 @@
   .desk-blank svg{width:46px;height:46px;stroke:var(--ink-5,var(--ink-4));stroke-width:1.4;fill:none;
     stroke-linecap:round;stroke-linejoin:round;opacity:.5}
   html[data-desk-panel="workspace"] .desk-blank.desk-startup-recovery{
-    display:flex;z-index:20;background:var(--bg-0);padding:24px;text-align:center;
+    position:fixed;top:var(--ws-panel-top,0px);display:flex;z-index:21;
+    background:var(--bg-0);padding:24px;text-align:center;
+  }
+  html[data-desk-panel="workspace"] body:has(> .workspace-shell) > .desk-startup-recovery{
+    left:var(--ws-main-left);right:var(--ws-frame-right);bottom:var(--ws-frame-bottom);
+    border-radius:var(--ws-frame-radius);
   }
   .desk-startup-recovery button{
     padding:6px 12px;border:1px solid var(--line);border-radius:6px;

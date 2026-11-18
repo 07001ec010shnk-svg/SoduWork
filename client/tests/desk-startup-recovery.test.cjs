@@ -10,7 +10,8 @@ const read = name => fs.readFileSync(path.join(__dirname, '..', name), 'utf8');
 const html = read('desk.html');
 const boot = read('desk-boot.js');
 
-function fixture({ failMount = false, failOpen = false, view = 'create', initData = async () => {} } = {}) {
+function fixture({ failMount = false, failOpen = false, view = 'create', initData = async () => {},
+  navigate = (_view, payload, open) => open(_view, payload) } = {}) {
   const events = new EventTarget();
   const classes = new Set();
   const blank = { style: {}, classList: { add: value => classes.add(value) } };
@@ -24,13 +25,15 @@ function fixture({ failMount = false, failOpen = false, view = 'create', initDat
     dispatchEvent: events.dispatchEvent.bind(events), Event, initData,
     setTimeout: (callback, ms) => { deadline = { callback, ms }; },
     location: { reload: () => { reloads++; } },
-    document: { readyState: 'loading', getElementById: id => elements[id],
+    document: { readyState: 'loading', getElementById: id => elements[id], querySelectorAll: () => [],
+      documentElement: { setAttribute() {} },
       addEventListener(type, listener) { if (type === 'DOMContentLoaded') start = listener; } },
+    openComposePanel() { if (failOpen) throw Error('fixture open failure'); },
     WorkspaceShell: {
       mount() { if (failMount) throw Error('fixture mount failure'); },
-      setTasks() {}, setConnected() {},
+      setTasks() {}, setConnected() {}, setActive() {},
     },
-    WorkspaceNavigation: { open() { if (failOpen) throw Error('fixture open failure'); } },
+    WorkspaceNavigation: { open: navigate },
     console: { error() {}, warn() {} },
   };
   scope.window = scope;
@@ -38,7 +41,7 @@ function fixture({ failMount = false, failOpen = false, view = 'create', initDat
   const recovery = html.match(/<script id="deskStartupRecovery">([\s\S]*?)<\/script>/)?.[1];
   if (recovery) vm.runInContext(recovery, scope);
   vm.runInContext(boot, scope);
-  return { start, blank, hint, retry, classes, deadline, reloads: () => reloads };
+  return { start, blank, hint, retry, classes, deadline, host: scope.WorkspaceHost, reloads: () => reloads };
 }
 
 test('a workspace mount failure exposes a reload action after the startup timeout', () => {
@@ -79,4 +82,43 @@ test('a slow workspace can still open and dismiss recovery without reloading', a
   await new Promise(setImmediate);
   assert.equal(f.blank.style.display, 'none');
   assert.equal(f.reloads(), 0);
+});
+
+test('a page selected while boot is pending wins over the startup route and timeout', async () => {
+  let finish;
+  const f = fixture({ view: 'history', initData: () => new Promise(resolve => { finish = resolve; }) });
+  f.start();
+  f.host.open('notices', {});
+  f.deadline.callback();
+  assert.equal(f.retry.hidden, true);
+  finish();
+  await new Promise(setImmediate);
+  assert.equal(f.host.view, 'notices');
+});
+
+test('a pending restore is not treated as a mounted page or retried at boot', async () => {
+  let finish, attempts = 0;
+  const f = fixture({ navigate(view, payload, open) {
+    attempts++;
+    return new Promise(resolve => { finish = () => resolve(open(view, payload)); });
+  } });
+  f.start();
+  await new Promise(setImmediate);
+  assert.equal(attempts, 1);
+  assert.notEqual(f.blank.style.display, 'none');
+  f.deadline.callback();
+  assert.equal(f.retry.hidden, false);
+  finish();
+  await new Promise(setImmediate);
+  assert.equal(f.blank.style.display, 'none');
+});
+
+test('a rejected restored route exposes reload without waiting for the deadline', async () => {
+  let fail;
+  const f = fixture({ navigate: () => new Promise((_resolve, reject) => { fail = reject; }) });
+  f.start();
+  fail(Error('restore and fallback failed'));
+  await new Promise(setImmediate);
+  assert.equal(f.retry.hidden, false);
+  assert.notEqual(f.blank.style.display, 'none');
 });
