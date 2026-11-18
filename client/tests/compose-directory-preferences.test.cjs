@@ -29,6 +29,7 @@ function fixture(options = {}) {
       } },
     ComposeModelPicker: { value: () => ({ modelName, reasoningEffort, thinkingLevel }),
       async resetNewDraft() { modelName = 'default'; reasoningEffort = ''; thinkingLevel = ''; },
+      async resetDirectory() { modelName = 'default'; reasoningEffort = ''; thinkingLevel = ''; },
       releasePreference() {},
       async restoreSelection(value, current) {
         calls.push({ kind: 'model', value: { ...value }, owner, location });

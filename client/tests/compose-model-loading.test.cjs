@@ -41,6 +41,12 @@ function fixture() {
   vm.runInContext(source, context);
   const picker = context.ComposeModelPicker;
   return { picker, requests, nodes, notices, changed: () => listeners.get('models-changed')?.(),
+    runtimeReset(handler) { context.ComposeRuntime.resetNewDraft = handler; },
+    directoryPreferences(workspace = { direct: true, dir: '/isolated-project' }) {
+      vm.runInContext(fs.readFileSync(path.join(__dirname, '../components/panels/compose-directory-preferences.js'), 'utf8'), context);
+      context.ComposeDirectoryPreferences.bind({ workspace: () => workspace });
+      return context.ComposeDirectoryPreferences;
+    },
     start() { picker.bind({ api: () => bridge, onChange: value => notices.push(value) }); },
     remount() { for (const id of Object.keys(nodes)) nodes[id] = element(); },
     agent(value) { agent = value; }, location(value) { location = value; },
@@ -469,4 +475,48 @@ test('Codex directory preferences restore model effort and retain a missing mode
   const removed = f.picker.refresh(true); f.reply(1, 'first'); await removed;
   assert.equal(f.picker.value().modelName, 'saved'); assert.equal(await f.picker.ready(), false);
   f.choose('first', true); assert.equal(await f.picker.ready(), true);
+});
+
+test('directory restoration preserves the cloud model on a local round trip but a new conversation clears it', async () => {
+  const f = fixture(), preferences = f.directoryPreferences();
+  const cloudCatalog = { usable: [{ name: 'cloud-default' }, { name: 'cloud-picked' }] };
+  const localCatalog = { usable: [{ name: 'local:private:first', localOnly: true }, { name: 'local:private:picked', localOnly: true }] };
+  f.location('cloud'); f.start(); f.requests[0].resolve(cloudCatalog); await f.picker.ready();
+  f.choose('cloud-picked'); await preferences.begin();
+  assert.equal(f.picker.value().modelName, 'cloud-picked');
+
+  f.location('local'); const local = preferences.begin(); await tick();
+  f.requests[1].resolve(localCatalog); await local; f.choose('local:private:picked');
+  assert.equal(f.picker.value().modelName, 'local:private:picked');
+  f.location('cloud'); await preferences.sync();
+  const returned = f.picker.refresh(); f.requests[2].resolve(cloudCatalog); await returned;
+  assert.equal(f.picker.value().modelName, 'cloud-picked', 'a local directory refresh does not delete the cloud draft model');
+  assert.doesNotMatch(f.nodes.cpModelPop.innerHTML, /local:private/);
+
+  f.location('local'); const newSession = preferences.begin({ newSession: true }); await tick();
+  f.requests[3].resolve(localCatalog); await newSession;
+  assert.equal(f.picker.value().modelName, 'local:private:first', 'a new conversation resets the local draft choice');
+  f.location('cloud'); await preferences.sync();
+  const freshCloud = f.picker.refresh(); f.requests[4].resolve(cloudCatalog); await freshCloud;
+  assert.equal(f.picker.value().modelName, 'cloud-default', 'a new conversation also resets the old cloud draft choice');
+  f.choose('cloud-picked');
+  const cloudNewSession = preferences.begin({ newSession: true }); await tick();
+  f.requests[5].resolve(cloudCatalog); await cloudNewSession;
+  assert.equal(f.picker.value().modelName, 'cloud-default', 'an explicitly new cloud conversation also resets its model');
+});
+
+test('a new conversation clears the old cloud model before a delayed local Agent probe can be cancelled', async () => {
+  const f = fixture(), preferences = f.directoryPreferences();
+  const catalog = { usable: [{ name: 'default' }, { name: 'previous-cloud-choice' }] };
+  f.location('cloud'); f.start(); f.requests[0].resolve(catalog); await f.picker.ready();
+  f.choose('previous-cloud-choice'); await preferences.begin();
+  let release; f.runtimeReset(() => new Promise(resolve => { release = resolve; }));
+  f.location('local'); const opening = preferences.begin({ newSession: true }); await tick();
+  assert.equal(typeof release, 'function', 'local Agent probe is still in progress');
+  f.location('cloud'); await preferences.sync();
+  const currentModels = f.picker.refresh();
+  f.requests.slice(1).forEach(row => row.resolve(catalog)); await currentModels;
+  assert.equal(f.picker.value().modelName, 'default', 'the new conversation cannot inherit an old cloud selection while local probing waits');
+  release(true); await opening;
+  assert.equal(f.picker.value().modelName, 'default', 'the cancelled probe cannot restore the previous selection later');
 });

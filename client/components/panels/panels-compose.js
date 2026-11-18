@@ -826,7 +826,7 @@
       _mode = global.AccessPreferences?.snapshot?.().mode || 'standard';
       _workspace = { ...global.ComposeSurface.newSessionWorkspace(_workspace, sessionOptions),
         repoId: typeof sessionOptions.repoId === 'string' ? sessionOptions.repoId.trim() : '' };
-      void global.ComposeDirectoryPreferences?.begin();
+      void global.ComposeDirectoryPreferences?.begin({ newSession: true });
       _usedAtts = [];
       if (_intent && q.prefill) _intent.reset();
       _loadSetup();

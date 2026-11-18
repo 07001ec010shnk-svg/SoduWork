@@ -682,11 +682,16 @@
     return { modelName: '', reasoningEffort: '' };
   }
 
-  function resetNewDraft() {
-    states.clear(); activeScope = ''; activeRuntime = '';
-    // Starting another conversation must supersede a lookup from the previous draft.
+  function resetSelection(localOnly) {
+    if (localOnly) {
+      for (const key of states.keys()) if (key.startsWith('local:')) states.delete(key);
+    } else states.clear();
+    activeScope = ''; activeRuntime = '';
+    // Directory changes supersede local lookups without discarding this draft's cloud choice.
     return refresh(true);
   }
+  const resetNewDraft = () => resetSelection(false);
+  const resetDirectory = () => resetSelection(true);
 
   async function restoreSelection(saved, isCurrent = () => true) {
     const row = runtime(), context = loadContext().key;
@@ -714,7 +719,7 @@
     for (const selected of states.values()) delete selected.directoryPreference;
   }
 
-  global.ComposeModelPicker = { bind, close, refresh, ready, value, resetNewDraft, restoreSelection, releasePreference,
+  global.ComposeModelPicker = { bind, close, refresh, ready, value, resetNewDraft, resetDirectory, restoreSelection, releasePreference,
     nativeEffort: { html: effortCard, paint: paintEffortCard, levels: effortChoices, defaultLevel: defaultEffort },
     label: () => currentLabel(runtime(), state(runtime().id)) };
   const scopeChanged = () => {

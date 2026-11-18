@@ -36,7 +36,7 @@
   function announce() {
     options.say?.('此目录上次使用的 Agent 或模型暂不可用，请重新选择可用的 Agent 和模型');
   }
-  function begin() {
+  function begin({ newSession = false } = {}) {
     active = true; blocked = false;
     const ticket = ++generation, context = scope(), storageKey = key(context);
     activeKey = identity(context);
@@ -45,11 +45,17 @@
     expected = saved;
     const job = Promise.resolve().then(async () => {
       if (!current()) return false;
-      if (context.location === 'cloud') return true;
+      // Clear both locations before a runtime probe yields. Only the current
+      // model lookup should gate readiness after a location/runtime change.
+      if (newSession) void Promise.resolve(global.ComposeModelPicker?.resetNewDraft?.()).catch(() => {});
+      if (context.location === 'cloud') {
+        if (newSession) await global.ComposeModelPicker?.ready?.();
+        return current();
+      }
       // A new directory must not retain a protected missing-model choice from the previous one.
       await global.ComposeRuntime?.resetNewDraft?.();
       if (!current()) return false;
-      await global.ComposeModelPicker?.resetNewDraft?.();
+      await (newSession ? global.ComposeModelPicker?.ready?.() : global.ComposeModelPicker?.resetDirectory?.());
       if (!current() || !saved) return current();
       const runtimeReady = await global.ComposeRuntime?.restoreSelection?.(saved.adapterId, current);
       if (!current()) return false;

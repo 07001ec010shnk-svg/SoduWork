@@ -130,6 +130,27 @@ module.exports = async ({ runCase, js, click, type, until, setup, reloadPage }) 
     await open(a); assert.deepEqual(await selected(), pair('qwen', 'fixture-chosen'));
   });
 
+  await runCase('directory defaults preserve cloud draft choices across local visits and clear them for a new conversation', async () => {
+    async function location(value) {
+      await click('#cpTask [data-execution-menu]'); await click(`#cpTask [data-execution="${value}"]`);
+      await until(`ComposeExecution.value()===${JSON.stringify(value)}`, value + ' execution selected');
+      await js('Promise.resolve(ComposeDirectoryPreferences.ready()).then(()=>true)');
+      await js('Promise.all([ComposeRuntime.ready(),ComposeModelPicker.ready()]).then(()=>true)');
+    }
+    await saveA(); await open(a); await location('cloud'); await choose('pi', 'fixture-history');
+    assert.equal(await js('ComposeDirectoryPreferences.capture()'), null, 'remote selection cannot be saved under a local path');
+    await location('local');
+    assert.deepEqual(await selected(), pair('qwen', 'fixture-chosen'), 'local visit restores its own saved pair');
+    await pickDirectory(b);
+    await location('cloud');
+    assert.deepEqual(await selected(), pair('pi', 'fixture-history'), 'local restoration and folder changes preserve the cloud draft');
+    await open(a);
+    assert.deepEqual(await selected(), pair('qwen', 'fixture-chosen'));
+    await location('cloud');
+    assert.deepEqual(await selected(), pair('pi', 'fixture-default'), 'a genuinely new conversation starts with a fresh cloud model');
+    assert.equal(await js('calls.sends.length'), 1, 'execution switching never starts an extra local or cloud request');
+  });
+
   await runCase('directory defaults discard late model results after directory change or explicit choice', async () => {
     await saveA(); await open(b); await choose('pi', 'fixture-history'); await send();
     await reloadPage();
