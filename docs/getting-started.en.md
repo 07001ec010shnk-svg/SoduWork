@@ -18,8 +18,8 @@ Your first run has four steps: install the prerequisites, extract the source, st
    | macOS | Double-click `start-desktop.command` |
    | Linux desktop | Open a terminal in this folder and run `sh start.sh --desktop` |
 
-4. On first run, choose your own password for **`admin`**, using **12–128 characters**, then confirm it. Typing is hidden: no characters or asterisks appear. Press Enter after typing. A mistake prompts you to try again without closing the window. Later starts keep the existing password.
-5. Keep the window open. The launcher installs dependencies, builds the management UI, prepares the database, and opens the client. Initial downloads can take several minutes. Long steps print a status message about every 15 seconds; the printed `startup.log` path contains the details.
+4. Keep the window open while the launcher installs dependencies, builds the management UI, and prepares the desktop runtime. Initial downloads can take several minutes. Long steps print a status message about every 15 seconds. If preparation fails, check the printed `startup.log` path, fix the error, and rerun the same command.
+5. After preparation succeeds, choose a **12–128 character** password for **`admin`** and confirm it. Typing is hidden. Press Enter after each entry. A mistake prompts you to try again. The launcher initializes the database and opens the client. Once the account is created, later starts use the same password.
 
 You do not need to create a database, install Docker or Git, prepare an `.env` file, or install each project separately. First-time setup needs internet access; later starts reuse completed work.
 
@@ -298,7 +298,7 @@ Run these from the source root. The table uses the macOS/Linux wrapper. Windows 
 | Do not open a browser automatically | `sh start.sh --desktop --no-browser` |
 | Use a dedicated data directory | `sh start.sh --desktop --data-dir "D:/SoduWork-data"` |
 
-Use the same data directory for preparation and startup. Automation may explicitly use `--password-stdin` for the first password; never put passwords in command arguments or scripts. On Windows, set `SODUWORK_NO_PAUSE=1` to return a failing exit code without waiting for a keypress.
+Use the same data directory for preparation and startup. With `--password-stdin`, the launcher reads the first password only after preparation succeeds. Keep passwords out of command arguments and scripts. On Windows this mode returns immediately on failure. For other unattended invocations, set `SODUWORK_NO_PAUSE=1` to skip the keypress on failure.
 
 For independent source development, see the [developer guide](development.en.md). The Vite proxy defaults to `http://127.0.0.1:9080`; set `SODUWORK_DEV_HUB=http://127.0.0.1:18989` when using this launcher. The default service is accessible only on this computer. For team deployment, see [Docker self-hosting](../ops/self-host/README.md).
 

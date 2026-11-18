@@ -115,7 +115,7 @@ def run(command: list[str], *, cwd: Path, log: Path, label: str,
         output.write(("\n--- " + label + " ---\n").encode("utf-8"))
         output.flush()
         offset = output.tell()
-        with subprocess.Popen(command, cwd=cwd, env=env, stdout=output,
+        with subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=output,
                               stderr=subprocess.STDOUT, **spawn_options()) as child:
             try:
                 code = wait_child(child, progress_label=label, timeout=timeout)
