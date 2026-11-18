@@ -312,3 +312,30 @@ test('a failed runtime probe cannot publish a ready manifest', async t => {
     test: () => { throw Error('synthetic runtime probe failed'); }, download: unexpected }), /runtime probe failed/);
   assert.equal(fs.existsSync(path.join(root, '.runtime', 'git', '.soduwork-shell-runtime.json')), false);
 });
+
+test('preparation retains an unremovable interrupted runtime and publishes a fresh one', async t => {
+  const root = directory(t), runtime = path.join(root, '.runtime', 'git');
+  fs.mkdirSync(runtime, { recursive: true });
+  fs.writeFileSync(path.join(runtime, 'interrupted.txt'), 'old runtime');
+  const remove = fs.rmSync;
+  t.mock.method(fs, 'rmSync', (target, options) => {
+    if (target === runtime) throw Object.assign(Error('reparse point cannot be removed'), { code: 'EPERM' });
+    return remove(target, options);
+  });
+  const messages = [];
+  await prepare({ root, platform: 'win32', arch: 'x64', environment: {}, log: value => messages.push(value),
+    archiveOf: async () => path.join(root, 'verified.exe'),
+    run: () => {
+      fs.mkdirSync(path.join(runtime, 'bin'), { recursive: true });
+      fs.writeFileSync(path.join(runtime, 'bin', 'bash.exe'), 'new runtime');
+      return { status: 0 };
+    },
+    test: location => assert.equal(fs.readFileSync(path.join(location, 'bin', 'bash.exe'), 'utf8'), 'new runtime'),
+  });
+  const stale = fs.readdirSync(path.dirname(runtime)).filter(name => name.startsWith('git.stale-'));
+  assert.equal(stale.length, 1);
+  assert.equal(fs.readFileSync(path.join(path.dirname(runtime), stale[0], 'interrupted.txt'), 'utf8'), 'old runtime');
+  assert.equal(fs.existsSync(path.join(runtime, '.soduwork-shell-runtime.json')), true);
+  assert.equal(messages.length, 1);
+  t.mock.restoreAll();
+});
