@@ -60,6 +60,18 @@ claims from injected local context. My Memory shows rendered Markdown by default
 with source editing available under Edit Markdown. Existing conversations retain
 their history and working directory.
 
+After successfully sending the first message of a new local chat or goal in an
+explicitly selected working or project directory, the desktop remembers the
+runtime and model used together.
+Starting another conversation in that directory, or selecting it in a new draft,
+restores that pair when both are available. Preferences belong to the current
+Hub, account and device. Cloud execution retains its existing selection flow.
+Temporary workspaces do not share directory preferences. If a saved runtime or
+model is unavailable, select an available combination explicitly; automatic
+fallback does not replace the saved pair. Changes to an unsent draft do not
+replace the last-used selection. Codex account sessions without a verified model
+selection do not save a directory preference.
+
 For a first local session, run `sh start.sh --desktop` from the repository root. For independent development, keep Hub running and execute:
 
 ```sh

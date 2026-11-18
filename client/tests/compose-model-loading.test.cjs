@@ -429,3 +429,44 @@ test('model changes refresh an already-mounted composer, preserve its explicit c
   f.reply(1, 'obsolete'); await tick();
   assert.equal(f.picker.value().modelName, 'chosen'); assert.equal(f.picker.label(), 'Renamed choice');
 });
+
+test('restored directory models stay visibly unavailable through refresh until explicitly replaced', async () => {
+  const f = fixture(); f.start(); f.reply(0, 'fallback'); await f.picker.ready();
+  assert.equal(await f.picker.restoreSelection({ adapterId: 'pi', modelName: 'saved-model' }), false);
+  assert.equal(f.picker.value().modelName, 'saved-model'); assert.equal(await f.picker.ready(), false);
+  assert.match(f.picker.label(), /不可用/);
+  const refreshed = f.picker.refresh(true); f.reply(1, 'fallback'); await refreshed;
+  assert.equal(f.picker.value().modelName, 'saved-model'); assert.equal(await f.picker.ready(), false);
+  f.choose('fallback'); assert.equal(f.picker.value().modelName, 'fallback');
+  assert.equal(await f.picker.ready(), true);
+});
+
+test('restoring a managed directory model refuses local-only names in a cloud scope', async () => {
+  const f = fixture(); f.location('cloud'); f.start();
+  f.requests[0].resolve({ usable: [{ name: 'hub-model' }, { name: 'local:private:model', localOnly: true }] });
+  await f.picker.ready();
+  assert.equal(await f.picker.restoreSelection({ adapterId: 'pi', modelName: 'local:private:model' }), false);
+  assert.equal(await f.picker.ready(), false);
+  assert.doesNotMatch(f.nodes.cpModelPop.innerHTML, /data-model="local:private:model"/);
+});
+
+test('a stale directory model restore cannot overwrite a new account or explicit selection', async () => {
+  const f = fixture(); f.start(); let current = true;
+  const restoring = f.picker.restoreSelection({ adapterId: 'pi', modelName: 'old-directory' }, () => current);
+  f.owner('hub-b/device/user-b'); current = false;
+  f.reply(1, 'new-account'); await f.picker.ready(); f.choose('new-account');
+  f.reply(0, 'old-directory'); assert.equal(await restoring, false);
+  assert.equal(f.picker.value().modelName, 'new-account');
+});
+
+test('Codex directory preferences restore model effort and retain a missing model through refresh', async () => {
+  const f = fixture(); f.agent('codex'); f.start();
+  f.requests[0].resolve({ ok: true, models: [{ id: 'first', label: 'First', reasoningLevels: ['medium', 'high'] },
+    { id: 'saved', label: 'Saved', reasoningLevels: ['medium', 'high'] }] });
+  await f.picker.ready();
+  assert.equal(await f.picker.restoreSelection({ adapterId: 'codex', modelName: 'saved', reasoningEffort: 'high' }), true);
+  assert.equal(f.picker.value().modelName, 'saved'); assert.equal(f.picker.value().reasoningEffort, 'high');
+  const removed = f.picker.refresh(true); f.reply(1, 'first'); await removed;
+  assert.equal(f.picker.value().modelName, 'saved'); assert.equal(await f.picker.ready(), false);
+  f.choose('first', true); assert.equal(await f.picker.ready(), true);
+});

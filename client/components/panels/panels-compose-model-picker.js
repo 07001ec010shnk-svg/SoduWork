@@ -113,6 +113,9 @@
         selected.catalogUnavailable = true;
         return;
       }
+      // A directory preference is a pair. Keep a missing saved model visible
+      // until the user explicitly chooses a replacement instead of sending with a fallback.
+      if (selected.directoryPreference) { selected.unavailable = true; return; }
       const available = enterpriseModels.map(item => item.name);
       if (!cloud() && row.id === 'pi' && global.SoduWorkModelChoice) {
         available.push(...imageModels.map(item => SoduWorkModelChoice.imageKey(item)));
@@ -418,9 +421,10 @@
         if (!response?.ok || !Array.isArray(response.models)) throw Error('模型目录暂时不可用');
         nativeModels = response.models;
         const selected = state(row.id);
-        if (nativeModels.length && !modelById(selected.modelName)) {
+        if (nativeModels.length && !modelById(selected.modelName) && !selected.directoryPreference) {
           selected.modelName = (modelById(response.defaultModel) || nativeModels[0]).id;
         }
+        selected.unavailable = Boolean(selected.directoryPreference && !modelById(selected.modelName));
         reconcileEffort(state(row.id));
         nativeReason = String(response && response.reason || '');
         nativeLoaded = row.id;
@@ -434,6 +438,7 @@
   }
 
   function chooseModel(id) {
+    global.ComposeDirectoryPreferences?.selectionCommitted?.();
     const row = runtime();
     const selected = state(row.id);
     selected.modelChosen = true;
@@ -455,6 +460,7 @@
     if (runtime().id !== 'codex') return;
     const selected = state(runtime().id);
     if (!effortChoices(modelById(selected.modelName)).includes(value)) return;
+    global.ComposeDirectoryPreferences?.selectionCommitted?.();
     selected.reasoningEffort = value;
     // Keep the native range element alive throughout a pointer drag.
     paintEffort();
@@ -541,6 +547,7 @@
         const picked = enterpriseModels.find(item => item.name === selected.modelName) || (selected.modelName ? null : enterpriseModels[0]);
         const info = thinkingProfile(picked);
         if (info.supported && info.canDisable) {
+          global.ComposeDirectoryPreferences?.selectionCommitted?.();
           selected.thinkingLevel = selected.thinkingLevel && selected.thinkingLevel !== 'off' ? 'off' : 'medium';
           render();
           notify();
@@ -681,7 +688,33 @@
     return refresh(true);
   }
 
-  global.ComposeModelPicker = { bind, close, refresh, ready, value, resetNewDraft,
+  async function restoreSelection(saved, isCurrent = () => true) {
+    const row = runtime(), context = loadContext().key;
+    if (row.id !== saved.adapterId || !isCurrent()) return false;
+    await refresh();
+    if (!isCurrent() || context !== loadContext().key) return false;
+    const selected = state(row.id);
+    selected.modelName = String(saved.modelName || '');
+    selected.reasoningEffort = String(saved.reasoningEffort || '');
+    selected.thinkingLevel = String(saved.thinkingLevel || '');
+    selected.directoryPreference = true;
+    selected.modelChosen = false;
+    if (row.modelMode === 'managed') {
+      if (!enterpriseLoaded) { selected.unavailable = true; render(); notify(); return false; }
+      clearStaleManagedSelection(row);
+    } else if (row.id === 'codex' && !cloud()) {
+      selected.unavailable = nativeLoaded !== row.id || !modelById(selected.modelName);
+      if (!selected.unavailable) reconcileEffort(selected);
+    } else selected.unavailable = Boolean(selected.modelName);
+    render(); notify();
+    return !selected.unavailable && !selected.catalogUnavailable;
+  }
+
+  function releasePreference() {
+    for (const selected of states.values()) delete selected.directoryPreference;
+  }
+
+  global.ComposeModelPicker = { bind, close, refresh, ready, value, resetNewDraft, restoreSelection, releasePreference,
     nativeEffort: { html: effortCard, paint: paintEffortCard, levels: effortChoices, defaultLevel: defaultEffort },
     label: () => currentLabel(runtime(), state(runtime().id)) };
   const scopeChanged = () => {
