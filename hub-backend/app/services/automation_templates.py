@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models import AppSetting
 from .localized_text import normalize_locales as _locales
+from .schedule_timing import parse_schedule_date
 
 SETTING_KEY = "automation_templates_v1"
 MAX_ITEMS = 100
@@ -83,6 +84,10 @@ def normalize(raw: dict, *, require_name: bool = True) -> dict:
     # Reuse schedule input cleaning so template defaults and personal schedules
     # have exactly the same size and secret-handling contract.
     from . import schedules
+    start_date = parse_schedule_date(raw.get("startDate"), "开始日期") or ""
+    end_date = parse_schedule_date(raw.get("endDate"), "结束日期") or ""
+    if start_date and end_date and start_date > end_date:
+        raise ValueError("开始日期不能晚于结束日期")
     return {
         "id": template_id,
         "name": name,
@@ -97,6 +102,8 @@ def normalize(raw: dict, *, require_name: bool = True) -> dict:
         "atHour": _int(raw.get("atHour"), 9, 0, 23),
         "atMinute": _int(raw.get("atMinute"), 0, 0, 59),
         "weekday": _int(raw.get("weekday"), 1, 1, 7),
+        "startDate": start_date,
+        "endDate": end_date,
         "timeZone": _text(raw.get("timeZone") or "Asia/Shanghai", 64),
         "requiredCapabilities": caps,
         "retryLimit": _int(raw.get("retryLimit"), 2, 0, 10),

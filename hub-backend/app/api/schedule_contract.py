@@ -24,6 +24,8 @@ def schedule_payload(s, *, timestamp, administrative=False) -> dict:
     next_at = sch.next_run_instant(s, origin)
     end_date = str(getattr(s, "end_date", None) or "")
     current = datetime.now(timezone.utc)
+    # Historical retries remain recorded, but expired work is no longer pending.
+    retry_at = s.next_retry_at if sch.schedule_timing.retry_within_dates(s, s.next_retry_at, current) else None
     if s.every not in ("once", "custom") and end_date and current.astimezone(sch.schedule_zone(s)).date().isoformat() > end_date:
         pending = sch.next_run_instant(s, s.last_run_at or s.created_at)
         next_at = pending if sch.calendar_window_allows(s, current, pending) else None
@@ -71,8 +73,8 @@ def schedule_payload(s, *, timestamp, administrative=False) -> dict:
             "retryLimit": int(s.retry_limit or 0),
             "retryDelayMinutes": int(s.retry_delay_minutes or 5),
             "retryCount": int(s.retry_count or 0),
-            "nextRetryAt": timestamp(s.next_retry_at),
-            "retrying": bool(s.next_retry_at),
+            "nextRetryAt": timestamp(retry_at),
+            "retrying": bool(retry_at),
             "lastRunAt": timestamp(s.last_run_at), "lastTaskId": "",
             "lastError": s.last_error,
             "nextRunAt": timestamp(next_at),
