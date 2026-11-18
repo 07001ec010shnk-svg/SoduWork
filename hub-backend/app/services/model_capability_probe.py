@@ -15,6 +15,7 @@ from . import model_transport
 from .model_capabilities import compatibility
 from .model_capability_wire import ProbeIssue, StreamEvidence, failure, meaningful, optional_parameter
 from .model_errors import UpstreamError
+from .runtime_defaults import DEFAULT_OUTPUT
 
 CHECKS = ("connection", "imageInput", "toolCalling", "streaming")
 TIMEOUT = 30
@@ -97,7 +98,7 @@ def _payload(conf: dict, check: str) -> tuple[dict, str]:
     compat = compatibility(conf.get("compatibility"))
     output = compat.get("maxTokensField") or ("max_completion_tokens" if settings.get("reasoning") is True
         and settings.get("thinkingFormat") == "openai" else "max_tokens")
-    limit = settings.get("maxOutputTokens") or 65536
+    limit = settings.get("maxOutputTokens") or DEFAULT_OUTPUT
     headroom = 2048 if settings.get("thinkingMode") == "always" or settings.get("thinkingAlwaysOn") else 512
     budget = min(headroom, max(1, int(limit)), max(1, int(settings.get("contextWindow") or 128000)))
     stream = check in ("streaming", "toolCalling")

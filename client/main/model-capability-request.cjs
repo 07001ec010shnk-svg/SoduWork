@@ -1,13 +1,13 @@
 'use strict';
 const thinking = require('./conversation/thinking-capabilities');
-const { compatibility } = require('./model-capability-contract.cjs');
+const { compatibility, DEFAULT_OUTPUT_TOKENS } = require('./model-capability-contract.cjs');
 
 function policy(conf) {
   const config = { ...conf, ...conf.config, id: conf.name };
   const profile = thinking.profile(config), always = config.thinkingMode === 'always' || config.thinkingAlwaysOn === true;
   return { compatibility: { maxTokensField: 'max_tokens', toolChoice: 'auto', streamOptions: true,
     ...compatibility(conf.compatibility), ...compatibility(conf.config?.compatibility) },
-  config, profile, always, budget: Math.min(always ? 2048 : 512, Number(config.maxOutputTokens) || 65536, Number(conf.ctxWindow || conf.contextWindow) || 128000) };
+  config, profile, always, budget: Math.min(always ? 2048 : 512, Number(config.maxOutputTokens) || DEFAULT_OUTPUT_TOKENS, Number(conf.ctxWindow || conf.contextWindow) || 128000) };
 }
 function thinkingParams(state) {
   // A disabled thinking profile omits its UI format, but a known wire model

@@ -545,7 +545,7 @@ def probe_sync(base: str, key: str, model: str, kind: str = "openai-compat") -> 
         body = error.read(16000).decode("utf-8", "replace")
         billing = model_errors.billing_diagnostic(body)
         detail = (model_errors.billing_message(billing) + f"（HTTP {status}）"
-                  if billing else model_errors.public_failure(f"HTTP {status}"))
+                  if billing else model_errors.public_failure(f"HTTP {status} {body}"))
         return {"ok": False, "detail": detail,
                 **(billing or {})}
 

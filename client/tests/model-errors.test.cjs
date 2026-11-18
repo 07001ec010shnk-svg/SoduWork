@@ -6,6 +6,29 @@ const secretBody = '<html><body><h1>504 Gateway Time-out</h1>' +
   "The server didn't respond in time. http://192.0.2.40:8181/private?token=fixture-secret" +
   '<p>Authorization: Bearer fixture-secret</p></body></html>';
 
+test('output-budget rejections retain actionable safe diagnostics through local privacy filtering', () => {
+  const privacy = require('../main/pi-session/local-model-runtime-privacy.cjs');
+  const raw = 'The chat model rejected this request (400): max_completion_tokens=65536 cannot be greater than max_model_len=32768. private-fixture-secret';
+  for (const value of [raw, { status: 400, message: raw },
+    JSON.stringify({ error: { status: 422, message: 'max_tokens must be <= 32768' } }),
+    { error: { status: 400, code: 'output_token_limit_exceeded', message: 'private-fixture-secret' } },
+    'Output token limit exceeded (output_token_limit_exceeded).']) {
+    for (const error of [value, privacy.safeError(value)]) {
+      const info = errors.describe(error);
+      assert.equal(info.code, 'output_token_limit_exceeded');
+      assert.equal(info.retryable, false);
+      assert.match(errors.forDisplay(error), /最大输出 Token.*模型配置.*上下文窗口/);
+      assert.doesNotMatch(errors.forDisplay(error), /private-fixture-secret/);
+    }
+  }
+  for (const value of ['400 Unsupported parameter: max_tokens',
+    '400 max_tokens must be a positive integer', '400 context_length_exceeded',
+    '401 max_tokens exceeds the limit', '429 max_tokens exceeds the limit',
+    { error: { status: 400, code: 'insufficient_quota', message: raw } }]) {
+    assert.notEqual(errors.describe(value).code, 'output_token_limit_exceeded');
+  }
+});
+
 test('a request transformed to omit the tool result cannot report a tool continuation', async () => {
   const phase = require('../main/pi-session/model-request-phase.cjs');
   let dispatch, wire;
