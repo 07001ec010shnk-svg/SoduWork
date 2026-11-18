@@ -2,9 +2,10 @@
 import json
 import tempfile
 import unittest
-from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
-from sqlalchemy import select
+from sqlalchemy import delete, event, select
 
 import test_unified_requirements as fixture
 from app import automation_models as am, models
@@ -84,6 +85,66 @@ class LocalRequirementDeliveryTests(unittest.IsolatedAsyncioTestCase):
         response = await self.call("POST", "tasks/" + tid + "/submit-review", json={"note": "Ready for review"})
         self.assertEqual(response.status_code, 200, response.text)
         await self.assert_pending_creator_review(tid)
+
+    async def test_manual_submission_receipt_does_not_wait_for_notification_and_retry_is_idempotent(self):
+        from app.services import task_access, task_notifications
+        tid = await self.create_running("manual")
+        self.assertEqual((await self.deliver(tid)).status_code, 200)
+        async with self.sessions() as session:
+            # Isolate this operation from the fixture's earlier creation notice.
+            await session.execute(delete(models.TaskNotificationOutbox))
+            await session.commit()
+        with patch.object(task_access.hub, "publish", new=AsyncMock(side_effect=RuntimeError("transport unavailable"))) as send:
+            response = await self.call("POST", "tasks/" + tid + "/submit-review", json={})
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertTrue(response.json()["ok"])
+            self.assertEqual(response.json()["task"]["requirementStage"], "reviewing")
+            send.assert_not_awaited()
+            retry = await self.call("POST", "tasks/" + tid + "/submit-review", json={})
+            self.assertTrue(retry.json()["already"])
+            async with self.sessions() as session:
+                self.assertEqual(len(list(await session.scalars(select(am.ApprovalRequest).where(
+                    am.ApprovalRequest.task_id == tid)))), 1)
+                self.assertEqual(len(list(await session.scalars(select(am.ArtifactVersion).where(
+                    am.ArtifactVersion.task_id == tid)))), 1)
+                jobs = list(await session.scalars(select(models.TaskNotificationOutbox)))
+                self.assertEqual([(job.task_id, job.event_type) for job in jobs], [(tid, "task.updated")])
+            with self.assertLogs("uvicorn.error", level="ERROR"):
+                self.assertTrue(await task_notifications.run_once(self.sessions))
+        async with self.sessions() as session:
+            job = await session.scalar(select(models.TaskNotificationOutbox))
+            self.assertEqual(job.attempts, 1)
+            self.assertIsNone(job.lease_token)
+            job.available_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+            await session.commit()
+        with patch.object(task_access.hub, "publish", new=AsyncMock()) as send:
+            self.assertTrue(await task_notifications.run_once(self.sessions))
+            self.assertEqual([(call.args[0], call.kwargs["user_id"]) for call in send.await_args_list], [("owner", "owner")])
+            self.assertEqual(send.await_args.args[1]["task"]["requirementStage"], "reviewing")
+        self.assertFalse(await task_notifications.run_once(self.sessions))
+
+    async def test_manual_submission_and_notification_are_atomic_when_outbox_storage_fails(self):
+        tid = await self.create_running("manual")
+        self.assertEqual((await self.deliver(tid)).status_code, 200)
+        async with self.sessions() as session:
+            await session.execute(delete(models.TaskNotificationOutbox))
+            await session.commit()
+        def fail_outbox(_connection, _cursor, sql, _parameters, _context, _many):
+            if sql.startswith("INSERT INTO task_notification_outbox"):
+                raise RuntimeError("isolated notification storage failure")
+        event.listen(self.engine.sync_engine, "before_cursor_execute", fail_outbox)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "notification storage failure"):
+                await self.call("POST", "tasks/" + tid + "/submit-review", json={})
+        finally:
+            event.remove(self.engine.sync_engine, "before_cursor_execute", fail_outbox)
+        async with self.sessions() as session:
+            self.assertIsNone(await session.scalar(select(am.ApprovalRequest).where(am.ApprovalRequest.task_id == tid)))
+            self.assertIsNone(await session.scalar(select(models.TaskNotificationOutbox)))
+        detail = await self.call("GET", "tasks/" + tid)
+        self.assertEqual(detail.json()["requirementStage"], "delivering")
+        response = await self.call("POST", "tasks/" + tid + "/submit-review", json={})
+        self.assertEqual(response.status_code, 200, response.text)
 
     async def test_legacy_device_references_are_not_persisted_with_deliverables(self):
         for model in ("local:model-" + "a" * 32, "local:private:wire-model",
