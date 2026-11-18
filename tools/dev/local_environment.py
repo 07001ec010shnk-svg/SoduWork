@@ -126,7 +126,7 @@ def run(command: list[str], *, cwd: Path, log: Path, label: str,
     print(f"  完成 / Done ({time.monotonic() - started:.1f}s)", flush=True)
 
 
-def check_dependencies() -> tuple[str, str]:
+def _probe_dependencies() -> tuple[str, str, str]:
     if sys.version_info < (3, 12):
         raise StartupError("Python 3.12 or newer is required: https://www.python.org/downloads/")
     node, npm = shutil.which("node"), shutil.which("npm.cmd" if os.name == "nt" else "npm")
@@ -141,6 +141,11 @@ def check_dependencies() -> tuple[str, str]:
             raise ValueError(version)
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         raise StartupError("Node.js 22.19 or newer is required. Check node --version.") from exc
+    return node, npm, version
+
+
+def check_dependencies() -> tuple[str, str]:
+    node, npm, _ = _probe_dependencies()
     return node, npm
 
 
@@ -156,9 +161,9 @@ def check_desktop_session() -> None:
 
 def dependency_report(*, desktop: bool = False) -> None:
     """Read-only prerequisite check; never initialize an instance or install software."""
-    node, npm = check_dependencies()
+    _, npm, version = _probe_dependencies()
     print(f"Python: {platform.python_version()} ({sys.executable})")
-    print(f"Node.js: {subprocess.check_output([node, '--version'], text=True, **spawn_options()).strip()}")
+    print(f"Node.js: {version}")
     print(f"npm: {npm}\nPlatform: {platform.system()} {platform.machine()}")
     if desktop:
         check_desktop_session()

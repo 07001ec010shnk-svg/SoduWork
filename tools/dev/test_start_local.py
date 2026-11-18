@@ -166,6 +166,16 @@ class LocalStartupTests(unittest.TestCase):
                 with self.subTest(version=version), patch.object(build.subprocess, 'check_output', return_value=version):
                     self.assertEqual(len(build.check_dependencies()), 2)
 
+    def test_dependency_report_prints_the_version_from_a_single_node_probe(self):
+        with patch.object(build.shutil, 'which', side_effect=lambda name: name), \
+                patch.object(build.subprocess, 'check_output', return_value='v24.0.0+build.42\n') as probe, \
+                redirect_stdout(io.StringIO()) as output:
+            build.dependency_report()
+
+        commands = [call.args[0] for call in probe.call_args_list]
+        self.assertEqual(commands.count(['node', '--version']), 1)
+        self.assertIn('Node.js: v24.0.0+build.42', output.getvalue().splitlines())
+
     def test_unexecutable_node_reports_friendly_error(self):
         for failure in (OSError('Permission denied'), OSError('Exec format error')):
             with self.subTest(failure=str(failure)), \
