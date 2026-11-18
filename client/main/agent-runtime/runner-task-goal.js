@@ -8,40 +8,11 @@ const SUPPORTED = new Set(['codex', 'codex-harness', 'opencode', 'dsh', 'kimi', 
 const clean = value => String(value || '').trim();
 const count = value => Number.isFinite(Number(value)) ? Math.max(0, Number(value)) : 0;
 
-function explicitContinuation(value) {
-  if (/(?:以下|下面|这段|如下)[^\n]*(?:提示词|示例|引用|文本|指令)[^\n]*[：:]\s*\n/.test(clean(value))) return false;
-  const text = clean(value)
-    .replace(/```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)/g, '')
-    .replace(/^\s*>.*$/gm, '')
-    .replace(/`[^`\n]*`|“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"\n]*"|'[^'\n]*'/g, '');
-  return (text.match(/[^\n。！？.!?；;]+[。！？.!?；;]?/g) || []).some(raw => {
-    if (/[？?]$/.test(raw)) return false;
-    const sentence = raw.replace(/[。！.!；;]$/, '');
-    // Quotations, examples, questions and negation cannot opt a chat into an
-    // unattended loop. This deliberately accepts only a narrow imperative.
-    if (/(?:不要|不必|不用|无需|别|停止|取消|是否|如何|怎么|怎样|为什么|提示词|示例|引用|翻译|解释)|\b(?:not|don't|never|stop|cancel|example|quote|translate|explain|whether|how)\b/i.test(sentence)) return false;
-    return [sentence, ...sentence.split(/[，,]/)].some(part => {
-      const directive = part.trim().replace(/^(?:[-*]|\d+[)．、])\s*/, '');
-      return /^(?:请(?:你|帮我)?|帮我)?(?:持续|继续)(?:自主|自动)?完成(?:整个|全部)(?:任务|工作)$/.test(directive) ||
-        /^(?:请(?:你|帮我)?|帮我)?(?:持续|继续)(?:自主|自动)?(?:推进|执行|工作)[，,\s]*(?:直到|直至)(?:整个|全部)?(?:任务|工作)?(?:全部)?完成$/.test(directive) ||
-        /^(?:please\s+)?(?:keep\s+(?:working|going)|continue\s+(?:working|executing))(?:\s+autonomously)?\s+until\s+(?:(?:the\s+)?(?:entire\s+|whole\s+)?task\s+is\s+|everything\s+is\s+)(?:complete|completed|done)$/i.test(directive);
-    });
-  });
-}
-
 function fromOptions(options) {
   const goal = goalContract.normalize(options);
   return goal.intent === 'goal' ? {
     schemaVersion: 1, objective: goal.goal, acceptance: goal.acceptance,
     budgetMinutes: goal.budgetMinutes, maxSteps: goal.maxSteps,
-  } : null;
-}
-
-function fromText(value) {
-  const objective = clean(value);
-  return objective && objective.length <= 50000 && explicitContinuation(objective) ? {
-    schemaVersion: 1, objective, acceptance: '',
-    budgetMinutes: goalContract.DEFAULT_BUDGET_MINUTES, maxSteps: goalContract.DEFAULT_MAX_STEPS,
   } : null;
 }
 
@@ -98,4 +69,4 @@ function observe(state, value, terminal) {
   return goal;
 }
 
-module.exports = { supported: id => SUPPORTED.has(id), explicitContinuation, fromOptions, fromText, activate, receipt, observe, exhausted };
+module.exports = { supported: id => SUPPORTED.has(id), fromOptions, activate, receipt, observe, exhausted };

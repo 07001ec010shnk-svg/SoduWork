@@ -1261,8 +1261,9 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const generation = beginSubmission();
     const turnPolicy = state.nextAccessPolicy || state.accessPolicy;
     const next = turnOptions || {};
-    const dispatchedGoal = taskGoalSupported && !next.controlled &&
-      (state.taskGoalContract || taskGoal.fromText(text));
+    // Only a goal explicitly configured through session options may create a
+    // persistent Runner loop. Ordinary task wording must remain ordinary chat.
+    const dispatchedGoal = taskGoalSupported && !next.controlled && state.taskGoalContract;
     if (dispatchedGoal) taskGoal.activate(state, dispatchedGoal);
     state.cancelRequested = false;
     state.manualStopRequested = false;
@@ -1381,9 +1382,6 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const generation = beginSubmission();
     const turnPolicy = state.nextAccessPolicy || state.accessPolicy;
     const next = turnOptions || {};
-    const nextGoal = taskGoalSupported && !repairing && !next.controlled && !next.taskGoalControl &&
-      (!state.goalVisible || state.taskGoal?.status === 'completed') ? taskGoal.fromText(text) : null;
-    if (nextGoal) taskGoal.activate(state, nextGoal);
     state.status = 'streaming';
     state.cancelRequested = false;
     state.manualStopRequested = false;
@@ -1410,7 +1408,6 @@ async function createRunnerHandle(request, defaults, initialSession) {
     const dispatchedEffort = state.agentExecution?.reasoningEffort || '';
     runtime.rpc('job.comment', {
       ref: state.runnerRef, text, turnId,
-      ...(nextGoal ? { taskGoal: nextGoal } : {}),
       ...(taskGoalSupported && !repairing && next.taskGoalControl ? { taskGoalControl: next.taskGoalControl } : {}),
       ...(executionModelId(state.model) !== state.lastExecutionModelId || adapterId === 'codex' && dispatchedEffort !== state.lastExecutionReasoningEffort
         ? { executionSelection: { agentId: adapterId, modelName: executionModelId(state.model), reasoningEffort: dispatchedEffort } } : {}),
