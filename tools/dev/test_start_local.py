@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -156,7 +157,7 @@ class LocalStartupTests(unittest.TestCase):
             self.assertEqual(slept.call_count, 1, 'Historical ready entries must not satisfy a restart')
 
     def test_node_version_matches_runtime_dependency_minimum(self):
-        with patch.object(build.shutil, 'which', side_effect=lambda name: name):
+        with patch.object(build.shutil, 'which', side_effect=lambda name: name), patch.object(build, '_check_npm_version'):
             for version in ['v22.18.0', 'v20.20.0', 'v22.18.9-rc.1', 'v26.0', 'v26.0.0-invalid suffix']:
                 with self.subTest(version=version), patch.object(build.subprocess, 'check_output', return_value=version), \
                         self.assertRaisesRegex(build.StartupError, '22.19'):
@@ -166,14 +167,51 @@ class LocalStartupTests(unittest.TestCase):
                 with self.subTest(version=version), patch.object(build.subprocess, 'check_output', return_value=version):
                     self.assertEqual(len(build.check_dependencies()), 2)
 
+    def npm_fixture(self, body):
+        script = Path(self.temp.name) / 'npm'
+        script.write_text("#!/usr/bin/env python3\nimport sys\n"
+                          "assert sys.argv[1:] == ['--version']\n" + body, encoding='utf-8')
+        if os.name == 'nt':
+            wrapper = script.with_suffix('.cmd')
+            wrapper.write_text('@"%NPM_TEST_PYTHON%" "%~dp0npm" %*\n', encoding='ascii')
+            self.enterContext(patch.dict(os.environ, NPM_TEST_PYTHON=sys.executable))
+            return str(wrapper)
+        script.chmod(0o755)
+        return str(script)
+
+    def test_npm_preflight_requires_success_and_a_version_line(self):
+        cases = [(b'', 0, False), (b'npm unavailable', 0, False), (b'10.9.3', 1, False),
+                 (b'error 10.9.3', 0, False), (b'\xe4\xb8\xad\r\n10.9.3\r\n', 0, True),
+                 (b'1.0.0-rc.1+build.42', 0, True)]
+        for output, code, valid in cases:
+            npm = self.npm_fixture(f'sys.stdout.buffer.write({output!r})\nsys.exit({code})\n')
+            with self.subTest(output=output, code=code), \
+                    patch.object(build.shutil, 'which', side_effect=lambda name: 'node' if name == 'node' else npm), \
+                    patch.object(build.subprocess, 'check_output', return_value='v22.19.0'):
+                if valid:
+                    self.assertEqual(build.check_dependencies(), ('node', npm))
+                else:
+                    with self.assertRaisesRegex(build.StartupError, 'npm --version'):
+                        build.check_dependencies()
+
+    def test_npm_probe_times_out_with_a_child_holding_stdout(self):
+        npm = self.npm_fixture("import subprocess\n"
+                               "subprocess.run([sys.executable, '-c', 'import time; time.sleep(12)'])\n")
+        started = time.monotonic()
+        with patch.object(build, 'NPM_PROBE_TIMEOUT', 1), self.assertRaisesRegex(build.StartupError, 'timed out'):
+            build._check_npm_version(npm)
+        self.assertLess(time.monotonic() - started, 8)
+
     def test_dependency_report_prints_the_version_from_a_single_node_probe(self):
         with patch.object(build.shutil, 'which', side_effect=lambda name: name), \
+                patch.object(build, '_check_npm_version') as npm_probe, \
                 patch.object(build.subprocess, 'check_output', return_value='v24.0.0+build.42\n') as probe, \
                 redirect_stdout(io.StringIO()) as output:
             build.dependency_report()
 
         commands = [call.args[0] for call in probe.call_args_list]
         self.assertEqual(commands.count(['node', '--version']), 1)
+        npm_probe.assert_called_once_with('npm.cmd' if os.name == 'nt' else 'npm')
         self.assertIn('Node.js: v24.0.0+build.42', output.getvalue().splitlines())
 
     def test_unexecutable_node_reports_friendly_error(self):
