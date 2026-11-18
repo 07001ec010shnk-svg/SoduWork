@@ -20,9 +20,18 @@ function dosDate(st) {
 function collect(root) {
   const result = []; let total = 0;
   function walk(dir, rel, depth) {
-    if (depth > 12) throw new Error("Folder contains directories nested more than 12 levels; move files closer to the selected folder");
     if (result.length >= MAX_FILES) return;
-    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
+    if (depth > 12) {
+      // Inspect only this boundary directory. Empty/excluded entries omit no
+      // shared files; a deeper directory remains an error without recursing.
+      if (entries.some(ent => !SKIP.has(ent.name) && !SKIP_FILE.test(rel + '/' + ent.name) &&
+          (ent.isFile() || ent.isDirectory()))) {
+        throw Object.assign(new Error("Folder contains directories nested more than 12 levels; move files closer to the selected folder"), { code: 'ZIP_DEPTH_LIMIT' });
+      }
+      return;
+    }
+    for (const ent of entries) {
       if (result.length >= MAX_FILES) break;
       if (!ent.name || ent.name === "." || ent.name === ".." || SKIP.has(ent.name)) continue;
       const full = path.join(dir, ent.name); const next = rel ? rel + "/" + ent.name : ent.name;

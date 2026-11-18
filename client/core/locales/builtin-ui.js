@@ -1,6 +1,8 @@
 /* System-authored capability and requirement copy, shared by renderer and main process. */
 (function (global) {
   const rows = {
+    '文件夹包含超过12层的文件，请将文件移近所选文件夹后重试': ['Folder contains directories nested more than 12 levels; move files closer to the selected folder', 'フォルダー内のファイルが12階層を超えています。選択したフォルダーに近い場所へ移動して再試行してください。', '폴더 안의 파일이 12단계보다 깊이 있습니다. 선택한 폴더에 더 가까운 위치로 옮긴 뒤 다시 시도하세요.'],
+    '文件夹打包失败': ['Folder packaging failed', 'フォルダーの圧縮に失敗しました', '폴더 압축에 실패했습니다'],
     '切换成果摘要面板': ['Toggle output summary panel', '成果サマリーパネルを切り替え', '산출물 요약 패널 전환'],
     '关闭成果摘要': ['Close output summary', '成果サマリーを閉じる', '산출물 요약 닫기'],
     '核对成果并选择验收方式': ['Review outputs and choose a review method', '成果を確認して検収方法を選択', '성과를 확인하고 검수 방식 선택'],

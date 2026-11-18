@@ -68,9 +68,9 @@
     // process packages sibling CSS/JS/assets into one bounded ZIP.
     const websites = files.filter(file => file.kind === 'website' || /\.html?$/i.test(file.name || ''));
     for (const website of websites.slice(0, 3)) {
-      if (typeof context.api.artifactAction !== 'function') break;
+      if (typeof context.api.artifactAction !== 'function') throw Error(uiText('文件夹打包失败'));
       const bundled = await context.api.artifactAction(context.ref, website.artifactId, 'share-related');
-      if (!bundled || !bundled.ok || typeof bundled.data !== 'string') continue;
+      if (!bundled || !bundled.ok || typeof bundled.data !== 'string') throw Error(uiText(bundled?.reason || '文件夹打包失败'));
       const parent = String(website.relative || website.name || '').replace(/[^/]+$/, '');
       files = files.filter(file => file !== website && (!parent || !String(file.relative || '').startsWith(parent)));
       files.unshift({ key: 'bundle:' + website.artifactId, name: bundled.name, size: bundled.size,
@@ -94,20 +94,26 @@
     if (files.reduce((sum, f) => sum + Number(f.size || 0), 0) > 24 * 1024 * 1024)
       throw Error('成果合计不能超过 24 MB，请移除部分文件');
     const prepared = [];
+    let website = files.find(file => file.website)?.website;
     let bytes = 0;
     for (const file of files) {
       if (file.size > 20 * 1024 * 1024) throw Error('单份成果不能超过 20 MB：' + file.name);
       if (file.attachmentId) { prepared.push({ attachmentId: file.attachmentId }); bytes += Number(file.size || 0); continue; }
       if (typeof file.inlineData === 'string') { prepared.push({ name: file.name, data: file.inlineData }); bytes += Number(file.size || 0);
         if (bytes > 24 * 1024 * 1024) throw Error('\u6210\u679c\u5408\u8ba1\u4e0d\u80fd\u8d85\u8fc7 24 MB'); continue; }
-      const result = await context.api.artifactAction(context.ref, file.artifactId, 'share');
+      // Legacy rows and websites beyond the eager packaging shortlist must
+      // still use the website action; ordinary sharing would send bare HTML.
+      const action = file.kind === 'website' || /\.html?$/i.test(file.name || '') ? 'share-related' : 'share';
+      const result = await context.api.artifactAction(context.ref, file.artifactId, action);
       if (!result || !result.ok || typeof result.data !== 'string') throw Error(result?.reason || '无法读取成果：' + file.name);
+      if (result.size > 20 * 1024 * 1024) throw Error('单份成果不能超过 20 MB：' + file.name);
+      if (result.website) website ||= result.preview;
       if (file.at && result.at !== file.at) throw Error('成果已更新，请重新打开发送卡：' + file.name);
       bytes += Number(result.size || 0);
       if (bytes > 24 * 1024 * 1024) throw Error('成果合计不能超过 24 MB');
       prepared.push({ name: result.name, data: result.data });
     }
-    return { conversationId: context?.ref || '', messageId, files: prepared, website: files.find(file => file.website)?.website || undefined };
+    return { conversationId: context?.ref || '', messageId, files: prepared, website };
   }
 
   function create(options) {

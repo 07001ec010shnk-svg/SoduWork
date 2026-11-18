@@ -5,6 +5,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const script = fs.readFileSync(path.join(__dirname, '../core/i18n.js'), 'utf8');
 
+test('website packaging guidance follows every existing renderer locale', () => {
+  const c = client(), catalogs = require('../core/locales/builtin-ui');
+  const phrases = ['文件夹包含超过12层的文件，请将文件移近所选文件夹后重试', '文件夹打包失败'];
+  for (const locale of ['zh-CN', 'en-US', 'ja-JP', 'ko-KR']) {
+    c.api.setLocale(locale);
+    for (const phrase of phrases) assert.equal(c.api.translateText(phrase), catalogs[locale][phrase], locale);
+  }
+});
+
 test('device and account history controls retain all four locale translations', () => {
   const c = client();
   const expected = {
