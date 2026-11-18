@@ -801,8 +801,9 @@ function _paintChatRow(row, c, isPinned) {
     ctx.sidebarProjects?.enhanceRow(row, c);
   }
 
-function _syncChatList(target, items, isPinned, pool) {
-    target.querySelectorAll('.ws-list-empty').forEach((node) => node.remove());
+function _syncChatList(target, items, isPinned, pool, emptyText) {
+    // Replacing an empty drop target during history refresh cancels native drops.
+    if (items.length || !emptyText) target.querySelectorAll('.ws-list-empty').forEach((node) => node.remove());
     const wanted = new Set();
     items.forEach((item, index) => {
       const key = ctx._chatUiKey(item);
@@ -822,6 +823,7 @@ function _syncChatList(target, items, isPinned, pool) {
       if (!key || !wanted.has(key) || seen.has(key)) node.remove();
       else seen.add(key);
     });
+    if (!items.length && emptyText && !target.querySelector('.ws-list-empty')) ctx._empty(target, emptyText);
   }
 
   function displayRows(items, available = items, placed = new Set()) {
@@ -930,8 +932,7 @@ function renderChats() {
     }
     for (const project of groups?.projects || []) {
       const items = visible(project.items);
-      _syncChatList(project.target, items, false, pool);
-      if (!items.length) ctx._empty(project.target, '拖入会话，开始整理');
+      _syncChatList(project.target, ctx.sidebarProjects.previewItems(project, items), false, pool, '拖入会话，开始整理');
     }
     if (!recent.length && !localError && !accountError) ctx._empty(ctx.chats, list.length ? '没有更多聊天' :
       (ctx.chatsLoading ? '正在加载聊天…' : '还没有聊天'));
