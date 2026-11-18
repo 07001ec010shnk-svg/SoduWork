@@ -313,17 +313,24 @@ test('a failed runtime probe cannot publish a ready manifest', async t => {
   assert.equal(fs.existsSync(path.join(root, '.runtime', 'git', '.soduwork-shell-runtime.json')), false);
 });
 
-test('preparation retains an unremovable interrupted runtime and publishes a fresh one', async t => {
+test('preparation reclaims deletable files across two interrupted runtime recoveries', async t => {
   const root = directory(t), runtime = path.join(root, '.runtime', 'git');
-  fs.mkdirSync(runtime, { recursive: true });
-  fs.writeFileSync(path.join(runtime, 'interrupted.txt'), 'old runtime');
-  const remove = fs.rmSync;
+  const remove = fs.rmSync, unlink = fs.unlinkSync;
+  t.after(() => t.mock.restoreAll());
   t.mock.method(fs, 'rmSync', (target, options) => {
-    if (target === runtime) throw Object.assign(Error('reparse point cannot be removed'), { code: 'EPERM' });
+    if (target === runtime) throw Object.assign(Error('protected entry'), {
+      code: 'EPERM', syscall: 'unlink', path: path.join(runtime, 'etc', 'mtab'),
+    });
     return remove(target, options);
   });
+  t.mock.method(fs, 'unlinkSync', target => {
+    if (path.basename(target) === 'mtab') throw Object.assign(Error('protected entry'), { code: 'EPERM' });
+    assert.equal(fs.existsSync(path.join(runtime, '.soduwork-shell-runtime.json')), true,
+      'cleanup must wait for successful self-test and manifest publication');
+    return unlink(target);
+  });
   const messages = [];
-  await prepare({ root, platform: 'win32', arch: 'x64', environment: {}, log: value => messages.push(value),
+  const options = { root, platform: 'win32', arch: 'x64', environment: {}, log: value => messages.push(value),
     archiveOf: async () => path.join(root, 'verified.exe'),
     run: () => {
       fs.mkdirSync(path.join(runtime, 'bin'), { recursive: true });
@@ -331,11 +338,85 @@ test('preparation retains an unremovable interrupted runtime and publishes a fre
       return { status: 0 };
     },
     test: location => assert.equal(fs.readFileSync(path.join(location, 'bin', 'bash.exe'), 'utf8'), 'new runtime'),
-  });
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    fs.mkdirSync(path.join(runtime, 'etc'), { recursive: true });
+    fs.writeFileSync(path.join(runtime, 'etc', 'mtab'), 'protected fixture');
+    fs.writeFileSync(path.join(runtime, 'large.bin'), Buffer.alloc(8 * 1024 * 1024));
+    fs.writeFileSync(path.join(runtime, '.soduwork-shell-runtime.json'), 'interrupted');
+    await prepare(options);
+  }
   const stale = fs.readdirSync(path.dirname(runtime)).filter(name => name.startsWith('git.stale-'));
-  assert.equal(stale.length, 1);
-  assert.equal(fs.readFileSync(path.join(path.dirname(runtime), stale[0], 'interrupted.txt'), 'utf8'), 'old runtime');
+  assert.equal(stale.length, 2);
+  for (const name of stale) {
+    const old = path.join(path.dirname(runtime), name);
+    assert.equal(fs.existsSync(path.join(old, 'large.bin')), false);
+    assert.equal(fs.readFileSync(path.join(old, 'etc', 'mtab'), 'utf8'), 'protected fixture');
+    assert.ok(messages.some(message => message.includes(path.join(old, 'etc', 'mtab')) && message.includes('EPERM')));
+  }
   assert.equal(fs.existsSync(path.join(runtime, '.soduwork-shell-runtime.json')), true);
-  assert.equal(messages.length, 1);
-  t.mock.restoreAll();
+  const before = [...messages];
+  await prepare({ ...options, archiveOf: unexpected, run: unexpected });
+  assert.deepEqual(messages, before, 'normal restart must not create or revisit stale directories');
+});
+
+test('failed recovery logs both filesystem errors and exits nonzero without a new manifest', t => {
+  const root = directory(t), runtime = path.join(root, '.runtime', 'git');
+  const mtab = path.join(runtime, 'etc', 'mtab');
+  fs.mkdirSync(path.dirname(mtab), { recursive: true });
+  fs.writeFileSync(mtab, 'protected fixture');
+  const script = `
+    const fs = require('node:fs');
+    const { prepare } = require(${JSON.stringify(require.resolve('../scripts/prepare-shell-runtime.cjs'))});
+    fs.rmSync = () => { throw Object.assign(Error('delete denied'), {
+      code: 'EPERM', syscall: 'unlink', path: ${JSON.stringify(mtab)} }); };
+    fs.renameSync = (source, dest) => { throw Object.assign(Error('rename denied'), {
+      code: 'EACCES', syscall: 'rename', path: source, dest }); };
+    prepare({ root: ${JSON.stringify(root)}, platform: 'win32', arch: 'x64', environment: {},
+      archiveOf: async () => 'fixture.exe',
+      run: () => { throw Error('extraction must not run'); }
+    }).catch(error => { console.error(error.stack); process.exitCode = 1; });
+  `;
+  const result = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', windowsHide: true });
+  assert.equal(result.status, 1, result.stderr);
+  assert.ok(result.stdout.includes('EPERM unlink ' + mtab), result.stdout);
+  assert.ok(result.stdout.includes('EACCES rename ' + runtime + ' -> ' + runtime + '.stale-'), result.stdout);
+  assert.equal(fs.existsSync(path.join(runtime, '.soduwork-shell-runtime.json')), false);
+});
+
+test('stale cleanup removes directory links without following their targets', async t => {
+  const root = directory(t), runtime = path.join(root, '.runtime', 'git');
+  const outside = path.join(root, 'unrelated');
+  fs.mkdirSync(runtime, { recursive: true });
+  fs.mkdirSync(outside);
+  fs.writeFileSync(path.join(outside, 'keep.txt'), 'untouched');
+  fs.symlinkSync(outside, path.join(runtime, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  const remove = fs.rmSync;
+  t.after(() => t.mock.restoreAll());
+  t.mock.method(fs, 'rmSync', (target, options) => {
+    if (target === runtime) throw Object.assign(Error('interrupted'), { code: 'EPERM' });
+    return remove(target, options);
+  });
+  await prepare({ root, platform: 'win32', arch: 'x64', environment: {}, log: quiet,
+    archiveOf: async () => 'fixture.exe', run: () => ({ status: 0 }), test: quiet });
+  assert.equal(fs.readFileSync(path.join(outside, 'keep.txt'), 'utf8'), 'untouched');
+  assert.deepEqual(fs.readdirSync(path.dirname(runtime)), ['git']);
+});
+
+test('a failed replacement probe leaves the renamed runtime untouched for diagnosis', async t => {
+  const root = directory(t), runtime = path.join(root, '.runtime', 'git');
+  fs.mkdirSync(runtime, { recursive: true });
+  fs.writeFileSync(path.join(runtime, 'keep.txt'), 'old runtime');
+  const remove = fs.rmSync;
+  t.after(() => t.mock.restoreAll());
+  t.mock.method(fs, 'rmSync', (target, options) => {
+    if (target === runtime) throw Object.assign(Error('interrupted'), { code: 'EPERM' });
+    return remove(target, options);
+  });
+  await assert.rejects(prepare({ root, platform: 'win32', arch: 'x64', environment: {}, log: quiet,
+    archiveOf: async () => 'fixture.exe', run: () => ({ status: 0 }),
+    test: () => { throw Error('probe failed'); } }), /probe failed/);
+  const stale = fs.readdirSync(path.dirname(runtime)).find(name => name.startsWith('git.stale-'));
+  assert.equal(fs.readFileSync(path.join(path.dirname(runtime), stale, 'keep.txt'), 'utf8'), 'old runtime');
+  assert.equal(fs.existsSync(path.join(runtime, '.soduwork-shell-runtime.json')), false);
 });
