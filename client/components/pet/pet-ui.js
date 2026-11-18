@@ -283,6 +283,7 @@ function _keepRingOnScreen() {
 
 /* Dragging. */
 let dragging = false;
+let petPointerId = null;
 let dragOX = 0, dragOY = 0;       /* Initial pointer coordinates. */
 let dragPX = 0, dragPY = 0;       /* Initial pet coordinates. */
 let dragEndTime = 0;
@@ -291,7 +292,8 @@ let _pendX = 0, _pendY = 0;
 let _downOnRing = false;   /* Track whether pointerdown targeted a ring action. */
 
 function _onPetPointerDown(e) {
-  if (e.button !== 0) return;
+  if (e.button !== 0 || petPointerId !== null) return;
+  petPointerId = e.pointerId;
   dragOX = e.clientX;
   dragOY = e.clientY;
   const rect = pet.getBoundingClientRect();
@@ -307,6 +309,7 @@ function _onPetPointerDown(e) {
   document.addEventListener('pointermove', _onPetPointerMove);
   document.addEventListener('pointerup', _onPetPointerUp);
   document.addEventListener('pointercancel', _onPetPointerUp);
+  window.addEventListener('blur', _onPetPointerBlur);
   /* Use the default hover cursor and switch to grabbing only while pressed.
    Functional ring buttons retain click behavior instead of starting a drag. */
   if (!_downOnRing && typeof armGrabCursor === 'function') armGrabCursor(false);
@@ -314,7 +317,11 @@ function _onPetPointerDown(e) {
 }
 
 function _onPetPointerMove(e) {
-  if (dragOX === 0 && dragOY === 0) return; /* No active press. */
+  if (petPointerId === null || e.pointerId !== petPointerId) return;
+  if (e.pointerType === 'mouse' && (e.buttons & 1) === 0) {
+    _onPetPointerUp(e);
+    return;
+  }
   const dx = e.clientX - dragOX;
   const dy = e.clientY - dragOY;
   if (!dragging) {
@@ -354,6 +361,8 @@ function _onPetPointerMove(e) {
 let _clickTimer = null;
 
 function _onPetPointerUp(e) {
+  if (petPointerId === null || (e && e.pointerId !== petPointerId)) return;
+  petPointerId = null;
   const wasDragging = dragging;
   dragging = false;
   dragOX = dragOY = 0;
@@ -361,6 +370,8 @@ function _onPetPointerUp(e) {
   document.removeEventListener('pointermove', _onPetPointerMove);
   document.removeEventListener('pointerup', _onPetPointerUp);
   document.removeEventListener('pointercancel', _onPetPointerUp);
+  window.removeEventListener('blur', _onPetPointerBlur);
+  if (typeof disarmGrabCursor === 'function') disarmGrabCursor();
   /*
    * Shrink only after an actual drag to balance expandForOverlay. Shrinking before a click
    * would reenable passthrough and swallow ring actions.
@@ -380,6 +391,10 @@ function _onPetPointerUp(e) {
    * double-click opens notifications. Preserve _downOnRing for drag handling.
    */
   if (_dragFrame) { cancelAnimationFrame(_dragFrame); _dragFrame = null; }
+}
+
+function _onPetPointerBlur() {
+  _onPetPointerUp();
 }
 
 /* Double-click opens notifications; dock actions own task and creation entry points. */
