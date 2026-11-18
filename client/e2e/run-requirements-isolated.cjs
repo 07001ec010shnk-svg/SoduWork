@@ -13,7 +13,7 @@ const report = {ok: false, scope: 'Isolated HTTP/SQLite and production Electron 
 fs.mkdirSync(output, {recursive: true});
 (async () => {
   for (const spec of wanted) {
-    if (!['requirements-workspace', 'requirements-form-typography', 'requirements-integration', 'project-conversation', 'requirements-acceptance-live', 'requirements-delivery-rework', 'requirements-acceptance-preflight', 'requirements-project-selection', 'requirements-manual-submit-race'].includes(spec)) throw Error('Unsupported suite');
+    if (!['requirements-workspace', 'requirements-form-typography', 'requirements-integration', 'project-conversation', 'requirements-acceptance-live', 'requirements-delivery-rework', 'requirements-rework-renamed', 'requirements-acceptance-preflight', 'requirements-project-selection', 'requirements-manual-submit-race'].includes(spec)) throw Error('Unsupported suite');
     const dir = path.join(output, spec); fs.mkdirSync(dir, {recursive: true});
     const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-collab-e2e-'));
     const probe = net.createServer();
@@ -24,7 +24,7 @@ fs.mkdirSync(output, {recursive: true});
     let module = 'tests.unified_requirements_browser_server:app';
     if (spec === 'requirements-project-selection') module = 'tests.requirement_project_browser_server:app';
     else if (spec === 'requirements-manual-submit-race') module = 'tests.manual_acceptance_browser_server:app';
-    else if (['requirements-acceptance-live', 'requirements-delivery-rework', 'requirements-acceptance-preflight'].includes(spec))
+    else if (['requirements-acceptance-live', 'requirements-delivery-rework', 'requirements-rework-renamed', 'requirements-acceptance-preflight'].includes(spec))
       module = 'tests.acceptance_browser_server:app';
     const server = spawn(python, ['-m', 'uvicorn', module, '--host', '127.0.0.1', '--port', String(port)],
       {cwd: backend, windowsHide: true, env: {...process.env, SODUWORK_COLLAB_E2E_ROOT: temporary}, stdio: ['ignore', 'pipe', 'pipe']});
