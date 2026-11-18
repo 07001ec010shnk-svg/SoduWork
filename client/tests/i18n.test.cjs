@@ -5,6 +5,16 @@ const fs = require('node:fs');
 const path = require('node:path');
 const script = fs.readFileSync(path.join(__dirname, '../core/i18n.js'), 'utf8');
 
+test('installation verification guidance is available in every supported locale', () => {
+  const c = client();
+  for (const phrase of ['验证范围',
+    '安装检查仅验证包结构与声明，不代表真实 AI 或业务功能已验证。',
+    '请查看交付总结中的未测项，在实际使用前确认关键功能。']) {
+    const variants = ['zh-CN', 'en-US', 'ja-JP', 'ko-KR'].map(locale => c.api.translateText(phrase, locale));
+    assert.equal(new Set(variants).size, 4, phrase);
+  }
+});
+
 test('WeCom remote task guidance follows every supported locale', () => {
   const c = client();
   const phrases = [
