@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import AppSetting
 from .localized_text import normalize_locales as _locales
 from .schedule_timing import parse_schedule_date
+from . import template_catalog_revision as catalog_revision
 
 SETTING_KEY = "automation_templates_v1"
 MAX_ITEMS = 100
@@ -134,7 +135,10 @@ async def load(session: AsyncSession) -> list[dict]:
     return result
 
 
-async def save(session: AsyncSession, items: list[dict]) -> list[dict]:
+async def save(session: AsyncSession, items: list[dict], *, expected_revision=None) -> list[dict]:
+    previous = await catalog_revision.read(session, SETTING_KEY)
+    if expected_revision is not None and expected_revision != catalog_revision.revision(previous):
+        raise catalog_revision.CatalogConflict("Template catalog changed. Reload and review your draft before saving.")
     if not isinstance(items, list):
         raise ValueError("自动化模板必须是数组")
     if len(items) > MAX_ITEMS:
@@ -148,11 +152,7 @@ async def save(session: AsyncSession, items: list[dict]) -> list[dict]:
         seen.add(value["id"])
         normalized.append(value)
     blob = json.dumps(normalized, ensure_ascii=False, separators=(",", ":"))
-    row = (await session.execute(select(AppSetting).where(AppSetting.key == SETTING_KEY))).scalars().first()
-    if row is None:
-        session.add(AppSetting(key=SETTING_KEY, value=blob))
-    else:
-        row.value = blob
+    await catalog_revision.replace(session, SETTING_KEY, previous, blob)
     return normalized
 
 

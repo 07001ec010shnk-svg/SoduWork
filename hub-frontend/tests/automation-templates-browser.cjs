@@ -23,6 +23,11 @@ async function click(text) {
   await js(`(() => { const b=[...document.querySelectorAll('button')].find(b=>b.textContent.trim()===${JSON.stringify(text)});if(!b)throw Error('Missing button');b.click() })()`)
 }
 async function api(method, route, body) {
+  if (method === 'PUT' && body && !Object.hasOwn(body, 'revision')) {
+    const current = await api('GET', '');
+    assert.equal(current.status, 200);
+    body = { ...body, revision: current.data.revision };
+  }
   const response = await fetch(fixture.url + '/api/v1/admin/automation-templates' + route, {
     method, headers: { Authorization: 'Bearer ' + fixture.token, 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),

@@ -277,6 +277,7 @@ async send(text, turnAttachments, sendOptions) {
         const permissionRevision = ctx.accessPolicy?.revision;
         pluginGate = await require('./plugin-generation-gate.cjs').begin({
           handle: ctx.handle, app: ctx.opts.app, identity: ctx.identity, logicalOwner: pluginGenerationTurn,
+          selectedPluginIds: effectivePluginIds,
           cancelled: () => interrupted() || ctx.closed || ctx.goalCancelled || Boolean(ctx.run.stopReason) ||
             ctx.liveAccess.changing() || Boolean(ctx.accessChanges.pending()) || ctx.accessPolicy?.revision !== permissionRevision,
           changed: () => ctx._emit({ kind: 'plugin-validation' }),

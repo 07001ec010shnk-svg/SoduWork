@@ -22,11 +22,15 @@ The current managed chat gateway uses OpenAI-compatible endpoints. An Anthropic 
 
 ## Model capability checks
 
+In the desktop **My models** page, save the service first, then fill in the model form and click **Add model**. This button saves only the new model. Use **Save** at the top of the page to commit pending edits to the service name, address or key.
+
+Adding a chat model on the desktop or saving a new chat model in the web **Model catalog** starts a background capability check using the saved settings of a configured, enabled OpenAI-compatible service. When you add several models together, the eligible models are checked one at a time. Reopening the catalog reuses the saved report. You can run **Check capabilities** again from the model row.
+
 **Check capabilities** tests the exact saved model with small real generation requests. It verifies a text reply, digits read from a generated image, a streamed synthetic function call followed by a safe tool-result reply, and a complete streamed text reply. It never executes a system tool. These requests may incur provider usage. Model-list discovery is separate and cannot establish these capabilities.
 
 Automatic checks currently cover the OpenAI-compatible Chat Completions API. Other protocol families remain unconfirmed; a protocol label or model name does not establish support. Limited compatibility negotiation applies only to explicitly rejected optional parameters. A successful check describes this endpoint, credential, model and request configuration; it cannot establish support for another API family or every Agent runtime.
 
-The badges distinguish manual declarations from verified results. Manual declarations take precedence; a disagreement with a conclusive check is shown as a conflict. The latest attempt and the last conclusive result are retained separately: a timeout, network error, incomplete stream or cancellation does not turn earlier verified support into “unsupported.” You can cancel a local check, and closing the model panel also cancels it. Requests have time, size and retry limits.
+The badges distinguish manual declarations from verified results. Manual declarations take precedence; a disagreement with a conclusive check is shown as a conflict. The report records the latest attempt. An inconclusive attempt preserves earlier verified support. With automatic image routing, once the model has successfully read an image, chat can still send it images if a later probe rejects image input on the same configuration. The report shows the rejection and the date of the successful check. For tools and streaming, an explicit rejection updates the capability to unsupported. You can cancel a local check, and closing the model panel also cancels it. Requests have time, size and retry limits.
 
 Older tool-calling and streaming results need a new check because they did not verify the complete streamed tool exchange or stream completion required by the current checks, and could confuse rejected optional parameters with an unsupported capability. Manual declarations and still-applicable image results are retained.
 

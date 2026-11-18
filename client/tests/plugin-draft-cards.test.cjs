@@ -92,6 +92,18 @@ test('skill packages identify their destination as the skill library', () => {
   assert.equal(card.querySelector('.nplugin-draft-copy').children[1].textContent, '检查内容后，安装到我的技能库');
   assert.match(card.querySelector('.nplugin-draft-icon').innerHTML, /circle/);
   assert.equal(card.querySelector('[data-install-plugin-draft]').textContent, '检查并安装');
+  assert.equal(card.querySelector('.nplugin-verification-note'), null);
+});
+
+test('package cards explain verification scope before installation, including failed checks and old replies', () => {
+  for (const state of ['ready', 'invalid', 'pending']) {
+    const root = render([manifest('name:quiz', { pluginValidation: { state } })]);
+    const card = cardsOf(root)[0], note = card.querySelector('.nplugin-verification-note');
+    assert.match(note.textContent, /不代表真实 AI 或业务功能已验证/);
+    assert.equal(note.getAttribute('role'), 'note');
+    assert.equal(note.getAttribute('data-i18n-source'), note.textContent);
+    assert.equal(Boolean(card.querySelector('[data-install-plugin-draft]')), state === 'ready');
+  }
 });
 
 test('resource-only repair renews the install card at the repaired reply and clears its stale error', () => {

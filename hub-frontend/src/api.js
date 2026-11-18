@@ -44,6 +44,7 @@ function responseError(res, data) {
   if (typeof detail !== 'string' || /^\s*</.test(detail)) detail = ''
   const error = new Error(detail || tx("请求失败（HTTP {0}）", [res.status]))
   error.status = res.status
+  error.code = res.headers.get('X-Error-Code') || ''
   error.requestId = res.headers.get('X-Request-ID') || ''
   return error
 }
@@ -401,7 +402,7 @@ export const api = {
   devFlow: () => call('GET', '/admin/dev-flow'),
   previewDevFlow: (b) => call('POST', '/admin/dev-flow/preview', b),
   automationTemplates: () => call('GET', '/admin/automation-templates'),
-  saveAutomationTemplates: (items) => call('PUT', '/admin/automation-templates', { items }),
+  saveAutomationTemplates: (items, revision) => call('PUT', '/admin/automation-templates', { items, revision }),
   // Integrations and bindings.
   integrations: () => call('GET', '/admin/integrations'),
   createIntegration: (b) => call('POST', '/admin/integrations', b),

@@ -55,6 +55,7 @@
     const owner = ownerScope();
     if (owner === activeOwner) return false;
     activeOwner = owner; probeGeneration++; selectionGeneration++;
+    current = 'pi'; selectedByLocation.local = 'pi'; selectedByLocation.cloud = 'pi';
     catalogGeneration++; catalogLoaded = false; loadPromise = null;
     for (const key of Object.keys(probes)) delete probes[key];
     pendingProbes.clear(); accessProbePromise = null; cloudSelectionPromise = null;
@@ -513,6 +514,7 @@
       const row = event.target.closest('[data-runtime]');
       if (!row || row.classList.contains('checking')) return;
       const adapterId = row.dataset.runtime || 'pi';
+      global.ComposeDirectoryPreferences?.selectionStarted?.();
       syncOwner();
       const selection = ++selectionGeneration;
       row.classList.add('checking');
@@ -524,6 +526,7 @@
       paint(root);
       if (!available || selection !== selectionGeneration) return;
       selectCurrent(adapterId);
+      global.ComposeDirectoryPreferences?.selectionCommitted?.();
       changed();
       opts.refresh();
       paint(root);
@@ -546,6 +549,28 @@
     // restart; treating every local adapter as ready would open a chat that
     // cannot execute and leave the user with a dead first turn.
     return Boolean(probes[key]?.ok);
+  }
+
+  async function restoreSelection(adapterId, isCurrent = () => true) {
+    if (!boundOptions) return false;
+    const owner = ownerScope(), selectedLocation = location, selection = ++selectionGeneration;
+    const valid = () => isCurrent() && owner === ownerScope() && selectedLocation === location && selection === selectionGeneration;
+    await loadCatalog(boundOptions);
+    if (!valid() || !catalog.some(row => row.id === adapterId)) return false;
+    const available = await probe(adapterId, boundOptions, false);
+    if (!valid() || !available) return false;
+    selectCurrent(adapterId); changed();
+    boundOptions.refresh(); paint(boundOptions.root);
+    return true;
+  }
+
+  function resetNewDraft() {
+    const selection = ++selectionGeneration;
+    locationGeneration++; cloudSelectionPromise = null;
+    selectedByLocation[location] = 'pi'; selectCurrent('pi'); changed();
+    if (!boundOptions) return Promise.resolve(false);
+    boundOptions.refresh();
+    return loadCatalog(boundOptions).then(() => selection === selectionGeneration ? refreshAccess() : false);
   }
 
   function accessState() {
@@ -578,7 +603,7 @@
   }
 
   global.ComposeRuntime = {
-    bind, controls, paint, accessSupported, accessState, refreshAccess, goalSupported, ready, value: () => current,
+    bind, controls, paint, accessSupported, accessState, refreshAccess, goalSupported, ready, restoreSelection, resetNewDraft, value: () => current,
     brandIcon,
     location: () => location,
     availability: () => ({ checking: pendingProbes.has(probeKey(current)), ...(probes[probeKey(current)] || {}) }),
@@ -594,6 +619,7 @@
         void refreshAccess();
         boundOptions.refresh();
       }
+      void global.ComposeDirectoryPreferences?.sync?.();
     },
     catalog: () => catalog.map((row) => ({ ...row })),
   };

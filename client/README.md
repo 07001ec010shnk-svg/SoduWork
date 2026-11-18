@@ -60,6 +60,18 @@ claims from injected local context. My Memory shows rendered Markdown by default
 with source editing available under Edit Markdown. Existing conversations retain
 their history and working directory.
 
+After successfully sending the first message of a new local chat or goal in an
+explicitly selected working or project directory, the desktop remembers the
+runtime and model used together.
+Starting another conversation in that directory, or selecting it in a new draft,
+restores that pair when both are available. Preferences belong to the current
+Hub, account and device. Cloud execution retains its existing selection flow.
+Temporary workspaces do not share directory preferences. If a saved runtime or
+model is unavailable, select an available combination explicitly; automatic
+fallback does not replace the saved pair. Changes to an unsent draft do not
+replace the last-used selection. Codex account sessions without a verified model
+selection do not save a directory preference.
+
 For a first local session, run `sh start.sh --desktop` from the repository root. For independent development, keep Hub running and execute:
 
 ```sh
@@ -77,6 +89,8 @@ Run `npm test` for unit/contract tests and `npm run check:layout` for source bou
 On Windows, `npm run test:e2e:user:isolated` runs the desktop user journeys with a fresh Electron profile, registered test account, local Hub and simulated provider. Install `hub-backend/requirements-test.txt` in `hub-backend/.venv`, or set `SODUWORK_TEST_PYTHON` to an interpreter with those dependencies. Results are written to `outputs/isolated-user-journeys/report.json`. Set `SODUWORK_JOURNEY_OUTPUT` to select a different evidence directory. To check workspace recovery alone, use `npm run test:e2e:user:isolated -- --only=UJ-09`, which also runs the task creation and assignment needed for recovery.
 
 On Windows, the execution runtime joins a native Job Object before tools initialize. A private Windows PowerShell helper retains the job until shutdown and verifies its processes have exited, including Git Bash descendants whose intermediate Windows parent has already exited. This is lifecycle cleanup, not a security sandbox; Linux and macOS retain their existing process-tree cleanup.
+
+Changing a Pi conversation from read-only to standard or full access rebuilds its tool selection from the configured defaults while preserving the conversation history. Standard access still requires approval for commands, and changing back to read-only removes write and command tools. Run `node --test tests/access-readonly-upgrade.test.cjs` to verify the production session driver with a loopback provider and real file and command operations.
 
 To verify summary export against a disposable authenticated Hub, run `node e2e/acceptance-summary-export.cjs /absolute/evidence/directory /path/to/test/python`. The Python environment needs the backend test dependencies. This exercises native IPC and saved bytes with injected save-dialog choices, not a real model or production account.
 

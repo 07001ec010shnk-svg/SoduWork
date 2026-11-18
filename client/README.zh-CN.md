@@ -8,6 +8,8 @@
 
 普通新对话使用独立工作目录，不自动继承上一会话目录或最近选择的目录；显式选择的项目文件夹仍可共享。个人记忆不再自动积累底座身份、模型自我介绍和知识截止日期，注入本地历史记忆时也会过滤这些内容。“我的记忆”默认展示 Markdown 排版，可展开“编辑 Markdown”修改源码。已有会话的历史和工作目录保持不变。
 
+在显式选择的工作目录或项目目录中新建本地普通对话或目标，并成功发送首条消息后，桌面会成对记住实际使用的底座和模型。下次在该目录新建会话，或在新草稿中选择该目录时，两者均可用才会恢复选中。偏好按当前 Hub、账号和设备隔离，云端执行沿用原有选择流程，临时工作区不共享目录偏好。如果保存的底座或模型不可用，需要明确选择可用组合；自动回退不会覆盖原组合，未发送草稿中的修改也不会替换上次使用的选择。Codex 账号底座未能确认具体模型时，不保存目录偏好。
+
 桌面 Markdown 将单个波浪号视为普通字符，同一段落中的 `3~5`、`7~14` 等区间会保留分隔符。删除线使用 `~~文字~~`。共用的 `core/markdown.js` 配置覆盖会话历史、流式回复、朗读文本提取及 Markdown 预览，不修改已保存的原始文本。
 
 ## 模块边界
@@ -61,6 +63,8 @@
 Windows 上运行 `npm run test:e2e:user:isolated`，使用全新的 Electron 配置目录、注册的测试账号、本地 Hub 和模拟模型服务验证桌面用户旅程。在 `hub-backend/.venv` 安装 `hub-backend/requirements-test.txt`，或将 `SODUWORK_TEST_PYTHON` 指向已安装这些依赖的解释器。结果写入 `outputs/isolated-user-journeys/report.json`，可通过 `SODUWORK_JOURNEY_OUTPUT` 指定其他证据目录。单独验证工作窗恢复时运行 `npm run test:e2e:user:isolated -- --only=UJ-09`，脚本也会执行恢复所需的任务创建和分派。
 
 Windows 执行服务在工具初始化前加入原生 Job Object。专用 Windows PowerShell 辅助进程持有该对象，退出时确认其中的进程全部结束，包括中间 Windows 父进程已经退出的 Git Bash 后代进程。这是生命周期清理机制，不是安全沙箱；Linux 和 macOS 继续使用现有的进程树清理。
+
+Pi 会话从只读切换为默认或完全访问时，会按已配置的默认工具重建工具选择，并保留原会话历史。默认权限下的命令仍需审批，切回只读后会移除写入和命令工具。运行 `node --test tests/access-readonly-upgrade.test.cjs`，通过本机模拟模型服务、真实文件写入和命令执行验证生产会话链路。
 
 验收摘要的隔离验证命令为 `node e2e/acceptance-summary-export.cjs /absolute/evidence/directory /path/to/test/python`。Python 环境需要后端测试依赖。该脚本验证真实原生 IPC、设备认证与保存字节，保存框选择由测试注入，不使用真实模型或生产账号。
 

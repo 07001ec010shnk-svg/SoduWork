@@ -15,6 +15,10 @@ const rows = [
     "Template dates are defaults for new automations. Edit existing automations separately.",
     "テンプレートの日付は新しい自動化の既定値です。作成済みの自動化は個別に編集してください。",
     "템플릿 날짜는 새 자동화의 기본값입니다. 기존 자동화는 개별적으로 수정하세요."],
+  ["模板已被其他管理员修改。草稿已保留，请加载最新目录并核对后再保存。", "Another administrator changed the catalog. Your draft is preserved. Load the latest catalog and review it before saving.", "他の管理者が変更しました。下書きは保持されています。最新の一覧を読み込み、確認して保存してください。", "다른 관리자가 변경했습니다. 초안은 보존됩니다. 최신 목록을 불러와 확인한 후 저장하세요."],
+  ["加载最新目录，保留草稿", "Load latest catalog, keep draft", "下書きを保持して最新の一覧を読み込む", "초안을 유지하고 최신 목록 불러오기"],
+  ["模板已被其他管理员修改。请加载最新目录后重试。", "Another administrator changed the catalog. Load the latest catalog and try again.", "他の管理者が変更しました。最新の一覧を読み込み、再試行してください。", "다른 관리자가 변경했습니다. 최신 목록을 불러온 후 다시 시도하세요."],
+  ["此模板已被删除。草稿仍保留，请复制内容后新建模板。", "This template was deleted. Your draft is preserved; copy its contents to a new template.", "テンプレートは削除されました。下書きをコピーして新規作成してください。", "템플릿이 삭제되었습니다. 초안 내용을 복사하여 새 템플릿을 만드세요."],
   [
     "停用后客户端不再展示模板，已创建的自动化不受影响。",
     "Disabled templates are hidden from clients. Existing automations are unaffected.",

@@ -37,7 +37,7 @@ function templateErrors(value, items = []) {
   return errors
 }
 
-function Editor({ value, items = [], onChange, onCancel, onSave, busy }) {
+function Editor({ value, items = [], onChange, onCancel, onSave, busy, conflict, onReload }) {
   const formId = useId()
   const idRef = useRef(null), nameRef = useRef(null)
   const startRef = useRef(null), endRef = useRef(null)
@@ -57,7 +57,8 @@ function Editor({ value, items = [], onChange, onCancel, onSave, busy }) {
     ? value.requiredCapabilities.filter((x) => x !== key) : [...value.requiredCapabilities, key])
   return <Modal wide className="at-dialog" icon="activity" title={value.updatedAt ? tx("编辑自动化模板") : tx("新建自动化模板")} onClose={onCancel}
     foot={<><label className="at-enabled modal-foot-note"><input type="checkbox" checked={value.enabled} onChange={(e) => set('enabled', e.target.checked)} />{tx("发布给员工使用")}</label>
-      <button type="button" className="btn btn-ghost" onClick={onCancel}>{tx("取消")}</button><button type="submit" form={formId} className="btn btn-primary" disabled={busy}>{busy ? tx("保存中…") : tx("保存模板")}</button></>}>
+      <button type="button" className="btn btn-ghost" onClick={onCancel}>{tx("取消")}</button><button type="submit" form={formId} className="btn btn-primary" disabled={busy || conflict}>{busy ? tx("保存中…") : tx("保存模板")}</button></>}>
+    {conflict && <div role="alert"><p>{tx("模板已被其他管理员修改。草稿已保留，请加载最新目录并核对后再保存。")}</p><button type="button" className="btn btn-ghost" onClick={onReload}>{tx("加载最新目录，保留草稿")}</button></div>}
     <form id={formId} className="at-editor" onInvalidCapture={() => setTouched({ id: true, name: true, startDate: true, endDate: true })}
       onSubmit={(event) => {
         event.preventDefault()
@@ -137,54 +138,61 @@ export default function AutomationTemplates() {
   const uiLocale = useLocale();
   const listRef = useViewportHeight(180)
   const [items, setItems] = useState(null)
+  const [revision, setRevision] = useState(null)
+  const [conflict, setConflict] = useState(false)
   const [editing, setEditing] = useState(null)
   const [pendingDelete, setPendingDelete] = useState(null)
   const [busy, setBusy] = useState(false)
   const [toggling, setToggling] = useState(null)
   const [error, setError] = useState('')
-  const load = () => api.automationTemplates().then((data) => { setItems(data.items || []); setError('') }).catch((e) => setError(e.message || tx("模板暂时加载失败")))
+  const load = () => api.automationTemplates().then((data) => { setItems(data.items || []); setRevision(data.revision); setConflict(false); setError('') }).catch((e) => setError(e.message || tx("模板暂时加载失败")))
   useEffect(() => { load() }, [])
   const enabled = useMemo(() => (items || []).filter((x) => x.enabled).length, [items, uiLocale])
   async function save() {
-    if (!editing || busy) return
+    if (!editing || busy || conflict) return
+    if (editing.updatedAt && !items.some(item => item.id === editing.id)) {
+      toast(tx("此模板已被删除。草稿仍保留，请复制内容后新建模板。")); return
+    }
     const errors = templateErrors(editing, items)
     if (Object.keys(errors).length) { toast(Object.values(errors)[0]); return }
     setBusy(true)
     try {
       const draft = { ...editing, name: editing.name.trim() }
       const next = editing.updatedAt ? items.map((x) => x.id === editing.id ? draft : x) : [...items, draft]
-      const result = await api.saveAutomationTemplates(next)
-      setItems(result.items || next); setEditing(null); toast(tx("自动化模板已保存"))
-    } catch (e) { toast(tx("保存失败：") + (e.message || tx("请稍后重试"))) }
+      const result = await api.saveAutomationTemplates(next, revision)
+      setRevision(result.revision); setItems(result.items || next); setEditing(null); toast(tx("自动化模板已保存"))
+    } catch (e) { if (e.status === 409 || e.status === 428) setConflict(true); toast(tx("保存失败：") + (e.message || tx("请稍后重试"))) }
     finally { setBusy(false) }
   }
   async function toggleEnabled(item) {
-    if (busy) return
+    if (busy || conflict) return
     setBusy(true); setToggling(item.id)
     const next = items.map((entry) => entry.id === item.id ? { ...entry, enabled: !item.enabled } : entry)
     try {
-      const result = await api.saveAutomationTemplates(next)
-      setItems(result.items || next)
+      const result = await api.saveAutomationTemplates(next, revision)
+      setRevision(result.revision); setItems(result.items || next)
       toast(item.enabled ? tx("模板已停用，客户端不再展示") : tx("模板已启用，客户端可使用"))
-    } catch (e) { toast(tx("保存失败：") + (e.message || tx("请稍后重试"))) }
+    } catch (e) { if (e.status === 409 || e.status === 428) setConflict(true); toast(tx("保存失败：") + (e.message || tx("请稍后重试"))) }
     finally { setBusy(false); setToggling(null) }
   }
   async function remove(item) {
+    if (busy || conflict) return
     setBusy(true)
-    try { const result = await api.saveAutomationTemplates(items.filter((x) => x.id !== item.id)); setItems(result.items || []); setPendingDelete(null); toast(tx("模板已删除")) }
-    catch (e) { toast(tx("删除失败：") + e.message) }
+    try { const result = await api.saveAutomationTemplates(items.filter((x) => x.id !== item.id), revision); setRevision(result.revision); setItems(result.items || []); setPendingDelete(null); toast(tx("模板已删除")) }
+    catch (e) { if (e.status === 409 || e.status === 428) setConflict(true); toast(tx("删除失败：") + e.message) }
     finally { setBusy(false) }
   }
   if (error && items === null) return <div className="at-page"><div className="at-error"><Icon name="alert" /><b>{tx("模板没有加载出来")}</b><span>{error}</span><button className="btn btn-ghost" onClick={load}>{tx("重新加载")}</button></div></div>
   if (items === null) return <Loading />
   return <section className="at-page">
+    {conflict && !editing && <div role="alert"><p>{tx("模板已被其他管理员修改。请加载最新目录后重试。")}</p><button className="btn btn-ghost" onClick={() => { setPendingDelete(null); load() }}>{tx("重新加载")}</button></div>}
     <div className="at-topbar"><div className="at-summary"><span><b>{items.length}</b>{tx(" 个模板")}</span><span><b>{enabled}</b>{tx(" 个已发布")}</span><span>{tx("模板只保存工作说明和默认节奏")}</span></div><button className="btn btn-primary at-create" disabled={busy} onClick={() => setEditing(blank())}><Icon name="plus" />{tx("新建模板")}</button></div>
     <p className="at-visibility-hint">{tx("停用后客户端不再展示模板，已创建的自动化不受影响。")}</p>
     {items.length === 0 && <div className="at-empty"><Icon name="box" /><b>{tx("还没有自动化模板")}</b><span>{tx("把团队重复工作配置一次，员工在客户端的自动化页面就能直接使用。")}</span><button className="btn btn-ghost" disabled={busy} onClick={() => setEditing(blank())}>{tx("创建第一个模板")}</button></div>}
     <div className="at-list admin-viewport-list" ref={listRef} role="region" tabIndex={0} aria-label={tx("自动化模板")}>{items.map((item) => <article className={'at-card' + (item.enabled ? '' : ' off')} key={item.id}><div className="at-card-icon"><Icon name="activity" /></div><div className="at-card-main"><div className="at-card-title"><h3 title={item.name}>{item.name}</h3><code title={item.id}>{item.id}</code>{!item.enabled && <em>{tx("已停用")}</em>}</div><p title={item.description || item.note || tx("暂无说明")}>{item.description || item.note || tx("暂无说明")}</p><div className="at-card-meta"><span title={`${rhythm[item.every] || item.every} · ${String(item.atHour).padStart(2, '0')}:${String(item.atMinute).padStart(2, '0')}`}>{rhythm[item.every] || item.every} · {String(item.atHour).padStart(2, '0')}:{String(item.atMinute).padStart(2, '0')}</span><span title={(item.requiredCapabilities || []).map((key) => (capOptions.find((x) => x[0] === key) || [key, key])[1]).join('、') || tx("基础对话")}>{(item.requiredCapabilities || []).map((key) => (capOptions.find((x) => x[0] === key) || [key, key])[1]).join('、') || tx("基础对话")}</span></div></div><div className="at-card-actions admin-card-actions"><button className="admin-card-action is-primary" disabled={busy} onClick={() => setEditing({ ...item, requiredCapabilities: [...(item.requiredCapabilities || [])] })}>{tx("编辑")}</button><button type="button" className="admin-card-action at-toggle" disabled={busy}
         aria-busy={toggling === item.id} aria-label={item.enabled ? tx("停用模板「{0}」", [item.name]) : tx("启用模板「{0}」", [item.name])}
         onClick={() => toggleEnabled(item)}>{toggling === item.id ? tx("保存中…") : item.enabled ? tx("停用") : tx("启用")}</button><button className="admin-card-action is-danger" disabled={busy} onClick={() => setPendingDelete(item)}>{tx("删除")}</button></div></article>)}</div>
-    {editing && <Editor value={editing} items={items} onChange={setEditing} onCancel={() => setEditing(null)} onSave={save} busy={busy} />}
+    {editing && <Editor value={editing} items={items} onChange={setEditing} onCancel={() => setEditing(null)} onSave={save} busy={busy} conflict={conflict} onReload={load} />}
     {pendingDelete && <Confirm title={tx("删除模板")} text={tx("确定删除「{0}」吗？已创建的自动化不会受影响。", [pendingDelete.name])}
       danger confirmText={tx("删除")} onConfirm={() => remove(pendingDelete)} onClose={() => setPendingDelete(null)} />}
   </section>
