@@ -124,6 +124,7 @@ RELEASE_SMOKES = tuple(sorted((
     "smoke/smoke_audit_scope.py",
     "smoke/smoke_autobatch_flow.py",
     "smoke/smoke_automation_templates.py",
+    "test_automation_templates.py",
     "test_quality_gate_cleanup.py",  # Native ownership, bounded cleanup and timeout diagnostics.
     "smoke/smoke_builtin_delivery_e2e.py",
     "smoke/smoke_capabilities.py",

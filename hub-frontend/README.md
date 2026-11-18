@@ -12,6 +12,12 @@ The model catalog starts with a compact service/model and live-load summary. Exp
 
 Service cards adapt from one to four columns according to the available content width. View opens model details in a dialog without resizing or rearranging the service grid. Add, discover and configure actions remain visible; enable/disable and deletion are in the More popover, with the existing deletion confirmation retained.
 
+## Automation template dates
+
+Templates default to **No date limits**. Clear this option to set a start date, an end date, or both. Dates are inclusive and use the template's time zone (Asia/Shanghai by default); the existing hourly, daily or weekly rhythm determines execution times within that range. Invalid dates and reversed ranges are rejected before saving.
+
+The desktop copies these defaults into a new automation, where the user can adjust them before creation. Updating a template does not change existing automations. After the end date, no further recurring occurrences or retries are scheduled; the final eligible occurrence retains the scheduler's existing one-poll grace period. Existing tasks and records are retained. Extend an automation's own date range to resume future runs; extend the template separately for future users. Templates remain available until explicitly disabled.
+
 ## Develop
 
 The simplest setup is to run `sh start.sh` at the repository root in one terminal, then start Vite in another.

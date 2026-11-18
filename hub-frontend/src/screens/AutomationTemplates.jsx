@@ -8,7 +8,7 @@ import './automation-templates.css'
 
 const blank = () => ({ id: '', name: '', description: '', title: '', note: '', every: 'daily',
   atHour: 9, atMinute: 0, weekday: 1, requiredCapabilities: [], retryLimit: 2,
-  retryDelayMinutes: 5, pluginBindingId: '', enabled: true })
+  retryDelayMinutes: 5, pluginBindingId: '', enabled: true, startDate: '', endDate: '' })
 const capOptions = localeMap(() => ([['browser', '浏览网页'], ['computer', '操作电脑'], ['office', '办公文档']]))
 const rhythm = localeMap(() => ({ hourly: '每小时', daily: '每天', weekly: '每周' }))
 // Optional locale maps supply employee display and prefill with base-field fallback.
@@ -25,18 +25,32 @@ function templateErrors(value, items = []) {
   if (typeof name !== 'string' || !name.trim()) errors.name = tx("请填写模板名称，不能全为空白")
   else if (Array.from(name.trim()).length > 80) errors.name = tx("模板名称最多 80 个字符")
   else if (/[\u0000-\u001f\u007f-\u009f]/.test(name)) errors.name = tx("模板名称不能包含换行或控制字符")
+  for (const [key, message] of [['startDate', '开始日期无效，请重新选择'], ['endDate', '结束日期无效，请重新选择']]) {
+    const date = value[key]
+    if (date == null || date === '') continue
+    const parsed = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && Number(date.slice(0, 4)) > 0
+      ? new Date(date + 'T00:00:00Z') : null
+    if (!parsed || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) errors[key] = tx(message)
+  }
+  if (!errors.startDate && !errors.endDate && value.startDate && value.endDate && value.startDate > value.endDate)
+    errors.endDate = tx("开始日期不能晚于结束日期")
   return errors
 }
 
 function Editor({ value, items = [], onChange, onCancel, onSave, busy, conflict, onReload }) {
   const formId = useId()
   const idRef = useRef(null), nameRef = useRef(null)
+  const startRef = useRef(null), endRef = useRef(null)
   const [touched, setTouched] = useState({})
+  const [limitedDates, setLimitedDates] = useState(Boolean(value.startDate || value.endDate))
   const errors = templateErrors(value, items)
+  if (limitedDates && !value.startDate && !value.endDate) errors.startDate = tx("请选择开始或结束日期，或选择长期有效")
   useEffect(() => {
     idRef.current?.setCustomValidity(errors.id || '')
     nameRef.current?.setCustomValidity(errors.name || '')
-  }, [errors.id, errors.name])
+    startRef.current?.setCustomValidity(errors.startDate || '')
+    endRef.current?.setCustomValidity(errors.endDate || '')
+  }, [errors.id, errors.name, errors.startDate, errors.endDate])
   const touch = key => setTouched(previous => ({ ...previous, [key]: true }))
   const set = (key, next) => onChange({ ...value, [key]: next })
   const toggleCap = (key) => set('requiredCapabilities', value.requiredCapabilities.includes(key)
@@ -45,12 +59,12 @@ function Editor({ value, items = [], onChange, onCancel, onSave, busy, conflict,
     foot={<><label className="at-enabled modal-foot-note"><input type="checkbox" checked={value.enabled} onChange={(e) => set('enabled', e.target.checked)} />{tx("发布给员工使用")}</label>
       <button type="button" className="btn btn-ghost" onClick={onCancel}>{tx("取消")}</button><button type="submit" form={formId} className="btn btn-primary" disabled={busy || conflict}>{busy ? tx("保存中…") : tx("保存模板")}</button></>}>
     {conflict && <div role="alert"><p>{tx("模板已被其他管理员修改。草稿已保留，请加载最新目录并核对后再保存。")}</p><button type="button" className="btn btn-ghost" onClick={onReload}>{tx("加载最新目录，保留草稿")}</button></div>}
-    <form id={formId} className="at-editor" onInvalidCapture={() => setTouched({ id: true, name: true })}
+    <form id={formId} className="at-editor" onInvalidCapture={() => setTouched({ id: true, name: true, startDate: true, endDate: true })}
       onSubmit={(event) => {
         event.preventDefault()
         if (Object.keys(errors).length) {
-          setTouched({ id: true, name: true })
-          ;(errors.id ? idRef : nameRef).current?.focus()
+          setTouched({ id: true, name: true, startDate: true, endDate: true })
+          ;(errors.id ? idRef : errors.name ? nameRef : errors.startDate ? startRef : endRef).current?.focus()
           return
         }
         onSave()
@@ -91,6 +105,25 @@ function Editor({ value, items = [], onChange, onCancel, onSave, busy, conflict,
       {value.every === 'weekly' && <SelectMenu value={value.weekday} onChange={(e) => set('weekday', Number(e.target.value))}>
         {[[tx("周一"), 1], [tx("周二"), 2], [tx("周三"), 3], [tx("周四"), 4], [tx("周五"), 5], [tx("周六"), 6], [tx("周日"), 7]].map(([label, key]) => <option key={key} value={key}>{label}</option>)}
       </SelectMenu>}
+    </div></div>
+    <div className="at-section"><b>{tx("默认生效日期")}</b><div className="at-dates">
+      <label className="at-unlimited"><input type="checkbox" name="unlimitedDates" checked={!limitedDates}
+        onChange={(event) => {
+          setLimitedDates(!event.target.checked)
+          if (event.target.checked) onChange({ ...value, startDate: '', endDate: '' })
+        }} />{tx("长期有效")}</label>
+      {[['startDate', '开始日期', startRef], ['endDate', '结束日期', endRef]].map(([key, label, ref]) =>
+        <label key={key}><span>{tx(label)}</span><input ref={ref} type="date" name={key} disabled={!limitedDates}
+          min="0001-01-01" max="9999-12-31" value={value[key] || ''}
+          onChange={(event) => { set(key, event.target.value); touch(key) }} onBlur={() => touch(key)}
+          aria-invalid={Boolean(touched[key] && errors[key])}
+          aria-describedby={formId + '-dates-hint' + (touched[key] && errors[key] ? ' ' + formId + '-' + key + '-error' : '')} />
+          {touched[key] && errors[key] && <small className="at-field-error" id={formId + '-' + key + '-error'} role="status">{errors[key]}</small>}
+        </label>)}
+      <small className="at-field-hint at-date-hint" id={formId + '-dates-hint'}>
+        {tx("按 {0} 时区计算，包含开始日和结束日；留空的一侧不限制。", [value.timeZone || 'Asia/Shanghai'])}
+        <br />{tx("模板日期作为新自动化的默认值；已创建的自动化请单独修改。")}
+      </small>
     </div></div>
     <div className="at-section"><b>{tx("执行要求")}</b><div className="at-checks">
       {capOptions.map(([key, label]) => <label key={key}><input type="checkbox" checked={value.requiredCapabilities.includes(key)} onChange={() => toggleCap(key)} />{label}</label>)}

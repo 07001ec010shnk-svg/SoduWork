@@ -65,6 +65,29 @@ class CatalogTests(unittest.IsolatedAsyncioTestCase):
             current = await list_automation_templates(user=None, session=db)
             self.assertEqual(current, saved)
 
+    async def test_date_changes_require_latest_revision_and_preserve_valid_range(self):
+        from unittest.mock import AsyncMock, patch
+        from fastapi import HTTPException
+        from app.api.admin_schedules import list_automation_templates, save_automation_templates
+        with patch("app.services.audit.log", new=AsyncMock()):
+            async with self.sessions() as db:
+                initial = await list_automation_templates(user=None, session=db)
+                template = {"id": "campaign", "name": "Campaign", "startDate": "2030-12-01", "endDate": "2030-12-31"}
+                saved = await save_automation_templates(body={"items": [template], "revision": initial["revision"]}, user=None, session=db)
+                extended = {**saved["items"][0], "endDate": "2031-01-31"}
+                with self.assertRaises(HTTPException) as stale:
+                    await save_automation_templates(body={"items": [extended], "revision": initial["revision"]}, user=None, session=db)
+                self.assertEqual(stale.exception.status_code, 409)
+                current = await list_automation_templates(user=None, session=db)
+                self.assertEqual(current, saved)
+                updated = await save_automation_templates(body={"items": [extended], "revision": current["revision"]}, user=None, session=db)
+                self.assertEqual(updated["items"][0]["startDate"], "2030-12-01")
+                self.assertEqual(updated["items"][0]["endDate"], "2031-01-31")
+                with self.assertRaises(HTTPException) as invalid:
+                    await save_automation_templates(body={"items": [{**extended, "endDate": "2030-11-30"}], "revision": updated["revision"]}, user=None, session=db)
+                self.assertEqual(invalid.exception.status_code, 400)
+                self.assertEqual(await list_automation_templates(user=None, session=db), updated)
+
 
 if __name__ == "__main__":
     unittest.main()
