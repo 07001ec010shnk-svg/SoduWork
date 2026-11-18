@@ -399,6 +399,7 @@ class RemoteRpcTests(unittest.IsolatedAsyncioTestCase):
         loop = asyncio.get_running_loop()
         for stage in ("staging", "comment"):
             with self.subTest(stage=stage):
+                self.admission_fixture()
                 ref = "cancelled-admitted-comment-" + stage
                 entered, later, release = asyncio.Event(), asyncio.Event(), threading.Event()
                 self.releases.append(release)
@@ -422,33 +423,52 @@ class RemoteRpcTests(unittest.IsolatedAsyncioTestCase):
                         loop.call_soon_threadsafe(later.set)
                     return {"ok": True}
 
-                # Exercise the production internal admitted-delivery branch;
-                # external local-model authorization still runs in _job.
-                message = {"op": "job.comment", "ref": ref, "_admitted": True}
-                first_message = {**message, "id": "first-" + stage, "text": "first"}
+                message = {"op": "job.comment", "ref": ref}
+                first_message = {**message, "text": "first"}
                 if stage == "staging":
                     first_message["files"] = {"items": [{"name": "fixture.txt"}]}
+                items = {}
+                for identity, payload in (("first", first_message), ("second", {**message, "text": "second"})):
+                    items[identity] = self.machine._admission.submit(identity, ref,
+                        runner_main.runner_admission.INTERACTIVE, "comment", payload)[2]
+
+                async def deliver(message):
+                    # Only the trusted durable-delivery path creates _admitted.
+                    # Neither authenticated transport may accept it from JSON.
+                    await self.machine._run_admitted(items[message["turnId"]])
+                    return {"ok": True}
+
+                workers = self.machine._network_rpc_workers()
+                local_replies = []
+                server = runner_local_rpc.Server(deliver,
+                    lambda blob: local_replies.append(json.loads(blob[len(runner_main.LOCAL_RPC_PREFIX):])),
+                    runner_main.LOCAL_RPC_PREFIX, pending=workers.pending, tails=workers.tails)
                 try:
                     with patch.object(runner_main, "_read_packet", return_value=[({"filename": "fixture.txt"}, b"fixture")]), \
                             patch.object(ai_local, "_stage_inputs", side_effect=stage_inputs), \
                             patch.object(runtime_images, "prepare", side_effect=lambda cfg, *args: cfg), \
                             patch.object(local_stream, "comment_sync", side_effect=native_comment):
-                        await self.machine._queue_message(first_message, self.machine.ws)
+                        await server.submit("first", {**message, "turnId": "first"})
                         await entered.wait()
-                        first_task = next(iter(self.machine._rpc_tasks))
+                        first_task = next(iter(server.tasks))
                         first_task.cancel()
-                        await self.machine._queue_message({**message, "id": "second-" + stage, "text": "second"},
-                                                          self.machine.ws)
+                        await server.submit("second", {**message, "turnId": "second"})
                         await self.machine._queue_message({"op": "ping", "id": "ping-" + stage}, self.machine.ws)
                         self.assertTrue((await self.reply("ping-" + stage))["ok"])
                         self.assertFalse(first_task.done(), "native work outlived its mutation reservation")
                         self.assertFalse(later.is_set(), "next native comment overtook unfinished work")
                         release.set()
-                        self.assertTrue((await self.reply("second-" + stage))["ok"])
+                        for _ in range(500):
+                            if any(packet.get("id") == "second" for packet in local_replies):
+                                break
+                            await asyncio.sleep(.001)
+                        second_reply = next(packet for packet in local_replies if packet["id"] == "second")
+                        self.assertTrue(second_reply["result"]["ok"])
+                        self.assertEqual(items["second"].state, "running")
                         self.assertEqual(order, ["first-enter", "first-exit", "second-enter"])
                 finally:
                     release.set()
-                    await asyncio.gather(*list(self.machine._rpc_tasks), return_exceptions=True)
+                    await server.close()
 
     async def test_same_ref_mutations_wait_for_both_prior_work_and_stop(self):
         entered, release, stopped, stop_release = (asyncio.Event() for _ in range(4))

@@ -35,6 +35,26 @@ Direct development uses local configuration and data; keep it separate from real
 
 API documentation: **http://127.0.0.1:9080/docs**. Health check: `GET /healthz`.
 
+## Desktop-local Runner event recovery
+
+Desktop-local Runner executions persist their event destination separately from the
+conversation alias. Their history does not enter Hub task delivery, and Hub outbox
+pressure does not block local work; CPU, memory and execution concurrency still apply.
+Queued desktop turns display queue wording instead of model-processing wording.
+
+On upgrade, Runner recognizes old local chat streams only when their alias, runtime
+and deterministic execution reference agree. Recovery persists confirmed local routing;
+ambiguous records retain their original routing metadata. Confirmed local packets are copied to
+private `local-events-*.archive` recovery files before removal from the active outbox;
+Windows payloads retain DPAPI protection. Collection marks are preserved. Ambiguous
+streams and real Hub events remain untouched, and NACK is never treated as ACK.
+Recovery files are bounded to three times the configured outbox byte budget, including
+encoding overhead. Archive failures retain the original packets and emit a diagnostic;
+unrelated Hub delivery and collection continue subject to actual outbox capacity.
+Keep these recovery files private and retain them until their contents have been reviewed.
+Run `python3 -m unittest test_runner_event_scope test_runner_event_delivery` to verify
+routing, restart recovery, interrupted archive writes, and Hub delivery preservation.
+
 ## Managed Pi execution
 
 Managed Pi execution binds each Runner execution record to its own configuration and session directory under the Runner data root. Startup and follow-up turns use the same explicit path, independent of inherited desktop Pi settings or the operating system home-directory lookup. Model files contain an environment-variable reference for the credential; missing model configuration or failed file publication stops execution before Pi starts. Personal Pi and desktop-local model files are not modified. On upgrade, only the exact native session identified by the Runner record and matching workspace can be copied into the private directory; its original file remains unchanged. Established follow-up turns require an existing session rather than silently starting a new one.
@@ -47,13 +67,15 @@ To verify this path with a real Runner and Pi subprocess against a disposable au
 
 Desktop-private and Hub RPCs use bounded work, read, discovery and control lanes. A slow discovery or history read cannot occupy the workers reserved for stopping another conversation. Mutations of one execution reference remain ordered across both transports; stopping it invalidates older requests that have not reached durable admission. Requests rejected for transport capacity are explicitly unaccepted and may be retried with the same business ID. This does not change account authorization, local-model privacy or the adaptive CPU/memory execution budget.
 
-Process creation runs outside the shared session lock. Cancellation retains the exact launch identity until process-tree cleanup is confirmed; an unconfirmed exit does not free its execution slot or authorize a replacement. Event-retention failures preserve the unsaved batch and retry it before resuming admission. An empty current snapshot or an unrelated acknowledgement cannot discard that batch.
+Process creation runs outside the shared session lock. Cancellation retains the exact launch identity until process-tree cleanup is confirmed; an unconfirmed exit does not free its execution slot or authorize a replacement. Event-retention failures preserve the unsaved batch and retry it before resuming Hub-bound admission. An empty current snapshot or an unrelated acknowledgement cannot discard that batch. Desktop-local admission remains independent of Hub event retention.
 
 Model metadata carries its privacy classification from snapshot capture to remote projection. Switching to a Hub model while a read is pending cannot expose an older local model identity or its token counts. Attachment reads and follow-up workers also retain cancellation ownership until the underlying operation finishes.
 
 Run `python3 -m unittest test_runner_local_rpc test_runner_remote_rpc test_runner_event_delivery test_runner_usage_receipts test_runner_input_cleanup test_local_process_cleanup test_task_goal_stop_races` in the backend test environment. The private-pipe test uses a real Runner process and durable queue with synthetic discovery; process-cleanup tests use isolated operating-system children. These checks do not establish real-provider or Windows acceptance when run on another platform.
 
 ## Offline quality gate
+
+Native requirement preparation can save `executionSubmissionChoice` independently of the effective `executionSubmissionMode`. For the `infer` choice, completed and validated primary artifacts resolve the mode to automatic review submission; explicit manual and ambiguous legacy manual values retain their behavior. Review remains a human action owned by the requirement creator. Current-turn delivery issues expose interrupted capture, invalid output or an unavailable creator without changing approval permissions. Upgrade desktop and Hub together for the new choice acknowledgment and issue receipts.
 
 Use the dedicated test environment, not a production service environment:
 

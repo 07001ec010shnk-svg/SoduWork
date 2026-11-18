@@ -729,6 +729,7 @@ def _dispatch_sync_once(cfg: dict, t, files: list | None = None,
         _RUNS[sid] = {
             "cli": key, "ws": ws, "state": "running", "started": time.time(), "ended": None,
             "taskId": getattr(t, "id", ""), "title": getattr(t, "title", ""),
+            "eventDestination": cfg.get("_eventDestination") or "hub",
             "model": model,
             "modelLocalOnly": dict(cfg.get("llm") or {}).get("localOnly") is True,
             "reasoningEffort": reasoning_effort,
@@ -965,6 +966,8 @@ def session_sync(cfg: dict, ref: str, since: int = 0, limit: int = 400) -> dict:
             cli_sid, model = run.get("cliSid") or "", run.get("model") or ""
             # Ownership belongs to these captured fields, not a later turn.
             metadata_private = runner_usage_receipts.private_model(run)
+            event_destination = ({"eventDestination": run["eventDestination"]}
+                                 if "eventDestination" in run else {})
     if not run:
         items = _read_events(ref, since, limit)
         if not items and since == 0:
@@ -987,6 +990,7 @@ def session_sync(cfg: dict, ref: str, since: int = 0, limit: int = 400) -> dict:
             **({"taskGoal": local_task_goal.snapshot(run)} if run.get("goalContract") and cli != "pi" else {}),
             "cli": cli, "cliName": cli_name, "cliSid": cli_sid, "model": model,
             runner_usage_receipts.PRIVACY_MARKER: metadata_private,
+            **event_destination,
             "activeExecutionSelection": {"agentId": cli, "modelName": model,
                 "reasoningEffort": str(run.get("reasoningEffort") or "")},
             # Report cumulative usage separately from current context occupancy.
@@ -1022,6 +1026,7 @@ def console_list_sync(cfg: dict, task_ids: list[str] | None = None) -> dict:
                 "firstStarted": run.get("firstStarted") or run.get("started") or 0,
                 "model": run.get("model") or "", "cliSid": run.get("cliSid") or "",
                 runner_usage_receipts.PRIVACY_MARKER: runner_usage_receipts.private_model(run),
+                **({"eventDestination": run["eventDestination"]} if "eventDestination" in run else {}),
                 "tokens": dict(run.get("tokens") or {}),
                 "ctxWindow": run.get("ctxWindow") or _CTX_WINDOW_DEFAULT,
                 "ctxWindowKnown": bool(run.get("ctxWindowKnown")),

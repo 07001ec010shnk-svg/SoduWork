@@ -495,6 +495,7 @@ _PERSIST_KEYS += ("conversationMode", "turnStartSeq", "admissionKey", "reasoning
 _PERSIST_KEYS += ("goalContract", "goalState", "goalUserPending", "goalTurnOwned")
 _PERSIST_KEYS += ("turnEndIdentity", "admissionStartSeq")
 _PERSIST_KEYS += ("usageReceipts", "modelLocalOnly", "activeUsageOwner")
+_PERSIST_KEYS += ("eventDestination",)
 
 
 def _save_meta(ref: str) -> None:
@@ -510,6 +511,8 @@ def _save_meta(ref: str) -> None:
         if run.get("cli") == "codex":
             run["codexTransport"] = (run.get("cfg") or {}).get(_account_acp.TRANSPORT_KEY, run.get("codexTransport") or "")
         data = {k: run.get(k) for k in _PERSIST_KEYS}
+        if "eventDestination" not in run:
+            data.pop("eventDestination", None)
         # Keep snapshot and replacement in one ordered critical section.
         data["ref"] = ref
         try:
@@ -746,6 +749,10 @@ def _reclaim_missing() -> dict:
         except Exception:  # noqa: BLE001
             continue
         run = {k: meta.get(k) for k in _PERSIST_KEYS}
+        if "eventDestination" not in meta:
+            run.pop("eventDestination", None)
+        from .runner_event_scope import restore_destination
+        restored_destination = restore_destination(run, ref)
         # Older archives seeded this exact placeholder before the first request.
         if run.get("tokens") == {"input": 0, "output": 0, "total": 0}:
             run["tokens"] = {}
@@ -779,6 +786,8 @@ def _reclaim_missing() -> dict:
             if ref in _RUNS:
                 continue
             _RUNS[ref] = run
+        if restored_destination:
+            _save_meta(ref)
         if run.get('state') == 'running' and run.get('failureKind') == _LAUNCH_TREE_UNCONFIRMED:
             # A dead host cannot prove that its previously unverified children
             # exited. Restart must retain this session's admission fence.

@@ -68,6 +68,24 @@ Runner conversations distinguish queue waiting, execution-environment startup an
 
 ## Run and verify
 
+Native file delivery preserves Unicode filename spelling and file bytes, including relative links inside bundles. Update the Hub together with the desktop to accept decomposed Unicode names; canonically equivalent or case-conflicting paths are rejected rather than merged. Completed Pi turn journals can recover files with preserved old modification times within the existing scan limits; unrelated historical files remain excluded. Capture checks recorded content hashes before freezing bytes. An explicit file-path contract with no captured output or an incomplete inferred scan reports incomplete delivery; text-only and kind-only contracts retain their existing behavior. Completed manual submissions show that acceptance still requires submission. Transport continues to use the existing account-scoped durable receipt queue.
+
+New native requirement executions distinguish the selected submission policy from its effective mode. The default can submit validated current-turn primary outputs for review even without a predeclared output contract; explicit and unclassified historical manual policies stay manual. Explicit default selections require an updated Hub acknowledgment. Standalone chat JSON results can be collected alongside Markdown; configuration, credentials, hidden directories and process files remain excluded from inference. Project workspaces retain their bounded result rules and explicit manifests remain authoritative.
+
+Before completed-turn capture, the existing durable queue records a scoped pending-capture receipt. Interrupted capture is visible after restart; it never reconstructs a result from changed workspace files or reruns the model. Once captured, retries use frozen bytes and do not duplicate review requests. Requirement details distinguish pending synchronization, manual submission and delivery/reviewer blockers. A filesystem failure before any durable write is reported locally and cannot promise restart recovery. Restore an unavailable creator account or have an administrator verify missing attribution; execution permission never grants acceptance permission.
+
+For a manual requirement-to-acceptance investigation, close the existing desktop and enable the optional local recorder before starting the source desktop. In PowerShell at the repository root:
+
+```powershell
+$env:SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR = Join-Path $env:TEMP ('soduwork-requirement-diagnostics-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+Write-Output $env:SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR
+.\start.cmd --desktop
+```
+
+Use a synthetic requirement and the same execution entry, model and submission choice as the failing case. After execution ends, wait 30 seconds, open the requirement details once, then retain all `requirement-*.jsonl` files in the printed directory and the approximate reproduction time. The files are the diagnostic export; no upload happens automatically. Confirm a `diagnostics.startup` record exists so an already-running, uninstrumented desktop is not mistaken for this run. Remove the environment variable with `Remove-Item Env:SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR` before the next normal launch. Setting the variable does not change the configured Hub or account.
+
+The recorder observes renderer task responses/events, native task binding, selected/effective submission modes, capture outcomes, delivery responses and receipt retries. Identifiers and endpoint/account correlation keys are hashed; prompts, titles, filenames, file bytes, tokens and raw errors are omitted. Each process stops recording at 5 MiB with a `diagnostics.limit` marker; use a fresh run if reached. A diagnostic write failure does not stop execution. Startup records include the local source fingerprint and Git revision when available; the running Hub revision is explicitly unknown. Renderer observations describe received state, not proof that a particular control was painted. Submission/acceptance policy and business data are unchanged.
+
 Ordinary new chats use a fresh private working directory; the previous chat's
 directory and the recent folder picker location are not inherited. Explicitly
 selected project folders remain shared. Personal memory excludes automatic

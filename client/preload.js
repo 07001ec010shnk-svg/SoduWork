@@ -1,4 +1,5 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
+let requirementDiagnosticsEnabled;
 
 const pageIpcEvents = [];
 let pageIpcEpoch = 0;
@@ -309,6 +310,10 @@ ipcRenderer.on('overlay-window-blur', (_event, revision) => {
 });
 
 const soduWorkBridge = {
+  recordRequirementDiagnostic: (event, data) => {
+    requirementDiagnosticsEnabled ||= Promise.resolve(ipcRenderer.invoke('requirement-diagnostics-enabled')).catch(() => false);
+    void requirementDiagnosticsEnabled.then(enabled => { if(enabled) ipcRenderer.send('requirement-diagnostics-record',event,data); }).catch(() => {});
+  },
   pagePerformance: {
     snapshot: () => { trimPageIpcEvents(); return { available: true, events: pageIpcEvents.map(row => ({ ...row })) }; },
     clear: () => { pageIpcEpoch++; pageIpcEvents.length = 0; },
