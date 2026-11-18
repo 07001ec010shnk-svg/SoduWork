@@ -26,7 +26,7 @@ function save() {
 save();
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-sharing-review-'));
-let backend, sender, recipient, selected, folderOnly;
+let backend, sender, recipient, selected, folderOnly, pickedFolder;
 app.setPath('userData', path.join(scratch, 'profile'));
 // Keep asynchronous fixture cleanup alive after the final preview closes.
 app.on('window-all-closed', () => {});
@@ -95,7 +95,7 @@ pick:()=>ipcRenderer.invoke('sharing-review-pick')});`);
     return artifacts.action(session(), ref, id, action, {});
   });
   const pick = createPickFolderHandler({ BrowserWindow, shareArchive: archive,
-    dialog: { showOpenDialog: async () => ({ filePaths: [selected] }) } });
+    dialog: { showOpenDialog: async () => ({ filePaths: [pickedFolder || selected] }) } });
   ipcMain.handle('sharing-review-pick', event => { verifySender(event); return pick(event); });
   await sender.loadURL(pathToFileURL(path.join(root, 'client/tests/mate-messages.html')).href + '?backend=' + encodeURIComponent(base));
   const js = source => sender.webContents.executeJavaScript(source);
@@ -133,9 +133,9 @@ api.pickShareFolder=()=>sharingReviewBridge.pick();outputMode='none';`);
       if (scenario.failure) {
         await until(`document.querySelector('.nmate-results').textContent.includes('nested more than 12 levels')||document.getElementById('status').textContent.includes('nested more than 12 levels')`);
         assert.equal(await js(`document.querySelectorAll('.nmate-results input:checked').length`), 0);
-        if (entry === 'conversation') assert.equal(await js(`document.querySelector('.nmate-card-send').disabled`), true);
+        await until(`!document.querySelector('.nmate-card-send').disabled`);
         await js(`document.querySelector('.nmate-card-send').click()`);
-        if (entry === 'folder') await until(`document.querySelector('.nmate-card').hidden`);
+        await until(`document.querySelector('.nmate-card').hidden`);
         const outgoing = (await events()).filter(event => !before.has(event.messageId || event.id));
         assert.ok(outgoing.every(event => !event.attachments?.length));
         report.cases.push({ entry, scenario: scenario.name, errorShown: true, attachments: 0, status: 'passed' });
@@ -171,6 +171,87 @@ api.pickShareFolder=()=>sharingReviewBridge.pick();outputMode='none';`);
       }
       save();
       await js(`document.querySelector('.nmate-card-close')?.click()`);
+    }
+  }
+  for (const entry of ['mention', 'prefilled']) {
+    for (const scenario of ['text', 'csv', 'add-file', 'add-folder', 'html-document']) {
+      folderOnly = false;
+      selected = path.join(scratch, entry + '-' + scenario);
+      fs.mkdirSync(selected, { recursive: true });
+      let expectedName, expectedBytes;
+      if (scenario === 'html-document') {
+        expectedName = 'report.html';
+        expectedBytes = Buffer.from('<!doctype html><h1>Quarterly report</h1>');
+        fs.writeFileSync(path.join(selected, expectedName), expectedBytes);
+        fs.mkdirSync(path.join(selected, '.soduwork'));
+        fs.writeFileSync(path.join(selected, '.soduwork/delivery.json'), JSON.stringify({ schemaVersion: 1,
+          deliverables: [{ path: expectedName, kind: 'document', title: 'Quarterly report' }] }));
+        const indexed = artifacts.decorate('chat-a', { items: session().outputSnapshot().delivery.items });
+        assert.equal(indexed[0].kind, 'document');
+      } else {
+        const deep = path.join(selected, 'website', ...Array.from({ length: 13 }, (_, i) => 'level-' + i));
+        fs.mkdirSync(deep, { recursive: true });
+        fs.writeFileSync(path.join(selected, 'website/index.html'), '<script src="' +
+          path.relative(path.join(selected, 'website'), path.join(deep, 'required.js')).replaceAll('\\', '/') + '"></script>');
+        fs.writeFileSync(path.join(deep, 'required.js'), 'window.fixtureLoaded=true;');
+        fs.writeFileSync(path.join(selected, 'report.csv'), 'name,value\ncomplete,42\n');
+        if (scenario === 'csv') { expectedName = 'report.csv'; expectedBytes = fs.readFileSync(path.join(selected, expectedName)); }
+      }
+      const before = new Set((await events()).map(event => event.messageId || event.id));
+      await js(`document.getElementById('status').textContent='';`);
+      if (entry === 'prefilled') {
+        assert.equal((await js(`handle.open({recipientUserId:'recipient',text:'Fixture ready to share'})`)).ok, true);
+      } else {
+        await js(`input.value='@林';input.selectionStart=input.value.length;input.dispatchEvent(new Event('input',{bubbles:true}));`);
+        await until(`Boolean(document.querySelector('.nmate-menu .nplugin-option'))`);
+        await js(`document.querySelector('.nmate-menu .nplugin-option').click()`);
+      }
+      await until(`!document.querySelector('.nmate-card-send').disabled`);
+      if (scenario !== 'html-document') {
+        assert.equal(await js(`Boolean(document.querySelector('.nmate-results [role="alert"]'))`), true);
+        assert.equal(await js(`Array.from(document.querySelectorAll('.nmate-result-row')).some(row=>
+          row.querySelector('span').textContent==='index.html'&&row.querySelector('input').disabled&&!row.querySelector('input').checked)`), true);
+      }
+      assert.equal(await js(`Array.from(document.querySelectorAll('.nmate-card-tools button')).some(n=>
+        ['添加文件','添加文件夹'].includes(n.textContent)&&n.disabled)`), false);
+      await js(`Array.from(document.querySelectorAll('.nmate-result-row')).forEach(row=>{
+        const check=row.querySelector('input');if(check.disabled)return;
+        check.checked=${JSON.stringify(scenario === 'csv' ? 'report.csv' : scenario === 'html-document' ? 'report.html' : '')}===row.querySelector('span').textContent;
+        check.dispatchEvent(new Event('change',{bubbles:true}));});`);
+      if (scenario === 'add-file') {
+        expectedName = 'added.txt'; expectedBytes = Buffer.from('Independent added file');
+        await js(`(()=>{const transfer=new DataTransfer();transfer.items.add(new File(['Independent added file'],'added.txt'));
+          const picker=document.querySelector('.nmate-card-tools input[type=file]');picker.files=transfer.files;
+          picker.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+      } else if (scenario === 'add-folder') {
+        pickedFolder = path.join(scratch, entry + '-healthy-folder');
+        fs.mkdirSync(pickedFolder); fs.writeFileSync(path.join(pickedFolder, 'added.txt'), 'Independent added folder');
+        expectedName = path.basename(pickedFolder) + '.zip';
+        expectedBytes = fs.readFileSync(path.join(pickedFolder, 'added.txt'));
+        await js(`Array.from(document.querySelectorAll('.nmate-card-tools button')).find(n=>n.textContent==='添加文件夹').click()`);
+      }
+      await until(`!document.querySelector('.nmate-card-send').disabled&&document.querySelectorAll('.nmate-results input:checked').length===${expectedName ? 1 : 0}`);
+      await js(`document.querySelector('.nmate-card-send').click()`);
+      await until(`document.querySelector('.nmate-card').hidden`);
+      const outgoing = (await events()).filter(event => !before.has(event.messageId || event.id));
+      assert.equal(outgoing.length, 1); assert.equal(outgoing[0].attachments.length, expectedName ? 1 : 0);
+      if (expectedName) {
+        const id = outgoing[0].attachments[0].id;
+        const metadata = await fetch(base + '/api/v1/team/message-files/' + id, { headers: { 'X-Test-User': 'recipient' } });
+        assert.equal(metadata.status, 200);
+        const file = await metadata.json(); assert.equal(file.filename, expectedName);
+        const denied = await fetch(base + '/api/v1/team/message-files/' + id, { headers: { 'X-Test-User': 'other' } });
+        assert.equal(denied.status, 404);
+        const response = await fetch(base + file.url); assert.equal(response.status, 200);
+        const bytes = Buffer.from(await response.arrayBuffer());
+        if (scenario === 'add-folder') {
+          const entries = unpack(bytes); assert.deepEqual([...entries.keys()], ['added.txt']);
+          assert.deepEqual(entries.get('added.txt'), expectedBytes);
+        } else assert.deepEqual(bytes, expectedBytes);
+      }
+      report.cases.push({ entry, scenario, attachments: expectedName ? 1 : 0,
+        exactBytes: Boolean(expectedName), failedWebsiteExcluded: scenario !== 'html-document', status: 'passed' });
+      pickedFolder = null; save();
     }
   }
   report.status = 'passed';
