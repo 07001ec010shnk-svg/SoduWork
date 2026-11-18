@@ -1,5 +1,7 @@
 (function (global) {
   const messages = {
+    "model.detail.请求的最大输出 Token 超过模型服务限制；请在模型配置中调整“最大输出 Token”，并核对“上下文窗口”": "The requested output budget exceeds the model service limit. Adjust “Maximum output tokens” in model settings and check “Context window”.",
+    "留空时使用 16384 Token。请按服务实际限制填写；能力检测不验证最大输出上限。": "When blank, 16384 tokens are used. Set this to your provider’s actual limit; capability tests do not verify the maximum output limit.",
     "原设备凭据无法验证": "The original device credentials could not be verified.",
     "原设备凭据无法验证，已保留原记录": "The original device credentials could not be verified. The original record has been preserved.",
     "原设备凭据尚未迁移，请重试连接": "The original device credentials have not been migrated yet. Please retry the connection.",
