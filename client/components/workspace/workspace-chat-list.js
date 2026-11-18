@@ -51,17 +51,32 @@
   let presenceSequence = 0, presenceFloor = 0;
   const presenceVersions = new Map();
   const executionFields = ['state', 'status', 'live', 'runtimeUnavailable', 'runtimeFailure', 'executionOutcome',
-    'workOnly', 'draftAdapterId'];
+    'workOnly', 'draftAdapterId', 'usedHarnesses'];
   function executionState(row) {
     return Object.fromEntries(executionFields.filter(key => Object.hasOwn(row, key)).map(key => [key, row[key]]));
   }
   function preserveNewerPresence(rows, startedAt) {
+    const currentRows = new Map(ctx.chatItems.map(row => [canonicalLocalId(row.id) || row.id, row]));
     return (rows || []).map(row => {
       const id = canonicalLocalId(row.id) || row.id;
       const aliases = [id, row.id, ...(row.historyAliasIds || [])];
-      if (startedAt >= presenceFloor && aliases.every(alias => (presenceVersions.get(alias) || 0) <= startedAt)) return row;
-      const current = ctx.chatItems.find(item => (canonicalLocalId(item.id) || item.id) === id);
-      return current ? { ...row, ...executionState(current) } : row;
+      const current = currentRows.get(id);
+      if (!current) return row;
+      const newer = startedAt < presenceFloor || aliases.some(alias => (presenceVersions.get(alias) || 0) > startedAt);
+      // A still-unused draft cannot gain usage from a trailing draft index.
+      // Real execution clears workOnly and may introduce its first runtime.
+      const staleDraftUsage = Array.isArray(current.usedHarnesses) && !current.usedHarnesses.length &&
+        current.workOnly === true && row.workOnly === true && !row.live && !(row.count > 0) &&
+        Array.isArray(row.usedHarnesses) && row.usedHarnesses.length > 0;
+      const preserve = newer || staleDraftUsage;
+      // Durable indexing trails live presence. Execution provenance grows for
+      // this identity even when a read starts after the event but before its write.
+      // Never infer usage from an unexecuted runtime selection or another row.
+      const provenance = Array.isArray(current.usedHarnesses) ? { usedHarnesses: [...new Set([
+        ...current.usedHarnesses, ...(Array.isArray(row.usedHarnesses) &&
+          !(preserve && !current.usedHarnesses.length) ? row.usedHarnesses : []),
+      ])] } : {};
+      return { ...row, ...(preserve ? executionState(current) : {}), ...provenance };
     });
   }
   let mutationGeneration = 0, accountMutationGeneration = 0, lifecycleOverflow = false;
@@ -405,7 +420,8 @@ function updateChatState(event) {
     const row = presence?.live ? { ...presence, workOnly: false, draftAdapterId: '' } : presence;
     const id = String(event && event.sessionId || row && row.id || '');
     if (!id || !row) return;
-    if (Object.hasOwn(row, 'state') || Object.hasOwn(row, 'status') || Object.hasOwn(row, 'draftAdapterId')) {
+    if (Object.hasOwn(row, 'state') || Object.hasOwn(row, 'status') || Object.hasOwn(row, 'draftAdapterId') ||
+        Array.isArray(row.usedHarnesses)) {
       const canonical = canonicalLocalId(id) || id;
       presenceVersions.delete(canonical); presenceVersions.set(canonical, ++presenceSequence);
       if (presenceVersions.size > 1024) {
