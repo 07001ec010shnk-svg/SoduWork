@@ -56,6 +56,12 @@
       : uiText('目前还没有可总结的工作内容，请补充后再发送。'));
   }
 
+  function websiteOutput(file) {
+    // An explicit artifact kind is authoritative. Only legacy rows without a
+    // kind need the filename fallback; HTML documents are ordinary files.
+    return file.kind ? file.kind === 'website' : /\.html?$/i.test(file.name || '');
+  }
+
   async function conversationOutputs(context) {
     if (!context || !context.ref) return [];
     const result = await context.api.outputs(context.ref);
@@ -66,15 +72,22 @@
     }));
     // Websites are directories, not lone index.html files. The trusted main
     // process packages sibling CSS/JS/assets into one bounded ZIP.
-    const websites = files.filter(file => file.kind === 'website' || /\.html?$/i.test(file.name || ''));
+    const websites = files.filter(websiteOutput);
     for (const website of websites.slice(0, 3)) {
-      if (typeof context.api.artifactAction !== 'function') throw Error(uiText('文件夹打包失败'));
-      const bundled = await context.api.artifactAction(context.ref, website.artifactId, 'share-related');
-      if (!bundled || !bundled.ok || typeof bundled.data !== 'string') throw Error(uiText(bundled?.reason || '文件夹打包失败'));
-      const parent = String(website.relative || website.name || '').replace(/[^/]+$/, '');
-      files = files.filter(file => file !== website && (!parent || !String(file.relative || '').startsWith(parent)));
-      files.unshift({ key: 'bundle:' + website.artifactId, name: bundled.name, size: bundled.size,
-        at: bundled.at, inlineData: bundled.data, website: bundled.preview || null, kind: 'website-bundle' });
+      try {
+        if (typeof context.api.artifactAction !== 'function') throw Error(uiText('文件夹打包失败'));
+        const bundled = await context.api.artifactAction(context.ref, website.artifactId, 'share-related');
+        if (!bundled || !bundled.ok || typeof bundled.data !== 'string') throw Error(uiText(bundled?.reason || '文件夹打包失败'));
+        const parent = String(website.relative || website.name || '').replace(/[^/]+$/, '');
+        files = files.filter(file => file !== website && (!parent || !String(file.relative || '').startsWith(parent)));
+        files.unshift({ key: 'bundle:' + website.artifactId, name: bundled.name, size: bundled.size,
+          at: bundled.at, inlineData: bundled.data, website: bundled.preview || null, kind: 'website-bundle' });
+      } catch (error) {
+        // A failed website cannot become a bare HTML attachment, but its error
+        // must not prevent sharing text or independent healthy outputs.
+        files = files.map(file => file === website ? { ...file,
+          shareError: uiText(String(error?.message || '文件夹打包失败')) } : file);
+      }
     }
     for (const taskId of [...new Set(context.taskIds || [])]) {
       const rows = await context.hub.listAttachments(taskId);
@@ -90,6 +103,7 @@
 
 
   async function outputPayload(context, files, messageId) {
+    files = files.filter(file => !file.shareError);
     if (files.length > 20) throw Error('一次最多发送 20 份成果，请移除部分文件');
     if (files.reduce((sum, f) => sum + Number(f.size || 0), 0) > 24 * 1024 * 1024)
       throw Error('成果合计不能超过 24 MB，请移除部分文件');
@@ -103,7 +117,7 @@
         if (bytes > 24 * 1024 * 1024) throw Error('\u6210\u679c\u5408\u8ba1\u4e0d\u80fd\u8d85\u8fc7 24 MB'); continue; }
       // Legacy rows and websites beyond the eager packaging shortlist must
       // still use the website action; ordinary sharing would send bare HTML.
-      const action = file.kind === 'website' || /\.html?$/i.test(file.name || '') ? 'share-related' : 'share';
+      const action = websiteOutput(file) ? 'share-related' : 'share';
       const result = await context.api.artifactAction(context.ref, file.artifactId, action);
       if (!result || !result.ok || typeof result.data !== 'string') throw Error(result?.reason || '无法读取成果：' + file.name);
       if (result.size > 20 * 1024 * 1024) throw Error('单份成果不能超过 20 MB：' + file.name);
@@ -431,7 +445,7 @@
         renderFiles();
         try {
           if (context?.ref && o.context?.().ref !== context.ref) throw Error('会话已切换，请重新选择同事');
-          const result = typeof o.progress === 'function' ? await o.progress(files) : '';
+          const result = typeof o.progress === 'function' ? await o.progress(files.filter(file => !file.shareError)) : '';
           if (epoch !== cardEpoch || request !== summaryRequest) return;
           const text = typeof result === 'string' ? result : result?.text;
           if (!text || text.length > box.maxLength) throw Error('小结未能生成，请重试或手动填写');
@@ -462,7 +476,7 @@
       function renderFiles() {
         results.replaceChildren();
         const heading = document.createElement('b');
-        const selected = files.filter(file => !excluded.has(file.key));
+        const selected = files.filter(file => !file.shareError && !excluded.has(file.key));
         heading.textContent = loadingFiles ? '正在整理当前会话成果…' : loadError ||
           (files.length ? '随消息发送 · ' + selected.length + ' 份成果' : '当前会话暂无成果，仅发送留言');
         results.appendChild(heading);
@@ -478,15 +492,25 @@
         }
         files.forEach(file => {
           const row = document.createElement('label'), check = document.createElement('input');
-          row.className = 'nmate-result-row' + (excluded.has(file.key) ? '' : ' is-selected');
-          check.type = 'checkbox'; check.checked = !excluded.has(file.key); check.disabled = sending || picking;
+          row.className = 'nmate-result-row' + (file.shareError || excluded.has(file.key) ? '' : ' is-selected');
+          check.type = 'checkbox'; check.checked = !file.shareError && !excluded.has(file.key); check.disabled = sending || picking || Boolean(file.shareError);
           check.addEventListener('change', () => {
+            if (file.shareError) return;
             check.checked ? excluded.delete(file.key) : excluded.add(file.key);
             messageId = crypto.randomUUID(); renderFiles();
           });
           const name = document.createElement('span'); name.textContent = file.name; name.title = file.name;
           const size = document.createElement('small'); size.textContent = Math.max(1, Math.ceil((file.size || 0) / 1024)) + ' KB';
           row.append(check, name, size); results.appendChild(row);
+          if (file.shareError) {
+            const warning = document.createElement('div');
+            warning.className = 'nmate-results-warning';
+            warning.setAttribute('role', 'alert');
+            warning.setAttribute('id', 'nmate-share-error-' + file.key);
+            check.setAttribute('aria-describedby', 'nmate-share-error-' + file.key);
+            warning.textContent = file.shareError;
+            results.appendChild(warning);
+          }
         });
         send.disabled = loadingFiles || Boolean(loadError) || sending || summarizing || picking;
         fill.disabled = loadingFiles || sending || summarizing;
@@ -500,7 +524,7 @@
           const loaded = await conversationOutputs(context);
           if (epoch !== cardEpoch) return;
           files = loaded;
-          if(prefill?.fromApp)files.forEach(file=>excluded.add(file.key));
+          files.forEach(file => { if (prefill?.fromApp || file.shareError) excluded.add(file.key); });
           if (loaded.truncated || files.length > 20) {
             outputWarning = prefill?.fromApp ? '请选择要发送的成果（最多20份）' : loaded.truncated
               ? '\u6210\u679c\u8f83\u591a\uff0c\u5df2\u5c55\u793a\u6700\u8fd1 60 \u9879\uff1b\u9ed8\u8ba4\u52fe\u9009\u6700\u8fd1 20 \u9879\uff0c\u53ef\u6309\u9700\u8c03\u6574\u3002'
@@ -530,7 +554,7 @@
         sending = true; box.disabled = true; fill.disabled = blank.disabled = true; renderFiles();
         send.textContent = '正在发送…';
         try {
-          const outputs = await outputPayload(context, files.filter(file => !excluded.has(file.key)), messageId);
+          const outputs = await outputPayload(context, files.filter(file => !file.shareError && !excluded.has(file.key)), messageId);
           if(epoch!==cardEpoch)throw Error('发送卡片或账号已变化，请重新选择同事');
           const result = typeof o.send === 'function' ? await o.send(mate.id, text, outputs) : null;
           if (result && result.ok === false) throw Error(result.reason || '消息没有发出去');

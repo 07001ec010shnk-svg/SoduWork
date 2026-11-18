@@ -65,7 +65,7 @@ async function settled(predicate) {
     await new Promise(resolve => setTimeout(resolve, 5));
   }
 }
-async function sharingCard(t, fixture, folderOnly = false) {
+async function sharingCard(t, fixture, folderOnly = false, fromApp = false) {
   const input = element('textarea'), host = element(), document = { ...events(), createElement: element };
   host.getBoundingClientRect = () => ({ left: 0, top: 500, bottom: 550, width: 600 });
   const browser = { ...events(), document, innerWidth: 1200, innerHeight: 900, crypto, Event, setTimeout, clearTimeout,
@@ -80,10 +80,14 @@ async function sharingCard(t, fixture, folderOnly = false) {
     send: async (id, text, payload) => { sent.push(payload); return { ok: true, delivered: true }; },
     say: message => messages.push(message) });
   t.after(() => controller.destroy());
-  input.value = '@'; input.selectionStart = 1; await input.dispatchEvent({ type: 'input' });
-  const menu = host.children[0];
-  await settled(() => menu.children.some(c => c.tag === 'button'));
-  await menu.children.find(c => c.tag === 'button').dispatchEvent({ type: 'click' });
+  if (fromApp) {
+    assert.equal((await controller.open({ recipientUserId: 'recipient', text: 'Fixture ready to share' })).ok, true);
+  } else {
+    input.value = '@'; input.selectionStart = 1; await input.dispatchEvent({ type: 'input' });
+    const menu = host.children[0];
+    await settled(() => menu.children.some(c => c.tag === 'button'));
+    await menu.children.find(c => c.tag === 'button').dispatchEvent({ type: 'click' });
+  }
   const card = host.children[1];
   const results = () => card.children.find(c => c.className === 'nmate-results');
   await settled(() => !String(results()?.children[0]?.textContent || '').includes('正在整理'));
@@ -94,6 +98,65 @@ async function sharingCard(t, fixture, folderOnly = false) {
     const tools = card.children.find(c => c.className === 'nmate-card-tools');
     await tools.children.find(c => c.textContent === '添加文件夹').dispatchEvent({ type: 'click' });
   } };
+}
+
+function otherOutputs(t, documentOnly = false) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-independent-share-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  if (documentOnly) {
+    fs.writeFileSync(path.join(root, 'report.html'), '<!doctype html><h1>Quarterly report</h1>');
+    fs.mkdirSync(path.join(root, '.soduwork'));
+    fs.writeFileSync(path.join(root, '.soduwork', 'delivery.json'), JSON.stringify({ schemaVersion: 1,
+      deliverables: [{ path: 'report.html', kind: 'document', title: 'Quarterly report' }] }));
+  } else {
+    fs.writeFileSync(path.join(root, 'report.csv'), 'name,value\ncomplete,42\n');
+    const deep = path.join(root, 'website', ...Array.from({ length: 13 }, (_, i) => 'level-' + i));
+    fs.mkdirSync(deep, { recursive: true });
+    fs.writeFileSync(path.join(root, 'website/index.html'), '<script src="' + path.relative(path.join(root, 'website'), path.join(deep, 'required.js')).replaceAll('\\', '/') + '"></script>');
+    fs.writeFileSync(path.join(deep, 'required.js'), 'window.fixtureLoaded=true;');
+  }
+  const session = { cwd: root, outputSnapshot: () => outputs.scan(root, 0, 0) };
+  const api = { outputs: async () => ({ ok: true, artifacts: artifacts.decorate('fixture', { items: session.outputSnapshot().delivery.items }) }),
+    artifactAction: (ref, id, action) => artifacts.action(session, ref, id, action, {}) };
+  return { root, api, context: { ref: 'fixture', api } };
+}
+
+for (const fromApp of [false, true]) {
+  const entry = fromApp ? 'prefilled card' : 'teammate mention';
+  for (const selected of ['text', 'csv']) {
+    test(entry + ' still sends ' + selected + ' when an unrelated website cannot be packaged', async t => {
+      const fixture = otherOutputs(t);
+      const ui = await sharingCard(t, fixture, false, fromApp);
+      assert.equal(ui.send.disabled, false, 'An unselected failed website must not disable sending');
+      const rows = ui.results().children.filter(c => c.tag === 'label');
+      assert.ok(rows.some(row => row.children.some(c => c.textContent === 'report.csv')));
+      for (const row of rows) {
+        const checkbox = row.children[0];
+        if (checkbox.disabled) continue;
+        checkbox.checked = selected === 'csv' && row.children.some(c => c.textContent === 'report.csv');
+        await checkbox.dispatchEvent({ type: 'change' });
+      }
+      await ui.send.dispatchEvent({ type: 'click' });
+      assert.equal(ui.sent.length, 1);
+      assert.equal(ui.sent[0].files.length, selected === 'csv' ? 1 : 0);
+      if (selected === 'csv') {
+        assert.equal(ui.sent[0].files[0].name, 'report.csv');
+        assert.deepEqual(Buffer.from(ui.sent[0].files[0].data, 'base64'), fs.readFileSync(path.join(fixture.root, 'report.csv')));
+      }
+    });
+  }
+  test(entry + ' sends an explicitly declared HTML document as its original file', async t => {
+    const fixture = otherOutputs(t, true);
+    assert.equal((await fixture.api.outputs()).artifacts[0].kind, 'document');
+    const ui = await sharingCard(t, fixture, false, fromApp);
+    assert.equal(ui.send.disabled, false);
+    const row = ui.results().children.find(c => c.tag === 'label');
+    row.children[0].checked = true; await row.children[0].dispatchEvent({ type: 'change' });
+    await ui.send.dispatchEvent({ type: 'click' });
+    assert.equal(ui.sent.length, 1); assert.equal(ui.sent[0].files.length, 1);
+    assert.equal(ui.sent[0].files[0].name, 'report.html');
+    assert.deepEqual(Buffer.from(ui.sent[0].files[0].data, 'base64'), fs.readFileSync(path.join(fixture.root, 'report.html')));
+  });
 }
 
 for (const entry of ['conversation', 'folder']) {
@@ -122,7 +185,9 @@ for (const entry of ['conversation', 'folder']) {
     if (entry === 'folder') await ui.pickFolder();
     const errors = ui.messages.join('\n') + ui.results().children.map(c => c.textContent).join('\n');
     assert.match(errors, /nested more than 12 levels/);
-    assert.equal(ui.results().children.filter(c => c.tag === 'label').length, 0);
+    const rows = ui.results().children.filter(c => c.tag === 'label');
+    assert.equal(rows.length, entry === 'conversation' ? 1 : 0);
+    if (entry === 'conversation') { assert.equal(rows[0].children[0].disabled, true); assert.equal(rows[0].children[0].checked, false); }
     await ui.send.dispatchEvent({ type: 'click' });
     assert.ok(ui.sent.every(payload => payload.files.length === 0), 'No partial ZIP or standalone HTML may be sent');
   });
@@ -155,10 +220,13 @@ test('a website packaged during send still obeys the single attachment size limi
 
 test('missing or malformed website packaging cannot leave a standalone HTML selected', async () => {
   const result = { ok: true, artifacts: [{ artifactId: 'site', name: 'index.html', kind: 'website' }] };
-  await assert.rejects(mate.conversationOutputs({ ref: 'fixture', api: { outputs: async () => result } }), /打包失败/);
+  const unavailable = await mate.conversationOutputs({ ref: 'fixture', api: { outputs: async () => result } });
+  assert.equal(unavailable.length, 1); assert.match(unavailable[0].shareError, /打包失败/);
   for (const bundled of [null, { ok: false }, { ok: true }]) {
-    await assert.rejects(mate.conversationOutputs({ ref: 'fixture', api: {
-      outputs: async () => result, artifactAction: async () => bundled } }), /打包失败/);
+    const context = { ref: 'fixture', api: { outputs: async () => result, artifactAction: async () => bundled } };
+    const rows = await mate.conversationOutputs(context);
+    assert.equal(rows.length, 1); assert.match(rows[0].shareError, /打包失败/);
+    assert.equal((await mate.outputPayload(context, rows, 'failed-website')).files.length, 0);
   }
 });
 
