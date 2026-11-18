@@ -50,6 +50,10 @@ python3 quality_gate.py --list
 
 `live` 层可能连接真实 Hub、Runner、代码平台、模型或业务库，默认拒绝执行，不能用来替代离线发布门禁。详细口径见 [`../docs/release-scope.md`](../docs/release-scope.md)。
 
+人工提交验收将验收请求与通知任务放在同一事务中提交。HTTP 回执不等待设备通知发送，避免慢连接让已经成功提交的需求仍显示为可重试。现有通知工作进程会重试发送失败，并按接收人当前权限重新生成通知内容。运行 `py -m unittest test_local_requirement_delivery` 可验证回执、幂等与事务回滚。
+
+在 `client/` 目录运行 `node e2e/run-requirements-isolated.cjs /绝对路径/证据目录 /测试环境/python路径 requirements-manual-submit-race`，可通过隔离 Electron 与 HTTP 验证生产客户端超时和合成慢通知接收端的组合。测试使用独立数据库和文件，不使用真实账号，也不发送外部消息。
+
 离线检查拥有各自的子进程树，并在清理完成后返回，包括命令先于后代进程退出的情况。在 Windows 上，门禁复用仓库中的 Windows PowerShell Job 辅助程序，确认 Job 分配成功后才允许命令执行。输出采集到私有临时文件，避免后代继承输出句柄导致超时后无限等待；失败报告保留超时前产生的输出。运行 `py -m unittest test_quality_gate_cleanup` 可验证当前平台上的真实进程清理回归。
 
 受权限控制的回合在结算或开始下一轮前，必须确认执行宿主已退出。已有可靠的 Agent 退出记录时，正常收尾最多等待 30 秒，例如冻结程序清理自己的解压目录；取消和权限变更仍使用较短的停止期限。终止无法确认时继续跟踪原进程并阻止替换，不能仅凭已有回答或终止请求成功就判定完成。可运行 `python3 -m unittest test_local_process_cleanup`，使用隔离子进程验证延迟退出与终止未确认的行为。

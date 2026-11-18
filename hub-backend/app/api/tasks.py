@@ -1923,7 +1923,7 @@ async def submit_task_for_review(
     """
     from ..services import release_control
     from ..services import task_requirements
-    from ..services import task_access
+    from ..services import task_notifications
     from ..services import task_events as ev
 
     # Serialize manual submission with execution starts and approval decisions.
@@ -1968,10 +1968,12 @@ async def submit_task_for_review(
         }, actor=who)
     ev.record(session, tid, "artifact.submitted_for_review",
               {"requestId": request.id, "versionId": artifact.id, "note": note}, actor=who)
+    # Commit the notification with the review, but deliver it outside this HTTP
+    # request. Slow devices must not turn an accepted submission into a timeout.
+    task_notifications.enqueue(session, task, "task.updated")
     await session.commit()
     await session.refresh(task)
     api = await svc.task_to_api_live(session, task)
-    await task_access.publish_task(session, task, "task.updated", api)
     return {"ok": True, "request": release_control.request_api(request), "task": api}
 
 
