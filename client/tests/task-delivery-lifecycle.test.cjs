@@ -178,3 +178,43 @@ test('stylesheet URL tokenization ignores nested data content, comments and stri
   assert.deepEqual(refs(`/* url(fake.png) */ .a{content:"url(fake2.png)";background:url("data:image/svg+xml,<svg filter='url(%23n)'/>")} @import "theme.css"; .b{src:url(font.woff2);background:url('hero image.png')}`),
     ['data:image/svg+xml,<svg filter=\'url(%23n)\'/>', 'theme.css', 'font.woff2', 'hero image.png']);
 });
+
+test('website delivery follows quoted CSS imports separated by comments', async t => {
+  const f = workspace(t);
+  f.write('site/index.html', '<link rel="stylesheet" href="main.css">');
+  f.write('site/main.css', '@import/* generated theme */ "theme.css";');
+  f.write('site/theme.css', 'body{background:url(bg.png)}');
+  f.write('site/bg.png', Buffer.from([137,80,78,71]));
+  const payload = await delivery.capture(f.handle, 'completed');
+  assert.deepEqual(payload.files.map(row => row.name).sort(),
+    ['site/bg.png', 'site/index.html', 'site/main.css', 'site/theme.css']);
+  const refs = require('../main/conversation/stylesheet-references').references;
+  assert.deepEqual(refs('@import /* one */ /* two */ "a.css"; /* @import "fake.css"; */'), ['a.css']);
+  assert.deepEqual(refs('@import /* unclosed'), []);
+});
+
+test('stylesheet URL tokenization preserves literal comment-like paths', () => {
+  const refs = require('../main/conversation/stylesheet-references').references;
+  for (const [css, expected] of [
+    ['url(/*comment*/image.png)', '/*comment*/image.png'],
+    ['url( \t/*comment*/image.png )', '/*comment*/image.png'],
+    ['url(/*one*//*two*/image.png)', '/*one*//*two*/image.png'],
+    ['url(/*unfinished-image.png)', '/*unfinished-image.png'],
+    ['url(images/*comment*/image.png)', 'images/*comment*/image.png'],
+    ['url("/*comment*/image.png")', '/*comment*/image.png'],
+    ['@import/* import comment */url(/*literal*/theme.css)', '/*literal*/theme.css'],
+  ]) assert.deepEqual(refs(css), [expected], css);
+  assert.deepEqual(refs('@import/* comment */url( theme.css );'), ['theme.css']);
+});
+
+for (const [label, css, dependency] of [
+  ['image', 'body{background-image:url(/*comment*/image.png)}', 'image.png'],
+  ['import', '@import/* import comment */url(/*literal*/theme.css);', 'theme.css'],
+]) test('website delivery rejects a literal comment-like ' + label + ' URL instead of stripping it', async t => {
+  const f = workspace(t);
+  f.write('site/index.html', '<link rel="stylesheet" href="main.css">');
+  f.write('site/main.css', css);
+  f.write('site/' + dependency, dependency.endsWith('.css') ? 'body{color:purple}' : Buffer.from([137,80,78,71]));
+  await assert.rejects(delivery.capture(f.handle, 'completed'), /不适合交付的路径/);
+  assert.equal(fs.readFileSync(path.join(f.cwd, 'site/main.css'), 'utf8'), css);
+});
