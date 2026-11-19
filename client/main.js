@@ -595,6 +595,12 @@ function _quitSoduWork(reason) {
   if (tray) { tray.destroy(); tray = null; }
   _lifecycleDiagnostics.setExitReason(reason);
   app.quit();
+  if (reason === 'tray') {
+    // Background cleanup can defer quit. Let windows run their normal close handlers now.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.close();
+    }
+  }
 }
 
 function createTray() {
