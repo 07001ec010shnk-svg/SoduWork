@@ -173,6 +173,7 @@ async function prepare(session, ids, options = {}) {
     }
   }
   const rows = [...entries.values()].sort((a, b) => a.name < b.name ? -1 : 1);
+  const zipEntries = rows.length > 1 && !options.metadataOnly ? zip.captureFileEntries(rows) : null;
   for (const row of rows) {
     const now = await fs.stat(row.filename);
     if (now.mtimeMs !== row.st.mtimeMs || now.size !== row.bytes.length || now.ino !== row.st.ino) throw Error('成果正在更新，请稍后重试');
@@ -209,7 +210,7 @@ async function prepare(session, ids, options = {}) {
     options.onCaptured({ manifest, filename, contentType, changedInTurn, byteLength: total,
       fileVersions: [...rows.map(row => version(row.name, row.st)), version('.soduwork/delivery.json', manifestStat)] });
   }
-  const bytes = rows.length === 1 ? rows[0].bytes : await zip.createEntries(rows);
+  const bytes = zipEntries ? await zip.createEntries(zipEntries) : rows[0].bytes;
   return { manifest, bytes, changedInTurn, filename, contentType,
     ...(options.includeEntries ? { entries: rows.map(row => ({ name: row.name, bytes: row.bytes, contentType: row.contentType, role: row.role })) } : {}) };
 }
