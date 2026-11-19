@@ -78,7 +78,7 @@ async def migrate_at_startup():
         from alembic import command
         from alembic.config import Config
         from pathlib import Path
-        root = Path(__file__).resolve().parents[2]
+        root = Path(__file__).resolve().parents[1]
         config = Config(str(root / 'jiyong-alembic.ini'))
         await __import__('asyncio').to_thread(command.upgrade, config, 'head')
     return {'ok': True, 'state': 'ready'}
