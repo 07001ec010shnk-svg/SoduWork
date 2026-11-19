@@ -4,6 +4,7 @@ A failed receipt revokes same-turn automatic pending reviews, and collection det
 structurally truncated code without rejecting dialect or version differences.
 """
 
+import asyncio
 import json
 import unittest
 from unittest import mock
@@ -141,6 +142,35 @@ class IncompleteTurnDeliveryTests(_Base):
                  mock.patch.object(storage, "delete", side_effect=delete), \
                  mock.patch.object(session, "commit", side_effect=RuntimeError("db unavailable")):
                 with self.assertRaises(RuntimeError):
+                    await conversation_turns.deliver_artifacts(
+                        session, task, conversation_id="conv-9", turn_id="turn-9",
+                        provider="conversation", outcome="incomplete",
+                        files=[("one.md", b"# one", "text/markdown")])
+            self.assertEqual(deleted, [(written[0], "local")])
+        finally:
+            await self._dispose(engine, session)
+
+    async def test_commit_cancellation_compensates_before_propagating(self):
+        engine, session, task = await self._prepared()
+        written = []
+        deleted = []
+
+        def put(key, _data, _content_type):
+            written.append(key)
+            return "local"
+
+        def delete(key, backend):
+            deleted.append((key, backend))
+            return True
+
+        async def cancelled_commit():
+            raise asyncio.CancelledError()
+
+        try:
+            with mock.patch.object(storage, "put", side_effect=put), \
+                 mock.patch.object(storage, "delete", side_effect=delete), \
+                 mock.patch.object(session, "commit", side_effect=cancelled_commit):
+                with self.assertRaises(asyncio.CancelledError):
                     await conversation_turns.deliver_artifacts(
                         session, task, conversation_id="conv-9", turn_id="turn-9",
                         provider="conversation", outcome="incomplete",

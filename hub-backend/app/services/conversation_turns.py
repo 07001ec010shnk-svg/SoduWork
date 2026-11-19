@@ -5,9 +5,12 @@ and the native conversation queue owns the order of sends.
 """
 import asyncio
 import hashlib
+import logging
 from fastapi import HTTPException
 from . import task_status, task_events
 from .task_access import publish_owner
+
+log = logging.getLogger("uvicorn.error")
 
 ACTIVE = {"queued", "running", "waiting"}
 SUBMISSION_MODES = {"manual", "auto"}
@@ -215,6 +218,36 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
     invalid: list[dict] = []
     stored_objects: list[tuple[str, str]] = []
 
+    async def delete_stored_object(stored_key: str, stored_backend: str, *, phase: str):
+        try:
+            deleted = await asyncio.to_thread(storage.delete, stored_key, stored_backend)
+        except Exception as error:
+            log.warning("artifact compensation delete failed task=%s phase=%s key=%s backend=%s error=%s",
+                        task.id, phase, stored_key, stored_backend, type(error).__name__)
+            return
+        if deleted is False:
+            log.warning("artifact compensation delete reported failure task=%s phase=%s key=%s backend=%s",
+                        task.id, phase, stored_key, stored_backend)
+
+    async def compensate_delivery():
+        try:
+            await session.rollback()
+        except Exception as error:
+            log.warning("artifact compensation rollback failed task=%s error=%s",
+                        task.id, type(error).__name__)
+        persisted = None
+        if stored_objects:
+            try:
+                persisted = set((await session.scalars(select(Attachment.storage_key).where(
+                    Attachment.storage_key.in_([key for key, _backend in stored_objects])))).all())
+            except Exception as error:
+                log.warning("artifact compensation attachment lookup failed task=%s error=%s",
+                            task.id, type(error).__name__)
+        if persisted is not None:
+            for stored_key, stored_backend in stored_objects:
+                if stored_key not in persisted:
+                    await delete_stored_object(stored_key, stored_backend, phase="commit")
+
     async def commit_delivery():
         """Commit metadata and compensate objects when the commit is rejected.
 
@@ -223,27 +256,14 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
         """
         try:
             await session.commit()
-        except Exception:
+        except (Exception, asyncio.CancelledError):
+            # A cancellation during commit is another lost-ACK form. Complete
+            # compensation before propagating it so objects cannot be orphaned.
+            cleanup = asyncio.create_task(compensate_delivery())
             try:
-                await session.rollback()
-            except Exception:
-                pass
-            persisted = None
-            if stored_objects:
-                try:
-                    persisted = set((await session.scalars(select(Attachment.storage_key).where(
-                        Attachment.storage_key.in_([key for key, _backend in stored_objects])))).all())
-                except Exception:
-                    # A failed lookup cannot prove that an object is unused;
-                    # retain it rather than risking deletion after a lost ACK.
-                    pass
-            if persisted is not None:
-                for stored_key, stored_backend in stored_objects:
-                    if stored_key not in persisted:
-                        try:
-                            await asyncio.to_thread(storage.delete, stored_key, stored_backend)
-                        except Exception:
-                            pass
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                await cleanup
             raise
 
     for name, data, ctype in files:
@@ -293,13 +313,11 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
             async def cleanup_partial_delivery():
                 try:
                     await session.rollback()
-                except Exception:
-                    pass
+                except Exception as error:
+                    log.warning("artifact compensation rollback failed task=%s phase=storage error=%s",
+                                task.id, type(error).__name__)
                 for stored_key, stored_backend in stored_objects:
-                    try:
-                        await asyncio.to_thread(storage.delete, stored_key, stored_backend)
-                    except Exception:
-                        pass
+                    await delete_stored_object(stored_key, stored_backend, phase="storage")
 
             cleanup = asyncio.create_task(cleanup_partial_delivery())
             try:
