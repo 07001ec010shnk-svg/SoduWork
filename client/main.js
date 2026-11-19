@@ -128,7 +128,6 @@ const _applicationMenu = require('./main/app-menu-info.cjs').install({ app, ipcM
 const _workspaceTitlebar = require('./main/workspace-titlebar.cjs').create({ app, ipcMain, BrowserWindow, Menu,
   getRendererRoot: rendererRoot, fallbackCommand: _applicationMenu.nativeCommand,
   getWorkspace: () => { openDeskWindow({ panel: 'workspace' }, null); return _workWindows.get('workspace'); } });
-_runnerRuntime.install({ app, ipcMain, identityOf: _deviceAuth.identity });
 require('./main/agent-runtime/custom-runtimes.cjs').install({ app, ipcMain, session: _piSessions,
   runner: _runnerRuntime, BrowserWindow, dialog, changed: _catalogChanges.changed });
 async function _sessionIdentity(appRef, hub = '', clientId = '') {
@@ -650,6 +649,7 @@ if (!gotTheLock) {
 
   function startDesktop(credentials) {
     _deviceAuth.install({ app, ipcMain, safeStorage, credentials });
+    _runnerRuntime.install({ app, ipcMain, identityOf: _deviceAuth.identity, sessionOf: _deviceAuth.session });
     /*
      * Adopt the Runner-managed office engine so client probes and child processes use the same
      * installation. Missing engines must not block startup.
