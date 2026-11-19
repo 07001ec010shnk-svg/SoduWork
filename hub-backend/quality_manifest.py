@@ -12,6 +12,7 @@ from public_source import INTERNAL_SMOKES, is_public_snapshot
 RELEASE_SMOKES = tuple(sorted((
     "test_template_catalog_revision.py",
     "test_local_process_cleanup.py",
+    "test_library_integrity.py",
     "test_skill_policy_defaults.py",
     "test_bundled_development_skills.py",
     "test_desktop_capabilities.py",
