@@ -286,6 +286,18 @@ Later administrator opt-outs persist across restarts, and new bundled skills
 default to available. Personal choices and imported-package approval remain
 independent. See the [skill loading guide](../skills/README.md).
 
+## OpenCode data isolation and existing conversations
+
+Managed OpenCode keeps its database, data, state and cache under the Runner data root's `agents/opencode/` directory. Inherited `OPENCODE_DB` and XDG paths cannot redirect managed execution into a personal OpenCode installation. The parent Runner and standalone ACP bridge select the same private database; the user's home directory and injected model configuration remain unchanged.
+
+Before starting either a new or resumed session, managed execution rejects child paths that escape this private directory and hard links on the database or its SQLite sidecars. An explicitly redirected Runner root and links that stay within its OpenCode directory remain supported. Fix the directory layout before retrying; rejected layouts never launch OpenCode or substitute a new session.
+
+When an archived SoduWork conversation resumes, its recorded native session ID and workspace identify the history to recover. Compatible v1 session, message, part and todo records are imported from a stable, read-only file snapshot into the private database, together with related child sessions. Personal accounts, credentials and project permissions are not imported, and the original database and sidecars are not modified. A missing session, unsupported v2 history in the selected session or its children, active revert or remote workspace binding stops recovery with an explanation; it never silently starts a blank replacement session or downgrades the personal database. This also detects v2 history when the database still contains v1 tables, without blocking unrelated v1 sessions. If the personal database is changing during the snapshot, close personal OpenCode and retry. Existing conversation archives and native IDs remain available.
+
+If an empty private session already exists, recoverable evidence of original history blocks continuing that empty session without replacing it. Legitimate private sessions remain resumable when personal storage is missing or unavailable. Canceling during compaction settles the stopped turn even if history recovery also fails, and a retired recovery cannot overwrite a newer turn.
+
+Run `SODUWORK_TEST_OPENCODE_BIN=/absolute/path/to/opencode python3 -m unittest test_opencode_native_config` with the pinned managed binary and prepared SDK dependencies for native/ACP isolation and resume checks against a loopback model. These checks use synthetic databases and do not access personal history or a production model.
+
 ## OpenCode turn completion
 
 Native and ACP OpenCode executions preserve the current turn's provider finish reason. An output-token limit is reported as incomplete even when partial text exists and the native process exits successfully; existing progress and the session remain available for manual continuation. The ACP adapter observes only native session/turn identifiers and stop reasons through an invocation-local plugin, and rejects missing completion evidence without retrying tools or changing permissions. Run `python3 e2e_opencode_turn_outcome.py --binary /path/to/opencode` for isolated loopback-provider acceptance using an explicitly selected installed binary.

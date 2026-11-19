@@ -137,7 +137,7 @@ async def lifespan(app: FastAPI):
     from .services import code_delivery
     from .services import schedule_loop
     from .services import deployments
-    from .services import workflow_engine
+    from .services import plugin_evaluations, workflow_engine
     # Supervise automatic milestone progression using each task's ms_auto flag.
     from .services import ms_auto
     from .services import org_memory
@@ -162,6 +162,7 @@ async def lifespan(app: FastAPI):
         ("automation_scheduler", schedule_loop.tick_loop),
         ("deployment_sweep", deployments.sweep_loop),
         ("plugin_workflow", workflow_engine.tick_loop),
+        ("plugin_evaluations", plugin_evaluations.tick_loop),
         ("ms_auto", ms_auto.tick_loop),
     ]
     if settings.im_enabled:

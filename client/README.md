@@ -6,6 +6,10 @@ Command examples use `sh start.sh` on macOS/Linux. On Windows, use `.\start.cmd`
 
 The desktop uses Electron and native HTML/CSS/JavaScript. The React management UI is a separate application.
 
+Local library imports retain file extensions and reserve room for duplicate-name counters. For files saved by older versions, a **Check file name** hint identifies duplicate, invalid, or potentially truncated names; the hint does not mean the file contents are damaged. In the item's menu, choose **Repair file name** and confirm the full name, including the correct extension. This replaces an incorrect suffix as well as a missing one, while preserving the item's ID, contents, source, and folder. Ordinary **Rename** continues to preserve the existing extension. The repair action is available for all local files, including entries whose names were already changed manually, and is not available for remote storage.
+
+The original extension cannot always be recovered from old metadata, so the client never guesses it or rewrites names automatically. Consult the original file or source before confirming. If the correct name is unknown, export a copy for inspection. Duplicate entries retain independent contents and can be repaired to distinct names. Repairing a name does not convert the file format or allow executables to bypass the system-open restrictions.
+
 ## Source map
 
 | Location | Responsibility |
