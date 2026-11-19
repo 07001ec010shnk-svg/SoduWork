@@ -58,10 +58,10 @@ async def check():
         raise
     except Exception as exc:
         raise CloudError('云端即用数据库不可用，请检查连接和独立数据库迁移') from exc
-    from pathlib import Path
-    directory = get_settings().jiyong_asset_dir
-    if not directory or not Path(directory).is_absolute():
-        raise CloudError('请配置云端即用素材的绝对持久目录，多节点须使用共享存储')
+    settings = get_settings()
+    if not (settings.jiyong_object_endpoint and settings.jiyong_object_access_key
+            and settings.jiyong_object_secret_key and settings.jiyong_object_bucket):
+        raise CloudError('请配置云端即用对象存储（COS/S3）')
     return {'ok': True, 'location': 'cloud', 'engine': 'postgresql', 'schemaVersion': 1}
 
 
