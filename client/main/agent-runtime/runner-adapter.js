@@ -722,6 +722,33 @@ async function createRunnerHandle(request, defaults, initialSession) {
   }
 
   const messageStream = require('./runner-messages').create(state, redact);
+  let pendingUserEcho = null;
+  let lastConfirmedAdmissionKey = '';
+
+  function bindUserEcho(key, options) {
+    const row = turnQueue.active()?.runnerUserMessage;
+    pendingUserEcho = row && options.recordUser !== false ? { key, previousKey: lastConfirmedAdmissionKey, row } : null;
+  }
+
+  function acknowledgeUserEcho(item, text) {
+    if (!pendingUserEcho) return false;
+    const { key, previousKey, row } = pendingUserEcho;
+    const sentAt = messageTime.epoch(item.sentAt);
+    const id = String(item.submissionId || '').slice(0, 128);
+    if (id && row.submissionId && id !== row.submissionId) return false;
+    if (sentAt && sentAt !== row.sentAt) return false;
+    if (item.admissionKey !== key && !(id && id === row.submissionId)) {
+      // Older Runners omit the key or stamp a comment before advancing the
+      // admission. Require the original timestamp for a previous-key echo.
+      if (item.admissionKey && (item.admissionKey !== previousKey || !sentAt)) return false;
+      if (_text(row.text, 50000) !== text) return false;
+    }
+    pendingUserEcho = null;
+    lastConfirmedAdmissionKey = key;
+    row.runnerPersisted = true;
+    if (id && !row.submissionId) row.submissionId = id;
+    return true;
+  }
 
   function appendItem(item) {
     const kind = String(item.kind || '');
@@ -780,14 +807,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
       messageStream.finish();
       state.startedAt = Math.max(state.startedAt || 0, eventAt);
       state.turnEndedAt = 0;
-      const existing = state.messages.find((row) => row.role === 'user' &&
-        row.text === rawText && !row.runnerPersisted);
-      if (existing) {
-        existing.runnerPersisted = true;
-        existing.sentAt = existing.sentAt || messageTime.epoch(item.sentAt) || messageTime.epoch(item.at);
-        if (!existing.submissionId && item.submissionId) existing.submissionId = String(item.submissionId).slice(0, 128);
-        return;
-      }
+      if (acknowledgeUserEcho(item, rawText)) return;
       const plugins = publicPluginBadges(item.plugins);
       // New user events record the effective selection, including an explicit
       // empty selection. Replaying only nonempty badges would undo a clear.
@@ -1041,6 +1061,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
         }
         return;
       }
+      if (data.admissionKey) lastConfirmedAdmissionKey = data.admissionKey;
       const recovered = state.recoveryRequired;
       state.reconnectSince = 0;
       state.reconnectAttempts = 0;
@@ -1272,16 +1293,20 @@ async function createRunnerHandle(request, defaults, initialSession) {
   function appendUser(text, attachments, plugins, sentAt, submissionId) {
     const badges = publicPluginBadges(plugins);
     if (badges.length) state.activePluginIds = _pluginIds(badges);
-    const previous = turnQueue.active()?.options[resumedUser];
+    const active = turnQueue.active();
+    const previous = active?.options[resumedUser];
     if (previous && state.messages.includes(previous)) {
+      active.runnerUserMessage = previous;
       previous.plugins = badges;
       return;
     }
     const id = String(submissionId || '').trim().slice(0, 128);
-    state.messages.push({ role: 'user', text, sentAt: messageTime.epoch(sentAt) || Date.now(),
+    const row = { role: 'user', text: redact(text), sentAt: messageTime.epoch(sentAt) || Date.now(),
       ...(id ? { submissionId: id } : {}),
       attachments: Array.isArray(attachments) ? attachments : [], plugins: badges,
-      runnerPersisted: false });
+      runnerPersisted: false };
+    state.messages.push(row);
+    if (active) active.runnerUserMessage = row;
   }
 
   function dispatch(text, attachments, turnOptions) {
@@ -1299,6 +1324,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     state.goalLimit = null;
     state.started = true;
     state.unconfirmedAdmissionKey = 'dispatch:' + state.runnerRef;
+    bindUserEcho(state.unconfirmedAdmissionKey, next);
     state.status = 'streaming';
     state.statusText = state.intent === 'goal'
       ? displayName + ' 正在理解并开始工作…' : displayName + ' 正在理解你的问题…';
@@ -1441,6 +1467,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
     state.turnSerial += 1;
     const turnId = 'turn:' + state.alias + ':' + state.turnSerial + ':' + Date.now().toString(36);
     state.unconfirmedAdmissionKey = 'comment:' + turnId;
+    bindUserEcho(state.unconfirmedAdmissionKey, next);
     const taskContext = taskJournal.context();
     const dispatchedEffort = state.agentExecution?.reasoningEffort || '';
     runtime.rpc('job.comment', {
