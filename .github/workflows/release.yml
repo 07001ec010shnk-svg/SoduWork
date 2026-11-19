@@ -44,19 +44,27 @@ jobs:
           # Diagnostic prompt comparison only; the checked-out generator is unchanged.
           notes.PROMPT += """
           Write for desktop end users, not developers reading a changelog.
+          Explicit removals of existing user-facing features or execution options, breaking changes,
+          and fixes for data loss or blocked access take priority over routine improvements.
           Prioritize daily chat and task execution, automation, and delivering or sharing results;
           then account access and startup recovery. Do not fill slots with lower-impact maintenance.
           Prefer the most important supported user workflows over the easiest titles to paraphrase.
+          Group related fixes within the same chat/runtime workflow into one concise bullet so one
+          runtime does not consume multiple slots while important changes elsewhere are omitted.
           Each bullet describes ONE user workflow. Merge commits only when their actions and objects
           really match; preserve which action applies to which object. Do not distribute one verb
           across unrelated nouns, or turn a safety check into a new recovery capability.
           A fix is not an unconditional action triggered by upgrading. Preserve explicit conditions;
           if a title lacks necessary context, omit that ambiguous detail or choose a clearer change.
-          Do not imply data deletion, security guarantees, or behavior broader than the title states.
+          Do not imply data deletion, security guarantees, or other behavior unless the title clearly
+          supports that claim. Omit vague clauses that cannot be explained from the title alone.
           Avoid implementation jargon, internal protocol names, path conventions and source-launcher
           details. Prefer plain short sentences in every language, with only the essential facts.
           Before returning, recheck each bullet's action, object, scope and conditions against its
           cited titles; remove uncertain claims rather than making the sentence sound more complete.
+          Translate the same action-object pairs into all four languages. When two clauses use
+          different verbs or conditions, keep their scopes separate in every translation: a verb or
+          modifier belonging to one clause must not silently apply to the other clause's object.
           """
 
           model = os.environ['RELEASE_NOTES_MODEL']
@@ -158,7 +166,7 @@ jobs:
           evidence_dir.mkdir(exist_ok=True)
           for version in versions:
               assert version in ['1.13.17', '1.13.18', '1.13.19']
-              active = {'version': version, 'model': model, 'promptVariant': 'user-focused-v2'}
+              active = {'version': version, 'model': model, 'promptVariant': 'user-focused-v3'}
               metrics[version] = active
               with tempfile.TemporaryDirectory(prefix='notes-source-') as temporary:
                   source = Path(temporary) / 'source'
