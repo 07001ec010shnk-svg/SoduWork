@@ -243,4 +243,12 @@ test('menu and tray reuse the existing normal quit path including tray cleanup a
   vm.runInNewContext(source + '\n_quitSoduWork("app-menu");', ctx);
   assert.deepEqual(calls, ['tray-destroy', 'app-menu', 'quit']);
   assert.equal(ctx.tray, null);
+
+  calls.length = 0;
+  const windows = ['workspace', 'overlay'].map(name => ({
+    isDestroyed: () => false, close: () => calls.push('close-' + name),
+  }));
+  ctx.BrowserWindow = { getAllWindows: () => [...windows, { isDestroyed: () => true }] };
+  vm.runInNewContext('_quitSoduWork("tray");', ctx);
+  assert.deepEqual(calls, ['tray', 'quit', 'close-workspace', 'close-overlay']);
 });
