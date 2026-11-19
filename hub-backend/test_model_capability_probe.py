@@ -298,6 +298,28 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
                     if value.strip() != "123456":
                         self.assertEqual(actual.get("detailCode"), "expected_output_mismatch")
 
+    async def test_reasoning_model_truncated_probe_retries_with_larger_budget(self):
+        # A reasoning model can spend the small fixed probe budget on its thinking
+        # trail and get cut off before the short deterministic answer. The image
+        # challenge must still be verifiable with one bounded higher-budget retry.
+        with patch.object(probe, "image_challenge", return_value=("582941", "data:image/png;base64,fixture")):
+            calls = []
+            def handler(body):
+                calls.append(body)
+                if len(calls) == 1:
+                    # First probe exhausts the small budget on reasoning; no final answer.
+                    return Response({"choices": [{"finish_reason": "length", "message": {
+                        "content": "", "reasoning_content": "thinking " * 200}}]})
+                # Retry with a larger budget returns the expected six digits.
+                return message("582941")
+            result = await self.run_probe(["imageInput"], handler)
+        actual = result["checks"]["imageInput"]
+        self.assertEqual(actual["status"], "passed", result)
+        self.assertGreaterEqual(len(self.requests), 2)
+        first = self.requests[0].get("max_tokens", self.requests[0].get("max_completion_tokens"))
+        second = self.requests[1].get("max_tokens", self.requests[1].get("max_completion_tokens"))
+        self.assertGreater(second, first)
+
     async def test_nonstream_malformed_bodies_cannot_verify_connection(self):
         malformed = [{"choices": [{"message": {"content": "OK"}}, {"message": {"content": "ignored"}}]},
                      {"choices": [{"index": False, "message": {"content": "OK"}}]},

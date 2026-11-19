@@ -188,7 +188,9 @@ class _Budget:
         return True
 
 
-async def _exchange(conf, body, budget, working, *, stream=False, tools=False):
+async def _exchange(conf, body, budget, working, *, stream=False, tools=False,
+                    retry_reasoning_budget=False):
+    reasoning_retried = False
     while True:
         response = None
         try:
@@ -207,6 +209,15 @@ async def _exchange(conf, body, budget, working, *, stream=False, tools=False):
                             raise ProbeIssue("response_limit")
                         raw.extend(chunk)
                     data = parse_json(raw)
+                    # A reasoning model may spend the small fixed probe budget on
+                    # its thinking trail and hit `length` before the short answer.
+                    # That is a probe-budget problem, not a missing capability:
+                    # retry once with a larger budget before judging the result.
+                    if (retry_reasoning_budget and not reasoning_retried
+                            and isinstance(data, dict) and _reasoning_truncated(data)
+                            and _raise_probe_budget(conf, body)):
+                        reasoning_retried = True
+                        continue
                     response_choice(data)
                 # A transport may translate cancellation/socket closure into
                 # EOF. Terminal text does not make an expired request succeed.
@@ -229,9 +240,39 @@ async def _exchange(conf, body, budget, working, *, stream=False, tools=False):
                 await response.aclose()
 
 
+def _reasoning_truncated(data: dict) -> bool:
+    """Whether a non-stream probe answer ran out of budget on its thinking trail.
+
+    Reasoning models emit a long ``reasoning_content`` before the short answer the
+    probe asks for. With the small fixed probe budget they can hit ``length`` before
+    producing that answer, which must not be read as a lack of capability.
+    """
+    choice = (data.get("choices") or [{}])[0]
+    if choice.get("finish_reason") != "length":
+        return False
+    message = choice.get("message") or {}
+    return any(meaningful(message.get(key)) for key in ("reasoning_content", "reasoning", "thinking"))
+
+
+def _raise_probe_budget(conf: dict, body: dict) -> bool:
+    """Give a truncated reasoning probe a larger output budget, bounded by context."""
+    field = next((key for key in ("max_tokens", "max_completion_tokens") if key in body), None)
+    if not field:
+        return False
+    current = body[field] if isinstance(body[field], int) else 0
+    settings = _settings(conf)
+    ceiling = max(1, int(settings.get("contextWindow") or 128000))
+    larger = min(ceiling, max(current * 4, 4096))
+    if larger <= current:
+        return False
+    body[field] = larger
+    return True
+
+
 async def _check(conf, check, budget, working, phase):
     body, expected = _payload({**conf, "compatibility": {**working, **budget.candidate}}, check)
-    data = await _exchange(conf, body, budget, working, stream=body["stream"], tools=check == "toolCalling")
+    data = await _exchange(conf, body, budget, working, stream=body["stream"], tools=check == "toolCalling",
+                           retry_reasoning_budget=check in ("connection", "imageInput"))
     if (check == "toolCalling" and isinstance(body.get("tool_choice"), dict)
             and data["choices"][0].get("finish_reason") == "stop"
             and meaningful(data["choices"][0]["message"].get("content"))
