@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { EventEmitter } = require('node:events');
+const { PassThrough } = require('node:stream');
 const { createRequire } = require('node:module');
 
 async function fixture(t, options = {}) {
@@ -60,7 +61,7 @@ async function fixture(t, options = {}) {
       if (name === 'child_process') return { spawn(bin, args, options) {
         const child = new EventEmitter(); child.pid = 100 + children.length;
         child.command = { bin, args, options };
-        child.stdout = new EventEmitter(); child.stdin = new EventEmitter();
+        child.stdout = new PassThrough(); child.stdin = new EventEmitter();
         child.writes = []; child.stdin.writable = true;
         child.stdin.write = value => { child.writes.push(value); return true; }; child.stdin.end = () => {};
         children.push(child); return child;
@@ -200,6 +201,44 @@ test('mobile capability replies use the initiating private Runner pipe', async t
   assert.equal(packet.message.op, 'desktop.capability.reply');
   assert.equal(packet.message.requestId, 'request');
   assert.equal(packet.message.result.data.operation, 'catalog');
+});
+
+test('Runner RPC preserves multiline user events across UTF-8 pipe boundaries and process replacement', async t => {
+  const f = await fixture(t), previous = f.children.at(-1);
+  const prefix = '@@SODUWORK_LOCAL_RPC@@';
+  const text = 'first line\nsecond line 中文 🎨';
+  function response(child, value) {
+    const { id } = JSON.parse(child.writes.at(-1).slice(prefix.length));
+    return Buffer.from(prefix + JSON.stringify({ id, ok: true, result: { items: [{ kind: 'user', text: value }] } }) + '\r\n');
+  }
+
+  const first = f.rpc('job.session');
+  const firstFrame = response(previous, text);
+  const second = f.rpc('job.session');
+  const secondFrame = response(previous, '另一条消息');
+  const chinese = firstFrame.indexOf('中') + 1;
+  const emoji = firstFrame.indexOf('🎨') + 2;
+  previous.stdout.write(firstFrame.subarray(0, chinese));
+  previous.stdout.write(firstFrame.subarray(chinese, emoji));
+  previous.stdout.write(Buffer.concat([firstFrame.subarray(emoji), secondFrame]));
+  assert.equal((await first).items[0].text, text);
+  assert.equal((await second).items[0].text, '另一条消息');
+
+  const abandoned = f.rpc('job.session');
+  const partial = response(previous, text);
+  const split = partial.indexOf('中') + 1;
+  previous.stdout.write(partial.subarray(0, split));
+  const stopped = assert.rejects(abandoned, /Runner stopped/);
+  f.setSecret('fixture-replacement-secret');
+  await f.configure();
+  await stopped;
+  previous.stdout.write(partial.subarray(split));
+
+  const replacement = f.children.at(-1);
+  assert.notEqual(replacement, previous);
+  const fresh = f.rpc('job.session');
+  replacement.stdout.write(response(replacement, text));
+  assert.equal((await fresh).items[0].text, text);
 });
 
 test('mobile capability result never goes to a replaced Runner process', async t => {
