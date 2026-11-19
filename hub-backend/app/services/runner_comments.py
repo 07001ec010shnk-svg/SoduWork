@@ -1,8 +1,11 @@
 """Runner follow-up admission, attachments and explicit executor selection."""
+import logging
 import os
 import uuid
 
 from . import ai_local, runner_admission, runner_local_rpc
+
+log = logging.getLogger("uvicorn.error")
 
 
 def _transfers(message):
@@ -34,8 +37,9 @@ async def _drop_transfers(message, drop_transfer, *, keep=()):
     for transfer in sorted(_transfers(message) - preserved):
         try:
             await drop_transfer(transfer)
-        except Exception:  # noqa: BLE001 - cleanup must not mask the admission result
-            pass
+        except Exception as error:  # noqa: BLE001 - cleanup must not mask the admission result
+            log.warning("runner input transfer cleanup failed transfer=%s error=%s",
+                        transfer, type(error).__name__)
 
 
 def _duplicate(machine, ref, turn_id, message):

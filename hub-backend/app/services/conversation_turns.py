@@ -279,6 +279,22 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
                 await cleanup
             raise
 
+    async def cleanup_partial_delivery():
+        try:
+            await session.rollback()
+        except Exception as error:
+            log.warning("artifact compensation rollback failed task=%s phase=storage error=%s",
+                        task.id, type(error).__name__)
+        for stored_key, stored_backend in stored_objects:
+            await delete_stored_object(stored_key, stored_backend, phase="storage")
+
+    async def finish_storage_failure():
+        cleanup = asyncio.create_task(cleanup_partial_delivery())
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            await cleanup
+
     for name, data, ctype in files:
         fn = delivery_manifest.normalize_name(str(name or "").replace("\\", "/"))
         if not fn or fn in received:
@@ -317,29 +333,28 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
             ignored.add(fn)
             valid.add(fn)
         key = f"ai/{task.id}/{_uuid.uuid4().hex[:8]}-{fn}"
+        put_task = asyncio.create_task(asyncio.to_thread(storage.put, key, data, ctype))
         try:
-            backend = await asyncio.to_thread(storage.put, key, data, ctype)
+            # Keep the worker alive until a cancelled thread finishes so a
+            # successful write is always added to the compensation list.
+            backend = await asyncio.shield(put_task)
+        except asyncio.CancelledError:
+            try:
+                backend = await put_task
+            except asyncio.CancelledError:
+                await finish_storage_failure()
+                raise
+            except Exception:
+                await finish_storage_failure()
+                raise
+            stored_objects.append((key, backend))
+            await finish_storage_failure()
+            raise
         except Exception:
-            # Storage writes are outside the database transaction.  Remove
+            # Storage writes are outside the database transaction. Remove
             # objects already created by this collection before propagating a
             # later write failure, otherwise partial delivery leaves orphans.
-            async def cleanup_partial_delivery():
-                try:
-                    await session.rollback()
-                except Exception as error:
-                    log.warning("artifact compensation rollback failed task=%s phase=storage error=%s",
-                                task.id, type(error).__name__)
-                for stored_key, stored_backend in stored_objects:
-                    await delete_stored_object(stored_key, stored_backend, phase="storage")
-
-            cleanup = asyncio.create_task(cleanup_partial_delivery())
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                # A cancellation must not interrupt compensation halfway
-                # through the object list.  Preserve cancellation afterward.
-                await cleanup
-                raise
+            await finish_storage_failure()
             raise
         stored_objects.append((key, backend))
         session.add(Attachment(
