@@ -293,6 +293,9 @@ test('switching Runner preserves an indexed image without expanding the new deli
   const handle = (await f.bridge.open({ ...options(f), adapterId: 'dsh' })).session;
   const image = path.join(f.root, 'goldfish.png');
   fs.writeFileSync(image, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a5F0AAAAASUVORK5CYII=', 'base64'));
+  // Windows filesystem timestamps can lag behind the session's wall clock.
+  const writtenAt = new Date();
+  fs.utimesSync(image, writtenAt, writtenAt);
   const before = await runtime.snapshotAsync(handle);
   const item = before.items.find(row => row.name === 'goldfish.png');
   assert.ok(item);
