@@ -250,7 +250,7 @@ def _event_api(row: am.ExecutionEvent) -> dict:
     detail = dict(row.detail or {})
     out = {"seq": int(row.seq or 0), "kind": row.kind or "out",
            "tool": row.tool or "", "text": row.text or "",
-           "at": row.at.isoformat() if row.at else ""}
+           "at": iso_utc(row.at) if row.at else ""}
     for key in ("seg", "round", "admissionKey", "admissionStartSeq", "turnState", "textTruncated", "full", "sourceId", "callId", "isError",
                 "streamId", "done", "delta", "arguments", "usage", "usageScope", "toolKind", "sentAt", "state", "cancelReason", "attachments", "plugins",
                 "serviceUrl", "previewUrl", "host", "port", "services", "phase", "contentUnavailable"):
