@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 import io
+import json
 from contextlib import closing, nullcontext, redirect_stdout
 import os
 from pathlib import Path
@@ -19,6 +20,22 @@ from tools.dev import local_environment as build
 from tools.dev import start_local as start
 from tools.dev import verify_local_start as verify
 from tools.dev import verify_desktop_fixture as desktop_fixture
+
+
+class DesktopClock:
+    def __init__(self):
+        self.now = 0
+        self.sleeps = []
+        self.after_sleep = None
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, delay):
+        self.sleeps.append(delay)
+        self.now += delay
+        if self.after_sleep:
+            self.after_sleep()
 
 
 class LocalStartupTests(unittest.TestCase):
@@ -147,24 +164,93 @@ class LocalStartupTests(unittest.TestCase):
             desktop_fixture.main(['--data-dir', str(self.state), '--desktop'])
         main.assert_not_called()
 
-    def test_desktop_restart_ignores_live_historical_ready_events(self):
+    def desktop_journal_fixture(self, entries, *, alive=True):
         journal = self.state / 'desktop-profile/diagnostics/lifecycle.jsonl'
-        journal.parent.mkdir(parents=True)
-        entries = [{'event': 'ready', 'pid': 100, 'runId': 'older'},
-                   {'event': 'ready', 'pid': 200, 'runId': 'previous'}]
-        import json
+        journal.parent.mkdir(parents=True, exist_ok=True)
         journal.write_text(''.join(json.dumps(row) + '\n' for row in entries), encoding='utf-8')
-        class Child:
-            launcher_log = 'isolated launcher fixture'
-            def poll(self):
-                return None
-        def append_ready(_delay):
+        clock = DesktopClock()
+        self.enterContext(patch.object(verify, 'time', clock))
+        self.enterContext(patch.object(verify, 'process_alive', return_value=alive))
+        child = Namespace(launcher_log='isolated launcher fixture', poll=lambda: None)
+        return journal, child, clock
+
+    def test_desktop_restart_ignores_live_historical_ready_events(self):
+        journal, child, clock = self.desktop_journal_fixture([
+            {'event': 'ready', 'pid': 100, 'runId': 'older'},
+            {'event': 'ready', 'pid': 200, 'runId': 'previous'},
+        ])
+        previous_runs = verify.desktop_run_ids(self.state)
+
+        def append_ready():
             with journal.open('a', encoding='utf-8') as stream:
                 stream.write(json.dumps({'event': 'ready', 'pid': 300, 'runId': 'new'}) + '\n')
-        with patch.object(verify, 'process_alive', return_value=True), \
-                patch.object(verify.time, 'sleep', side_effect=append_ready) as slept:
-            self.assertEqual(verify.desktop_ready(Child(), self.state, previous_pid=200), 300)
-            self.assertEqual(slept.call_count, 1, 'Historical ready entries must not satisfy a restart')
+        clock.after_sleep = append_ready
+        self.assertEqual(verify.desktop_ready(child, self.state, previous_runs=previous_runs), 300)
+        self.assertEqual(len(clock.sleeps), 1, 'Historical ready entries must not satisfy a restart')
+
+    def test_desktop_run_snapshot_includes_non_ready_runs_and_ignores_missing_ids(self):
+        self.assertEqual(verify.desktop_run_ids(self.state), set())
+        self.desktop_journal_fixture([
+            {'event': 'ready', 'pid': 100, 'runId': 'finished'},
+            {'event': 'exit', 'pid': 100, 'runId': 'finished'},
+            {'event': 'start', 'pid': 100, 'runId': 'starting'},
+            {'event': 'unhandled-rejection', 'pid': 200, 'runId': 'failed'},
+            {'event': 'ready', 'pid': 300},
+            {'event': 'ready', 'pid': 300, 'runId': ''},
+            {'event': 'ready', 'pid': 300, 'runId': None},
+        ])
+        self.assertEqual(verify.desktop_run_ids(self.state), {'finished', 'starting', 'failed'})
+
+    def test_desktop_restart_accepts_reused_pid_ready_before_wait_begins(self):
+        journal, child, clock = self.desktop_journal_fixture([
+            {'event': 'ready', 'pid': 100, 'runId': 'previous'},
+        ])
+        previous_runs = verify.desktop_run_ids(self.state)
+        with journal.open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps({'event': 'ready', 'pid': 100, 'runId': 'new'}) + '\n')
+        self.assertEqual(verify.desktop_ready(child, self.state, previous_runs=previous_runs), 100)
+        self.assertEqual(clock.sleeps, [], 'Readiness written before polling must remain eligible')
+
+    def test_desktop_restart_excludes_every_historical_run_sharing_the_pid(self):
+        journal, child, clock = self.desktop_journal_fixture([
+            {'event': 'ready', 'pid': 100, 'runId': 'older'},
+            {'event': 'ready', 'pid': 100, 'runId': 'previous'},
+            {'event': 'start', 'pid': 100, 'runId': 'unfinished'},
+        ])
+        previous_runs = verify.desktop_run_ids(self.state)
+
+        def append_ready():
+            run_id = 'unfinished' if len(clock.sleeps) == 1 else 'new'
+            with journal.open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps({'event': 'ready', 'pid': 100, 'runId': run_id}) + '\n')
+        clock.after_sleep = append_ready
+        self.assertEqual(verify.desktop_ready(child, self.state, previous_runs=previous_runs), 100)
+        self.assertEqual(len(clock.sleeps), 2, 'All snapshotted runs stay historical, including late ready events')
+
+    def test_desktop_readiness_errors_are_scoped_to_the_new_run(self):
+        for event in ('uncaught-exception-monitor', 'unhandled-rejection'):
+            for failed_run in ('previous', 'new'):
+                with self.subTest(event=event, failed_run=failed_run):
+                    _, child, clock = self.desktop_journal_fixture([
+                        {'event': 'ready', 'pid': 100, 'runId': 'previous'},
+                        {'event': event, 'pid': 100, 'runId': failed_run},
+                        {'event': 'ready', 'pid': 100, 'runId': 'new'},
+                    ])
+                    if failed_run == 'new':
+                        with self.assertRaisesRegex(AssertionError, 'Desktop initialization failed'):
+                            verify.desktop_ready(child, self.state, previous_runs={'previous'})
+                    else:
+                        self.assertEqual(verify.desktop_ready(child, self.state, previous_runs={'previous'}), 100)
+                    self.assertEqual(clock.sleeps, [])
+
+    def test_desktop_readiness_rejects_dead_pids_and_missing_run_ids(self):
+        cases = [(False, {'runId': 'new'}), (True, {}), (True, {'runId': ''}), (True, {'runId': None})]
+        for alive, fields in cases:
+            with self.subTest(alive=alive, fields=fields):
+                _, child, clock = self.desktop_journal_fixture([{'event': 'ready', 'pid': 100, **fields}], alive=alive)
+                with self.assertRaisesRegex(AssertionError, 'Electron did not become ready'):
+                    verify.desktop_ready(child, self.state)
+                self.assertGreaterEqual(clock.now, 45)
 
     def test_node_version_matches_runtime_dependency_minimum(self):
         with patch.object(build.shutil, 'which', side_effect=lambda name: name), patch.object(build, '_check_npm_version'):
@@ -747,6 +833,30 @@ class LocalStartupTests(unittest.TestCase):
             self.assertEqual(stream.tell(), 0)
         with closing(sqlite3.connect(self.state / "soduwork.db")) as db:
             self.assertEqual(db.execute("SELECT password_hash FROM app_user").fetchone()[0], "existing-password-hash")
+
+    def test_damaged_database_reports_startup_error_instead_of_traceback(self):
+        # A truncated/non-SQLite file (disk full, interrupted migration, partial
+        # copy) raises sqlite3.DatabaseError, not the OperationalError subclass.
+        self.state.mkdir()
+        (self.state / "soduwork.db").write_bytes(b"this is not a sqlite database")
+        with self.assertRaisesRegex(start.StartupError, "Cannot inspect the local database"):
+            start.initialized(self.state)
+
+    def test_damaged_database_surfaces_friendly_error_through_password_prompt(self):
+        config = start.initialize(self.state, "admin")
+        (self.state / "soduwork.db").write_bytes(b"\x00\x01not-a-database")
+        with patch("sys.stdin", io.StringIO("must-not-consume\n")) as stream:
+            with self.assertRaisesRegex(start.StartupError, "Cannot inspect the local database"):
+                start.password_for_start(self.state, config, True)
+            self.assertEqual(stream.tell(), 0)
+
+    def test_empty_database_still_means_not_initialized(self):
+        # Regression guard: "no such table" is an OperationalError and must keep
+        # returning False rather than being treated as a damaged database.
+        self.state.mkdir()
+        with closing(sqlite3.connect(self.state / "soduwork.db")):
+            pass
+        self.assertFalse(start.initialized(self.state))
 
     def test_no_inherited_database_or_account_or_remote_store(self):
         config = start.initialize(self.state, "admin")
