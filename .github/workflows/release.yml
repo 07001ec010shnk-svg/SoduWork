@@ -18,6 +18,13 @@ on:
       api_key_secret:
         description: Optional secret name override; never enter the key itself
         type: string
+      generator_ref:
+        description: Optional generator checkout override for testing a proposed change
+        type: string
+      preview_warning:
+        description: Preview a missing-model warning with a synthetic key and no inference
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,7 +36,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 2ae758bb31937a91df32e3e0289376535f2490d2
+          ref: ${{ inputs.generator_ref || '2ae758bb31937a91df32e3e0289376535f2490d2' }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -39,9 +46,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_NOTES_API_KEY: ${{ secrets[inputs.api_key_secret || vars.RELEASE_NOTES_API_KEY_SECRET || 'RELEASE_NOTES_API_KEY'] }}
-          RELEASE_NOTES_API_URL: ${{ inputs.api_url || vars.RELEASE_NOTES_API_URL }}
-          RELEASE_NOTES_MODEL: ${{ inputs.model || vars.RELEASE_NOTES_MODEL }}
+          RELEASE_NOTES_API_KEY: ${{ inputs.preview_warning && 'fixture-model-key' || secrets[inputs.api_key_secret || vars.RELEASE_NOTES_API_KEY_SECRET || 'RELEASE_NOTES_API_KEY'] }}
+          RELEASE_NOTES_API_URL: ${{ inputs.preview_warning && 'https://openrouter.ai/api/v1/chat/completions' || inputs.api_url || vars.RELEASE_NOTES_API_URL }}
+          RELEASE_NOTES_MODEL: ${{ inputs.preview_warning && 'diagnostic/release-notes-warning-preview:free' || inputs.model || vars.RELEASE_NOTES_MODEL }}
+          PREVIEW_WARNING: ${{ inputs.preview_warning }}
           PYTHONUNBUFFERED: '1'
         run: |
           python - <<'PY'
@@ -49,6 +57,18 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, str(Path('tools/github').resolve()))
           import release_notes as notes
+
+          if os.environ['PREVIEW_WARNING'] == 'true':
+              assert os.environ['RELEASE_VERSION'] == '1.13.19'
+              Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(
+                  '# Warning preview only\n\nThis run intentionally selects a nonexistent model. '
+                  'It uses a synthetic key and does not publish a release or send an inference request.\n', encoding='utf-8')
+              ctx = {'schema': 1, 'component': 'client', 'version': '1.13.19',
+                     'repository': os.environ['GITHUB_REPOSITORY'],
+                     'commit': notes.git('rev-parse', 'HEAD'), 'runId': os.environ['GITHUB_RUN_ID']}
+              record = notes.generate(ctx, Path('release-evidence/1.13.19/release-notes.json'))
+              assert record['status'] == 'unavailable' and record['locales'] == {}
+              sys.exit(0)
 
           # Diagnostic prompt comparison only; the checked-out generator is unchanged.
           notes.PROMPT += """
