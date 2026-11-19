@@ -2,6 +2,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs/promises'), os = require('node:os'), path = require('node:path');
 const http = require('node:http'), crypto = require('node:crypto');
+const zlib = require('node:zlib');
 const cacheModule = require('../main/conversation/cloud-output-cache');
 const runtime = require('../main/conversation/artifact-runtime');
 const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -62,6 +63,71 @@ test('real HTTP bytes are privately materialized, previewed with dependencies, r
   const repaired = await f.cache.materialize(f.record, current, rows);
   assert.equal(calls.length, 3); assert.equal(repaired.files, 2);
   assert.equal(await fs.readFile(path.join(result.cwd, 'assets/style.css'), 'utf8'), bytes.get('css'));
+});
+
+test('compressed HTTP outputs validate decoded file bytes instead of the encoded Content-Length', async context => {
+  const bytes = Buffer.from('<h1>Published result</h1>'.repeat(100));
+  for (const [encoding, compress] of Object.entries({ gzip: zlib.gzipSync, deflate: zlib.deflateSync, br: zlib.brotliCompressSync })) {
+    await context.test(encoding, async scenario => {
+      const compressed = compress(bytes);
+      assert.notEqual(compressed.length, bytes.length);
+      const server = http.createServer((request, response) => {
+        assert.equal(request.headers.authorization, 'Device fixture-session');
+        response.writeHead(200, { 'Content-Encoding': encoding, 'Content-Length': compressed.length });
+        response.end(compressed);
+      });
+      await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+      scenario.after(() => new Promise(resolve => server.close(resolve)));
+      const fixtureState = await fixture(scenario);
+      const current = { hub: 'http://127.0.0.1:' + server.address().port, session: 'fixture-session' };
+      const result = await fixtureState.cache.materialize(fixtureState.record, current,
+        [attachment('compressed-result', 'result.html', bytes)]);
+      assert.deepEqual(await fs.readFile(path.join(result.cwd, 'result.html')), bytes);
+      assert.equal(result.materializedOutputs['compressed-result'].size, bytes.length);
+      assert.equal(result.materializedOutputs['compressed-result'].sha256, digest(bytes));
+    });
+  }
+});
+
+test('compressed HTTP outputs still reject decoded size and digest mismatches without leaving files', async context => {
+  const expected = Buffer.from('expected output'.repeat(100));
+  for (const [name, bytes, reason] of [
+    ['oversized', Buffer.concat([expected, Buffer.from('extra')]), /限制/],
+    ['truncated', expected.subarray(0, -1), /完整性/],
+    ['wrong-digest', Buffer.alloc(expected.length, 120), /完整性/],
+  ]) {
+    await context.test(name, async scenario => {
+      const compressed = zlib.gzipSync(bytes);
+      const server = http.createServer((_request, response) => {
+        response.writeHead(200, { 'Content-Encoding': 'gzip', 'Content-Length': compressed.length });
+        response.end(compressed);
+      });
+      await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+      scenario.after(() => new Promise(resolve => server.close(resolve)));
+      const fixtureState = await fixture(scenario);
+      const current = { hub: 'http://127.0.0.1:' + server.address().port, session: 'fixture-session' };
+      await assert.rejects(fixtureState.cache.materialize(fixtureState.record, current,
+        [attachment('compressed-result', 'result.txt', expected)]), reason);
+      assert.deepEqual(await fs.readdir(cacheModule.directory(fixtureState.app, fixtureState.record)), []);
+    });
+  }
+});
+
+test('identity responses retain the early Content-Length mismatch check', async context => {
+  for (const encoding of [undefined, 'identity']) {
+    await context.test(encoding || 'absent', async scenario => {
+      let canceled = false;
+      const headers = { 'content-length': '100' };
+      if (encoding) headers['content-encoding'] = encoding;
+      const fixtureState = await fixture(scenario, { fetch: async () => new Response(new ReadableStream({
+        cancel() { canceled = true; },
+      }), { headers }) });
+      await assert.rejects(fixtureState.cache.materialize(fixtureState.record, { hub: 'http://fixture.invalid' },
+        [attachment('identity-result', 'result.txt', 'fixture')]), /大小校验失败/);
+      assert.equal(canceled, true);
+      assert.deepEqual(await fs.readdir(cacheModule.directory(fixtureState.app, fixtureState.record)), []);
+    });
+  }
 });
 
 test('streaming limits cancel a lying body before reading the complete response', async t => {
