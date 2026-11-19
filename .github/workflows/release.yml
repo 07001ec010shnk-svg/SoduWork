@@ -32,7 +32,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           RELEASE_NOTES_API_URL: https://openrouter.ai/api/v1/chat/completions
-          RELEASE_NOTES_MODEL: google/gemma-4-31b-it:free
+          RELEASE_NOTES_MODEL: baidu/ernie-5.5-flash-preview:free
           PYTHONUNBUFFERED: '1'
         run: |
           python - <<'PY'
@@ -40,6 +40,24 @@ jobs:
           from pathlib import Path
           sys.path.insert(0, str(Path('tools/github').resolve()))
           import release_notes as notes
+
+          # Diagnostic prompt comparison only; the checked-out generator is unchanged.
+          notes.PROMPT += """
+          Write for desktop end users, not developers reading a changelog.
+          Prioritize daily chat and task execution, automation, and delivering or sharing results;
+          then account access and startup recovery. Do not fill slots with lower-impact maintenance.
+          Prefer the most important supported user workflows over the easiest titles to paraphrase.
+          Each bullet describes ONE user workflow. Merge commits only when their actions and objects
+          really match; preserve which action applies to which object. Do not distribute one verb
+          across unrelated nouns, or turn a safety check into a new recovery capability.
+          A fix is not an unconditional action triggered by upgrading. Preserve explicit conditions;
+          if a title lacks necessary context, omit that ambiguous detail or choose a clearer change.
+          Do not imply data deletion, security guarantees, or behavior broader than the title states.
+          Avoid implementation jargon, internal protocol names, path conventions and source-launcher
+          details. Prefer plain short sentences in every language, with only the essential facts.
+          Before returning, recheck each bullet's action, object, scope and conditions against its
+          cited titles; remove uncertain claims rather than making the sentence sound more complete.
+          """
 
           model = os.environ['RELEASE_NOTES_MODEL']
           with urllib.request.urlopen('https://openrouter.ai/api/v1/models', timeout=30) as response:
@@ -140,7 +158,7 @@ jobs:
           evidence_dir.mkdir(exist_ok=True)
           for version in versions:
               assert version in ['1.13.17', '1.13.18', '1.13.19']
-              active = {'version': version, 'model': model}
+              active = {'version': version, 'model': model, 'promptVariant': 'user-focused-v2'}
               metrics[version] = active
               with tempfile.TemporaryDirectory(prefix='notes-source-') as temporary:
                   source = Path(temporary) / 'source'
