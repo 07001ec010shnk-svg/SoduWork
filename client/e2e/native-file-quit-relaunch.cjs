@@ -94,11 +94,11 @@ if (typeof electron === 'string') {
         write('stopping', { pid: process.pid });
         timer = setTimeout(() => { cleanupReady = true; app.quit(); }, 2500);
       }
-    }).catch(error => { console.error(error); app.exit(2); });
+    });
     app.whenReady().then(async () => {
       const win = new BrowserWindow({ show: false });
       await win.loadURL('data:text/html,<title>Native file shutdown</title>');
       state.markQuitting(); app.quit();
-    });
+    }).catch(error => { console.error(error); app.exit(2); });
   }
 }
