@@ -1,5 +1,6 @@
 (function (global) {
   const messages = {
+    '验收状态暂时无法读取，请重新打开需求重试。': 'Acceptance status is temporarily unavailable. Reopen the requirement and try again.',
     '正在整理本轮成果，请等待同步完成。': 'Preparing this turn’s results. Wait for synchronization to finish.',
     '成果尚未同步完成，请恢复连接后重试同步。': 'Results have not finished syncing. Restore the connection and retry synchronization.',
     '成果整理失败，请查看执行记录，修正文件后重试交付。': 'Preparing results failed. Check the execution records, correct the files, and retry delivery.',
