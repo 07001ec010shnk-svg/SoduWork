@@ -112,7 +112,6 @@ process.on('unhandledRejection', (reason) => {
   console.error('[SoduWork] unhandled rejection (kept alive):', reason && reason.stack || reason);
 });
 
-_deviceAuth.install({ app, ipcMain, safeStorage });
 require('./main/client-domain-cache.cjs').install({ app, ipcMain, webContents, deviceAuth: _deviceAuth,
   modelsChanged: () => _catalogChanges.changed() });
 require('./main/read-aloud.cjs').install({ app, ipcMain, BrowserWindow, getRendererRoot: rendererRoot });
@@ -129,7 +128,6 @@ const _applicationMenu = require('./main/app-menu-info.cjs').install({ app, ipcM
 const _workspaceTitlebar = require('./main/workspace-titlebar.cjs').create({ app, ipcMain, BrowserWindow, Menu,
   getRendererRoot: rendererRoot, fallbackCommand: _applicationMenu.nativeCommand,
   getWorkspace: () => { openDeskWindow({ panel: 'workspace' }, null); return _workWindows.get('workspace'); } });
-_runnerRuntime.install({ app, ipcMain, identityOf: _deviceAuth.identity });
 require('./main/agent-runtime/custom-runtimes.cjs').install({ app, ipcMain, session: _piSessions,
   runner: _runnerRuntime, BrowserWindow, dialog, changed: _catalogChanges.changed });
 async function _sessionIdentity(appRef, hub = '', clientId = '') {
@@ -646,7 +644,12 @@ if (!gotTheLock) {
 
   _fileOpen.fromCommand(process.argv, process.cwd());
   app.whenReady().then(() => {
-    if (_linuxStartup.showRecovery({ app, BrowserWindow, safeStorage })) return;
+    if (!_linuxStartup.showRecovery({ app, BrowserWindow, safeStorage, onUnlock: startDesktop })) startDesktop();
+  });
+
+  function startDesktop(credentials) {
+    _deviceAuth.install({ app, ipcMain, safeStorage, credentials });
+    _runnerRuntime.install({ app, ipcMain, identityOf: _deviceAuth.identity, sessionOf: _deviceAuth.session });
     /*
      * Adopt the Runner-managed office engine so client probes and child processes use the same
      * installation. Missing engines must not block startup.
@@ -729,7 +732,7 @@ if (!gotTheLock) {
         _desktopOverlay.createWindow();
       }
     });
-  });
+  }
 }
 
 app.on('window-all-closed', () => {

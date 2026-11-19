@@ -315,6 +315,15 @@ test('localized slash actions resolve to the same work contract and preserve req
     assert.equal(result.text, '保存 this request');
   }
 });
+test('website packaging guidance follows every existing renderer locale', () => {
+  const c = client(), catalogs = require('../core/locales/builtin-ui');
+  const phrases = ['文件夹包含超过12层的文件，请将文件移近所选文件夹后重试', '文件夹打包失败'];
+  for (const locale of ['zh-CN', 'en-US', 'ja-JP', 'ko-KR']) {
+    c.api.setLocale(locale);
+    for (const phrase of phrases) assert.equal(c.api.translateText(phrase), catalogs[locale][phrase], locale);
+  }
+});
+
 function client(saved = {}, blocked = false, options = {}) {
   const storage = options.storage || new Map(Object.entries(saved)), listeners = new Map(), sent = [];
   const context = vm.createContext({
@@ -784,6 +793,7 @@ test('publication notices translate in every shipped locale while retaining exac
 test('collaboration card actions, permissions and summaries use shipped locale entries', () => {
   const c = client();
   const samples = [
+    '验收状态暂时无法读取，请重新打开需求重试。',
     '停止协作', '恢复协作', '收起协作卡，执行不会停止', '核对执行状态',
     '成果承载区尚未就绪，请重新打开对话', '完成流程，保留结果', '需要你的许可',
     '操作内容未完整提供。请拒绝本次操作，并让 Agent 提供明确、简短的操作。',

@@ -67,7 +67,8 @@ async function _attachmentImage(handle, ref, token) {
     try {
       return await artifactRuntime.action(await resolveSession(s), ref, artifactId, action, { shell, nativeImage });
     } catch (error) {
-      return { ok: false, reason: String((error && error.message) || error) };
+      return { ok: false, reason: String((error && error.message) || error),
+        ...(error?.code === 'ARTIFACT_SOURCE_CHANGED' ? { code: error.code } : {}) };
     }
   });
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from argparse import Namespace
 import io
+import json
 from contextlib import closing, nullcontext, redirect_stdout
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -18,6 +20,22 @@ from tools.dev import local_environment as build
 from tools.dev import start_local as start
 from tools.dev import verify_local_start as verify
 from tools.dev import verify_desktop_fixture as desktop_fixture
+
+
+class DesktopClock:
+    def __init__(self):
+        self.now = 0
+        self.sleeps = []
+        self.after_sleep = None
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, delay):
+        self.sleeps.append(delay)
+        self.now += delay
+        if self.after_sleep:
+            self.after_sleep()
 
 
 class LocalStartupTests(unittest.TestCase):
@@ -146,27 +164,96 @@ class LocalStartupTests(unittest.TestCase):
             desktop_fixture.main(['--data-dir', str(self.state), '--desktop'])
         main.assert_not_called()
 
-    def test_desktop_restart_ignores_live_historical_ready_events(self):
+    def desktop_journal_fixture(self, entries, *, alive=True):
         journal = self.state / 'desktop-profile/diagnostics/lifecycle.jsonl'
-        journal.parent.mkdir(parents=True)
-        entries = [{'event': 'ready', 'pid': 100, 'runId': 'older'},
-                   {'event': 'ready', 'pid': 200, 'runId': 'previous'}]
-        import json
+        journal.parent.mkdir(parents=True, exist_ok=True)
         journal.write_text(''.join(json.dumps(row) + '\n' for row in entries), encoding='utf-8')
-        class Child:
-            launcher_log = 'isolated launcher fixture'
-            def poll(self):
-                return None
-        def append_ready(_delay):
+        clock = DesktopClock()
+        self.enterContext(patch.object(verify, 'time', clock))
+        self.enterContext(patch.object(verify, 'process_alive', return_value=alive))
+        child = Namespace(launcher_log='isolated launcher fixture', poll=lambda: None)
+        return journal, child, clock
+
+    def test_desktop_restart_ignores_live_historical_ready_events(self):
+        journal, child, clock = self.desktop_journal_fixture([
+            {'event': 'ready', 'pid': 100, 'runId': 'older'},
+            {'event': 'ready', 'pid': 200, 'runId': 'previous'},
+        ])
+        previous_runs = verify.desktop_run_ids(self.state)
+
+        def append_ready():
             with journal.open('a', encoding='utf-8') as stream:
                 stream.write(json.dumps({'event': 'ready', 'pid': 300, 'runId': 'new'}) + '\n')
-        with patch.object(verify, 'process_alive', return_value=True), \
-                patch.object(verify.time, 'sleep', side_effect=append_ready) as slept:
-            self.assertEqual(verify.desktop_ready(Child(), self.state, previous_pid=200), 300)
-            self.assertEqual(slept.call_count, 1, 'Historical ready entries must not satisfy a restart')
+        clock.after_sleep = append_ready
+        self.assertEqual(verify.desktop_ready(child, self.state, previous_runs=previous_runs), 300)
+        self.assertEqual(len(clock.sleeps), 1, 'Historical ready entries must not satisfy a restart')
+
+    def test_desktop_run_snapshot_includes_non_ready_runs_and_ignores_missing_ids(self):
+        self.assertEqual(verify.desktop_run_ids(self.state), set())
+        self.desktop_journal_fixture([
+            {'event': 'ready', 'pid': 100, 'runId': 'finished'},
+            {'event': 'exit', 'pid': 100, 'runId': 'finished'},
+            {'event': 'start', 'pid': 100, 'runId': 'starting'},
+            {'event': 'unhandled-rejection', 'pid': 200, 'runId': 'failed'},
+            {'event': 'ready', 'pid': 300},
+            {'event': 'ready', 'pid': 300, 'runId': ''},
+            {'event': 'ready', 'pid': 300, 'runId': None},
+        ])
+        self.assertEqual(verify.desktop_run_ids(self.state), {'finished', 'starting', 'failed'})
+
+    def test_desktop_restart_accepts_reused_pid_ready_before_wait_begins(self):
+        journal, child, clock = self.desktop_journal_fixture([
+            {'event': 'ready', 'pid': 100, 'runId': 'previous'},
+        ])
+        previous_runs = verify.desktop_run_ids(self.state)
+        with journal.open('a', encoding='utf-8') as stream:
+            stream.write(json.dumps({'event': 'ready', 'pid': 100, 'runId': 'new'}) + '\n')
+        self.assertEqual(verify.desktop_ready(child, self.state, previous_runs=previous_runs), 100)
+        self.assertEqual(clock.sleeps, [], 'Readiness written before polling must remain eligible')
+
+    def test_desktop_restart_excludes_every_historical_run_sharing_the_pid(self):
+        journal, child, clock = self.desktop_journal_fixture([
+            {'event': 'ready', 'pid': 100, 'runId': 'older'},
+            {'event': 'ready', 'pid': 100, 'runId': 'previous'},
+            {'event': 'start', 'pid': 100, 'runId': 'unfinished'},
+        ])
+        previous_runs = verify.desktop_run_ids(self.state)
+
+        def append_ready():
+            run_id = 'unfinished' if len(clock.sleeps) == 1 else 'new'
+            with journal.open('a', encoding='utf-8') as stream:
+                stream.write(json.dumps({'event': 'ready', 'pid': 100, 'runId': run_id}) + '\n')
+        clock.after_sleep = append_ready
+        self.assertEqual(verify.desktop_ready(child, self.state, previous_runs=previous_runs), 100)
+        self.assertEqual(len(clock.sleeps), 2, 'All snapshotted runs stay historical, including late ready events')
+
+    def test_desktop_readiness_errors_are_scoped_to_the_new_run(self):
+        for event in ('uncaught-exception-monitor', 'unhandled-rejection'):
+            for failed_run in ('previous', 'new'):
+                with self.subTest(event=event, failed_run=failed_run):
+                    _, child, clock = self.desktop_journal_fixture([
+                        {'event': 'ready', 'pid': 100, 'runId': 'previous'},
+                        {'event': event, 'pid': 100, 'runId': failed_run},
+                        {'event': 'ready', 'pid': 100, 'runId': 'new'},
+                    ])
+                    if failed_run == 'new':
+                        with self.assertRaisesRegex(AssertionError, 'Desktop initialization failed'):
+                            verify.desktop_ready(child, self.state, previous_runs={'previous'})
+                    else:
+                        self.assertEqual(verify.desktop_ready(child, self.state, previous_runs={'previous'}), 100)
+                    self.assertEqual(clock.sleeps, [])
+
+    def test_desktop_readiness_rejects_dead_pids_and_missing_run_ids(self):
+        cases = [(False, {'runId': 'new'}), (True, {}), (True, {'runId': ''}), (True, {'runId': None})]
+        for alive, fields in cases:
+            with self.subTest(alive=alive, fields=fields):
+                _, child, clock = self.desktop_journal_fixture([{'event': 'ready', 'pid': 100, **fields}], alive=alive)
+                with self.assertRaisesRegex(AssertionError, 'Electron did not become ready'):
+                    verify.desktop_ready(child, self.state)
+                self.assertGreaterEqual(clock.now, 45)
 
     def test_node_version_matches_runtime_dependency_minimum(self):
-        with patch.object(build.shutil, 'which', side_effect=lambda name: name):
+        with patch.object(build.shutil, 'which', side_effect=lambda name: name), patch.object(build, '_check_npm_version'):
             for version in ['v22.18.0', 'v20.20.0', 'v22.18.9-rc.1', 'v26.0', 'v26.0.0-invalid suffix']:
                 with self.subTest(version=version), patch.object(build.subprocess, 'check_output', return_value=version), \
                         self.assertRaisesRegex(build.StartupError, '22.19'):
@@ -176,14 +263,51 @@ class LocalStartupTests(unittest.TestCase):
                 with self.subTest(version=version), patch.object(build.subprocess, 'check_output', return_value=version):
                     self.assertEqual(len(build.check_dependencies()), 2)
 
+    def npm_fixture(self, body):
+        script = Path(self.temp.name) / 'npm'
+        script.write_text("#!/usr/bin/env python3\nimport sys\n"
+                          "assert sys.argv[1:] == ['--version']\n" + body, encoding='utf-8')
+        if os.name == 'nt':
+            wrapper = script.with_suffix('.cmd')
+            wrapper.write_text('@"%NPM_TEST_PYTHON%" "%~dp0npm" %*\n', encoding='ascii')
+            self.enterContext(patch.dict(os.environ, NPM_TEST_PYTHON=sys.executable))
+            return str(wrapper)
+        script.chmod(0o755)
+        return str(script)
+
+    def test_npm_preflight_requires_success_and_a_version_line(self):
+        cases = [(b'', 0, False), (b'npm unavailable', 0, False), (b'10.9.3', 1, False),
+                 (b'error 10.9.3', 0, False), (b'\xe4\xb8\xad\r\n10.9.3\r\n', 0, True),
+                 (b'1.0.0-rc.1+build.42', 0, True)]
+        for output, code, valid in cases:
+            npm = self.npm_fixture(f'sys.stdout.buffer.write({output!r})\nsys.exit({code})\n')
+            with self.subTest(output=output, code=code), \
+                    patch.object(build.shutil, 'which', side_effect=lambda name: 'node' if name == 'node' else npm), \
+                    patch.object(build.subprocess, 'check_output', return_value='v22.19.0'):
+                if valid:
+                    self.assertEqual(build.check_dependencies(), ('node', npm))
+                else:
+                    with self.assertRaisesRegex(build.StartupError, 'npm --version'):
+                        build.check_dependencies()
+
+    def test_npm_probe_times_out_with_a_child_holding_stdout(self):
+        npm = self.npm_fixture("import subprocess\n"
+                               "subprocess.run([sys.executable, '-c', 'import time; time.sleep(12)'])\n")
+        started = time.monotonic()
+        with patch.object(build, 'NPM_PROBE_TIMEOUT', 1), self.assertRaisesRegex(build.StartupError, 'timed out'):
+            build._check_npm_version(npm)
+        self.assertLess(time.monotonic() - started, 8)
+
     def test_dependency_report_prints_the_version_from_a_single_node_probe(self):
         with patch.object(build.shutil, 'which', side_effect=lambda name: name), \
+                patch.object(build, '_check_npm_version') as npm_probe, \
                 patch.object(build.subprocess, 'check_output', return_value='v24.0.0+build.42\n') as probe, \
                 redirect_stdout(io.StringIO()) as output:
             build.dependency_report()
 
         commands = [call.args[0] for call in probe.call_args_list]
         self.assertEqual(commands.count(['node', '--version']), 1)
+        npm_probe.assert_called_once_with('npm.cmd' if os.name == 'nt' else 'npm')
         self.assertIn('Node.js: v24.0.0+build.42', output.getvalue().splitlines())
 
     def test_unexecutable_node_reports_friendly_error(self):
@@ -710,6 +834,30 @@ class LocalStartupTests(unittest.TestCase):
         with closing(sqlite3.connect(self.state / "soduwork.db")) as db:
             self.assertEqual(db.execute("SELECT password_hash FROM app_user").fetchone()[0], "existing-password-hash")
 
+    def test_damaged_database_reports_startup_error_instead_of_traceback(self):
+        # A truncated/non-SQLite file (disk full, interrupted migration, partial
+        # copy) raises sqlite3.DatabaseError, not the OperationalError subclass.
+        self.state.mkdir()
+        (self.state / "soduwork.db").write_bytes(b"this is not a sqlite database")
+        with self.assertRaisesRegex(start.StartupError, "Cannot inspect the local database"):
+            start.initialized(self.state)
+
+    def test_damaged_database_surfaces_friendly_error_through_password_prompt(self):
+        config = start.initialize(self.state, "admin")
+        (self.state / "soduwork.db").write_bytes(b"\x00\x01not-a-database")
+        with patch("sys.stdin", io.StringIO("must-not-consume\n")) as stream:
+            with self.assertRaisesRegex(start.StartupError, "Cannot inspect the local database"):
+                start.password_for_start(self.state, config, True)
+            self.assertEqual(stream.tell(), 0)
+
+    def test_empty_database_still_means_not_initialized(self):
+        # Regression guard: "no such table" is an OperationalError and must keep
+        # returning False rather than being treated as a damaged database.
+        self.state.mkdir()
+        with closing(sqlite3.connect(self.state / "soduwork.db")):
+            pass
+        self.assertFalse(start.initialized(self.state))
+
     def test_no_inherited_database_or_account_or_remote_store(self):
         config = start.initialize(self.state, "admin")
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql://production", "AUTH_SECRET": "company-key",
@@ -884,6 +1032,41 @@ class LocalStartupTests(unittest.TestCase):
                 env = start.runtime_environment(self.state, config, "fixture-only-password", host, 18991)
                 self.assertEqual(env["HUB_PUBLIC_URL"], expected)
                 self.assertEqual(env["CORS_ORIGINS"], expected + ",null")
+
+    def test_preparation_failure_leaves_first_password_unread(self):
+        config = {"adminUser": "admin"}
+        for desktop in (False, True):
+            args = Namespace(host="127.0.0.1", port=18991, desktop=desktop, password_stdin=True)
+            failure = start.StartupError("download failed")
+            with self.subTest(desktop=desktop), patch.object(start, "assert_available"), \
+                    patch.object(start, "prepare", return_value=(None, None),
+                                 side_effect=None if desktop else failure), \
+                    patch.object(start, "prepare_desktop", side_effect=failure), \
+                    patch("sys.stdin", io.StringIO("fixture-only-password\n")) as stream, \
+                    redirect_stdout(io.StringIO()) as output:
+                with self.assertRaisesRegex(start.StartupError, "download failed"):
+                    start.serve(self.state, config, args)
+                self.assertEqual(stream.tell(), 0)
+                self.assertNotIn("Create the administrator account", output.getvalue())
+
+    def test_install_command_cannot_read_the_launchers_stdin(self):
+        with patch.object(build.subprocess, "Popen") as popen, patch.object(build, "wait_child", return_value=0):
+            build.run(["installer"], cwd=Path(self.temp.name), log=Path(self.temp.name) / "startup.log",
+                      label="Install fixture")
+        self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
+
+    @unittest.skipUnless(os.name == "nt", "Windows batch entry point")
+    def test_windows_password_stdin_returns_errors_with_input_pipe_open(self):
+        env = dict(os.environ, SODUWORK_NO_PAUSE="0")
+        command = ["cmd.exe", "/d", "/c", "start.cmd", "--data-dir", str(self.state / "data with spaces"),
+                   "--port", "1", "--password-stdin"]
+        with subprocess.Popen(command, cwd=build.ROOT, env=env, stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as child:
+            try:
+                self.assertEqual(child.wait(timeout=15), 2)
+                self.assertIn(b"port must be between", child.stdout.read())
+            finally:
+                build.stop_child(child)
 
     def test_serve_uses_ipv6_url_for_readiness_and_browser(self):
         config = {"adminUser": "admin", "authSecret": "x" * 48}
@@ -1212,6 +1395,21 @@ class LocalStartupTests(unittest.TestCase):
                             ('electron_config_cache', 'electron')):
             self.assertEqual(lowered[key], str(self.state / 'cache' / folder))
 
+    def fake_venv_run(self, state):
+        """Stand in for run() and materialize the interpreter a venv command would create.
+
+        The launcher verifies the interpreter after creating the environment, so a
+        double that only records commands would look like a failed venv creation.
+        """
+        interpreter = state / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+
+        def run(command, **kwargs):
+            if '-m' in command and 'venv' in command:
+                interpreter.parent.mkdir(parents=True, exist_ok=True)
+                interpreter.write_text('', encoding='utf-8')
+
+        return run
+
     def test_prepare_passes_isolated_caches_to_every_install_command(self):
         state = Path(self.temp.name) / 'prepare-state'
         state.mkdir()
@@ -1220,7 +1418,7 @@ class LocalStartupTests(unittest.TestCase):
                 patch.object(build, 'source_files', return_value=[]), \
                 patch.object(build, 'digest_files', return_value='digest'), \
                 patch.object(build, 'read_stamp', return_value=None), \
-                patch.object(build, 'run') as run:
+                patch.object(build, 'run', side_effect=self.fake_venv_run(state)) as run:
             build.prepare(state, state / 'startup.log')
         installs = run.call_args_list
         self.assertEqual(len(installs), 5)  # venv, pip, Runner probe, npm ci, build
@@ -1235,10 +1433,73 @@ class LocalStartupTests(unittest.TestCase):
                 patch.object(build, 'digest_files', return_value='digest'), \
                 patch.object(build, 'read_stamp', return_value='digest'), \
                 patch.object(build, 'verify_runner_environment', side_effect=build.DiskFullError('Disk full')), \
-                patch.object(build, 'run') as run:
+                patch.object(build, 'run', side_effect=self.fake_venv_run(self.state)) as run:
             with self.assertRaises(build.DiskFullError):
                 build.prepare(self.state, self.state / 'startup.log')
         self.assertFalse(any('pip' in call.args[0] for call in run.call_args_list))
+
+    def test_venv_command_success_without_interpreter_is_reported_and_logged(self):
+        """创建命令返回成功、解释器仍缺失：必须报错，而且原因要写进 startup.log。"""
+        state = Path(self.temp.name) / 'missing-interpreter'
+        state.mkdir()
+        log = state / 'startup.log'
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value='digest'), \
+                patch.object(build, 'run') as run:
+            with self.assertRaises(build.StartupError) as raised:
+                build.prepare(state, log)
+        # 创建命令确实被执行过，然后才因为产物缺失退出
+        self.assertTrue(any('-m' in call.args[0] and 'venv' in call.args[0] for call in run.call_args_list))
+        expected = state / 'venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+        message = str(raised.exception)
+        self.assertIn(str(expected), message)
+        self.assertIn('interpreter that created the venv', message)
+        logged = log.read_text(encoding='utf-8') if log.exists() else ''
+        self.assertIn('--- 独立环境诊断 / private environment diagnosis ---', logged)
+        self.assertIn('expected interpreter: ' + str(expected), logged)
+        self.assertIn('interpreter that created the venv: ' + sys.executable, logged)
+
+    def test_missing_interpreter_without_posix_layout_does_not_claim_msys2(self):
+        """没有 POSIX 布局解释器时，不能提示用户去装 Windows 版 Python。"""
+        state = Path(self.temp.name) / 'generic-missing'
+        state.mkdir()
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value='digest'), \
+                patch.object(build, 'run'):
+            with self.assertRaises(build.StartupError) as raised:
+                build.prepare(state, state / 'startup.log')
+        message = str(raised.exception)
+        self.assertNotIn('MSYS2', message)
+        self.assertNotIn('python.org', message)  # 非 Windows 不该给装 Windows Python 的建议
+        self.assertIn('-m venv', message)        # 恢复办法仍然给出
+        self.assertIn('os.name=' + os.name, message)
+
+    @unittest.skipUnless(os.name == 'nt', 'MSYS2 布局只能在 Windows 上出现')
+    def test_posix_venv_layout_on_windows_reports_msys2(self):
+        """Windows 上 Scripts/python.exe 缺失而 venv/bin/python.exe 存在，才判定为 MSYS2 布局。"""
+        state = Path(self.temp.name) / 'posix-layout'
+        state.mkdir()
+        posix = state / 'venv' / 'bin' / 'python.exe'
+
+        def run(command, **kwargs):
+            if '-m' in command and 'venv' in command:
+                posix.parent.mkdir(parents=True, exist_ok=True)
+                posix.write_text('', encoding='utf-8')
+
+        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+                patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
+                patch.object(build, 'digest_files', return_value='digest'), \
+                patch.object(build, 'read_stamp', return_value='digest'), \
+                patch.object(build, 'run', side_effect=run):
+            with self.assertRaises(build.StartupError) as raised:
+                build.prepare(state, state / 'startup.log')
+        message = str(raised.exception)
+        self.assertIn('MSYS2/Cygwin', message)
+        self.assertIn(str(posix), message)
 
     def test_cached_nonwindows_desktop_does_not_prepare_windows_shell(self):
         with patch.object(sys, 'platform', 'darwin'):

@@ -158,8 +158,11 @@ def initialized(state: Path) -> bool:
     try:
         with closing(sqlite3.connect(db.as_uri() + "?mode=ro", uri=True)) as conn:
             return bool(conn.execute("SELECT COUNT(*) FROM app_user").fetchone()[0])
-    except sqlite3.OperationalError as exc:
-        if "no such table" in str(exc):
+    except sqlite3.DatabaseError as exc:
+        # OperationalError ("no such table") is a subclass of DatabaseError, so this
+        # also covers a damaged/non-SQLite file, which raises DatabaseError directly
+        # (for example "file is not a database") instead of an OperationalError.
+        if isinstance(exc, sqlite3.OperationalError) and "no such table" in str(exc):
             return False
         raise StartupError("Cannot inspect the local database. See the data directory; no data was reset.") from exc
 
@@ -171,7 +174,7 @@ def password_for_start(state: Path, config: dict, stdin: bool) -> str:
     print(f"首次创建管理员 / Create the administrator account: {config['adminUser']}", flush=True)
     if stdin:
         password = sys.stdin.readline().rstrip("\r\n")
-    elif sys.stdin.isatty():
+    else:
         print("请设置并记住自己的密码；输入时不显示字符或星号，输入后按回车。\n"
               "Choose and remember your own password. Typing is hidden; press Enter when done.", flush=True)
         while True:
@@ -182,9 +185,6 @@ def password_for_start(state: Path, config: dict, stdin: bool) -> str:
             if password == getpass.getpass("再输一次 / Confirm password: "):
                 break
             print("两次密码不一致，请重试 / Passwords did not match; please try again.", flush=True)
-    else:
-        raise StartupError("Run from an interactive terminal to choose the administrator password. "
-                           "Automation may explicitly pass --password-stdin.")
     if not 12 <= len(password) <= 128 or password.isspace():
         raise StartupError("Choose an administrator password of 12-128 characters. No default password is provided.")
     return password
@@ -277,10 +277,13 @@ def open_management_page(base: str) -> None:
 def serve(state: Path, config: dict, args) -> None:
     assert_available(args.host, args.port)
     initializing = not initialized(state)
-    password = password_for_start(state, config, args.password_stdin)
+    if initializing and not args.password_stdin and not sys.stdin.isatty():
+        raise StartupError("Run from an interactive terminal to choose the administrator password. "
+                           "Automation may explicitly pass --password-stdin.")
     log = state / "startup.log"
     python, backend = prepare(state, log)
     client = prepare_desktop(state, log) if args.desktop else None
+    password = password_for_start(state, config, args.password_stdin)
     env = runtime_environment(state, config, password, args.host, args.port)
     base = env["HUB_PUBLIC_URL"]
     print("正在启动服务并准备数据库 / Starting SoduWork and applying database migrations...", flush=True)

@@ -403,6 +403,8 @@ RELEASE_SMOKES = tuple(sorted((
     "test_runtime_tls.py",
     "test_opencode_turn_outcome.py",
     "test_opencode_runtime_config.py",
+    "test_opencode_session_migration.py",
+    "test_opencode_migration_entry.py",
     "test_pi_runtime_config.py",
     "test_email_auth.py",
     "test_legal_publications.py",

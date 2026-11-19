@@ -15,6 +15,7 @@ import subprocess
 import sys
 import platform
 import re
+import tempfile
 import time
 
 
@@ -26,6 +27,9 @@ BACKEND_FILES = (
     "full_backup.py", "pack_plugin.py", "client-update-trust.json",
 )
 ELECTRON_DOWNLOAD_TIMEOUT = 600
+NPM_PROBE_TIMEOUT = 15
+NPM_VERSION = re.compile(rb"v?\d+\.\d+\.\d+(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+                         rb"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?")
 
 
 class StartupError(RuntimeError):
@@ -111,7 +115,7 @@ def run(command: list[str], *, cwd: Path, log: Path, label: str,
         output.write(("\n--- " + label + " ---\n").encode("utf-8"))
         output.flush()
         offset = output.tell()
-        with subprocess.Popen(command, cwd=cwd, env=env, stdout=output,
+        with subprocess.Popen(command, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=output,
                               stderr=subprocess.STDOUT, **spawn_options()) as child:
             try:
                 code = wait_child(child, progress_label=label, timeout=timeout)
@@ -124,6 +128,30 @@ def run(command: list[str], *, cwd: Path, log: Path, label: str,
     if code:
         raise command_failure(f"{label} failed (exit {code})", log, offset)
     print(f"  完成 / Done ({time.monotonic() - started:.1f}s)", flush=True)
+
+
+def _check_npm_version(npm: str) -> None:
+    command = [npm, "--version"]
+    try:
+        # A Windows npm.cmd can leave a child holding stdout. A temporary file
+        # lets us wait for the command with a deadline without waiting for pipe EOF.
+        with tempfile.TemporaryFile() as output:
+            with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=output,
+                                  stderr=subprocess.DEVNULL, **spawn_options()) as child:
+                try:
+                    code = child.wait(timeout=NPM_PROBE_TIMEOUT)
+                except BaseException:
+                    stop_child(child)
+                    raise
+            output.seek(0)
+            # Banners can use a different encoding from the terminal.
+            if code == 0 and any(NPM_VERSION.fullmatch(line.strip()) for line in output):
+                return
+    except subprocess.TimeoutExpired as exc:
+        raise StartupError(f"npm --version timed out after {NPM_PROBE_TIMEOUT}s. Check the npm command on PATH.") from exc
+    except OSError as exc:
+        raise StartupError("Cannot run npm --version. Check the npm command on PATH.") from exc
+    raise StartupError("npm --version failed or returned no version. Check the npm command on PATH.")
 
 
 def _probe_dependencies() -> tuple[str, str, str]:
@@ -141,6 +169,7 @@ def _probe_dependencies() -> tuple[str, str, str]:
             raise ValueError(version)
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         raise StartupError("Node.js 22.19 or newer is required. Check node --version.") from exc
+    _check_npm_version(npm)
     return node, npm, version
 
 
@@ -274,6 +303,52 @@ def prepare_environment(state: Path) -> dict[str, str]:
     return env
 
 
+def venv_interpreter_error(python: Path, venv: Path, log: Path) -> StartupError:
+    """Explain a missing venv interpreter, and record the same reason in the log.
+
+    A venv command can report success while producing a layout this launcher cannot
+    use. Every later step only names this log file, so the diagnosis has to be there
+    too, not just on the terminal.
+    """
+    posix = next((candidate for candidate in (venv / "bin" / "python.exe", venv / "bin" / "python")
+                  if candidate.is_file()), None)
+    facts = [
+        f"expected interpreter: {python}",
+        f"interpreter that created the venv: {sys.executable}",
+        f"os.name={os.name}",
+    ]
+    if posix is not None:
+        facts.append(f"interpreter found in a POSIX layout: {posix}")
+    # Claim an MSYS2/Cygwin layout only when the POSIX interpreter is really there,
+    # so other platforms get the actual missing path instead of Windows advice.
+    if os.name == "nt" and posix is not None:
+        message = (
+            f"独立环境没有生成 {python}，但在 {posix} 找到了 POSIX 布局的解释器。当前解释器 "
+            f"{sys.executable} 可能是 MSYS2/Cygwin 版本，它创建的 venv 使用 bin/ 而不是 Scripts/。"
+            "请改用 python.org 的官方 Windows 版（或 py -3.12）后重跑同一入口；"
+            "已经创建的数据目录会直接复用，不需要删除。\n"
+            f"The private environment does not contain {python}, but a POSIX-layout interpreter exists at "
+            f"{posix}. {sys.executable} looks like an MSYS2/Cygwin build, whose venv uses bin/ instead of "
+            "Scripts/. Use a native python.org Windows build (or py -3.12) and run the same launcher again; "
+            "the existing data directory is reused.")
+    else:
+        message = (
+            f"独立环境没有生成 {python}。创建 venv 的解释器是 {sys.executable}（os.name={os.name}）。"
+            "请确认这个解释器可以正常执行 `-m venv`，修复后重跑同一入口；"
+            "已经创建的数据目录会直接复用，不需要删除。\n"
+            f"The private environment does not contain {python}. The interpreter that created it was "
+            f"{sys.executable} (os.name={os.name}). Check that this interpreter can run `-m venv`, then run "
+            "the same launcher again; the existing data directory is reused.")
+    details = "\n".join(facts)
+    try:
+        with log.open("ab") as output:
+            output.write(("\n--- 独立环境诊断 / private environment diagnosis ---\n"
+                          + details + "\n" + message + "\n").encode("utf-8"))
+    except OSError:
+        pass  # A diagnosis must never mask the original failure.
+    return StartupError(message + "\n" + details)
+
+
 def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     _, npm = check_dependencies()
     cache_env = prepare_environment(state)
@@ -298,6 +373,8 @@ def prepare(state: Path, log: Path) -> tuple[Path, Path]:
     if not python.is_file():
         run([sys.executable, "-m", "venv", str(venv)], cwd=state, log=log, env=cache_env,
             label="[1/4] 创建独立环境 / Creating a private Python environment")
+        if not python.is_file():
+            raise venv_interpreter_error(python, venv, log)
     requirements = [ROOT / "hub-backend" / name for name in ("requirements.txt", "requirements-runner.txt")]
     py_stamp = state / "python-dependencies.sha256"
     wanted = digest_files(requirements, ROOT)

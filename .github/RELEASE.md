@@ -42,12 +42,13 @@ requires a trusted signature with `localpkg_gpgcheck=True`. See
 for key requirements and first-install trust instructions. Standalone DEB signatures
 do not provide automatic APT repository authentication.
 
-The published 1.13.17 RPM predates package signing. Its committed upgrade baseline
-explicitly records `rpmSignature: "legacy-unsigned"`. In disposable acceptance
-containers only, the old installer is rechecked against its pinned SHA-256 before
-an old-package-only signature exception is applied. The receipt records the
-baseline exception and hash. Candidate installation, verification and upgrade
-still require the new signature; never mark a candidate as a legacy baseline.
+The current 1.13.18 RPM upgrade baseline is signed and requires normal OpenPGP
+verification. The older published 1.13.17 RPM predates package signing; testing
+that version requires an explicit `rpmSignature: "legacy-unsigned"` baseline.
+In disposable acceptance containers only, that old installer is rechecked against
+its pinned SHA-256 before the signature exception is applied. The receipt records
+the exception and hash. Never apply the exception to a signed baseline or a new
+candidate; installation, verification and upgrade require their signatures.
 
 ## Repository setup
 
@@ -89,6 +90,55 @@ digests. Publication still requires the independent protected Release workflow.
 When replacing old `release/X.Y.Z` branches, first preserve their published `vX.Y.Z` tags and verify that each branch's work is retained in `main`, the maintenance branch, or an explicitly named archive branch. Preserve unmerged work before deleting an obsolete branch. Delete only the obsolete branch refs and their exact branch-protection rules; retain the published tags, Releases, accepted assets, and active maintenance-branch protections.
 
 When preparing the public repository, reviewed source may be squashed into `public` without private development history, old tags or internal artifacts. The source exporter creates a ZIP from the committed tree, generates its manifest from the archived bytes, and verifies the archive before returning it. The manifest is not tracked in Git.
+
+## User-facing release notes
+
+For `client` and `all`, the `release-notes` job runs after preflight and before
+native builds. It compares the last published desktop ancestor release with the
+candidate commit, including merge commits, and sends only commit titles to the model
+(no commit bodies or file lists). Reviewed `docs/releases/X.Y.Z.json`
+content takes precedence; otherwise the job calls the configured OpenAI-compatible
+model. Configure secret `RELEASE_NOTES_API_KEY` and variables
+`RELEASE_NOTES_API_URL` (full chat-completions endpoint) and `RELEASE_NOTES_MODEL`.
+The request uses system/user messages and a 32768-token output budget (including thinking), without
+`reasoning_effort`. These credentials are supplied only to the generation step.
+Source-only and Hub-only diagnostic builds do not generate desktop notes.
+
+The JSON contains Chinese, English, Japanese and Korean prose with matching
+section/item IDs and commit provenance. Each version highlights only 3–5 important
+changes (fewer when appropriate), with one short sentence per item. The model cites
+only selected commits; the tool marks the rest as `not-highlighted`, without
+claiming they have no user impact. Ambiguous titles must not be expanded with
+invented details. User-facing prose must describe actual
+changes, without links, generic placeholders or copied release infrastructure
+metadata. Model errors, timeouts and invalid generated content produce an empty
+`status: unavailable` artifact and do not block packaging. Invalid explicitly
+reviewed input still fails validation. Empty notes preserve any existing bundled
+history and published Hub notes; they never become a links list or a fabricated
+summary. The missing content can be backfilled after editorial review.
+
+Every native build downloads the same immutable artifact ID, embeds the localized
+content, and records its digest in its acceptance receipt. Candidate verification
+requires matching digests and includes `release-notes.json` in the hashed release
+inventory. The draft body uses its English prose. Job retries reuse the original
+artifact, including an empty one; changing content requires a new candidate run
+or a separate presentation-only backfill. Publishing never regenerates notes.
+
+When deploying accepted installers to a Hub, consume `release-notes.json`, not
+GitHub's entire Release body. With a deployment-side admin token in environment
+variable `RELEASE_NOTES_HUB_TOKEN`, publish after enabling a matching installer:
+
+```sh
+python tools/github/publish_release_notes.py --file release-notes.json --hub https://hub.example.com
+```
+
+This updates only the version's localized presentation metadata with revision
+checking, then verifies the signed installer catalog is unchanged. An unavailable
+artifact is skipped. Do not copy Candidate markers, download links or checksums
+into signed `notes` as a fallback; use empty signed prose when no validated
+content exists. Keep Hub credentials outside GitHub build jobs. Existing versions
+can be backfilled from their reviewed JSON without rebuilding or resigning assets.
+The Hub records the first publication time of the localized metadata.
 
 ## Binary publication gates
 
