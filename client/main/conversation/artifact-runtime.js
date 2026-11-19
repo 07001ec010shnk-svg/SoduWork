@@ -448,7 +448,10 @@ async function action(session, ref, artifactId, rawAction, deps) {
         data: archive.base64, website: true,
         preview: { status: 'zip_only', reason: 'Website assets are packaged for safe preview in SoduWork' } };
     } catch (error) {
-      return { ok: false, reason: String(error && error.message || 'Website packaging failed') };
+      const reason = error?.code === 'ZIP_DEPTH_LIMIT'
+        ? require('../native-locale.cjs').translate('文件夹包含超过12层的文件，请将文件移近所选文件夹后重试')
+        : String(error && error.message || 'Website packaging failed');
+      return { ok: false, reason };
     }
   }
   if (actionName === 'share') {
