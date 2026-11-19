@@ -21,10 +21,12 @@ async function fixture(t, options = {}) {
   const file = path.resolve(__dirname, '../main/runner-runtime.js');
   const nativeRequire = createRequire(file), handlers = new Map(), children = [], timers = [];
   const secureIdentity = { hub: 'https://fixture.invalid', clientId: 'fixture-device', secret: 'fixture-device-secret-before' };
+  let session = options.noSession ? '' : 'fixture-session';
   if (options.existingConfig) {
     fs.mkdirSync(path.join(root, 'runner'), { recursive: true });
     fs.writeFileSync(path.join(root, 'runner', 'config.json'), JSON.stringify({
-      hub: secureIdentity.hub, clientId: secureIdentity.clientId,
+      hub: secureIdentity.hub, clientId: secureIdentity.clientId, ...options.savedIdentity,
+      ...(options.confirmed ? { activationConfirmed: true } : {}),
     }));
   }
   const client = options.sourceLayout ? path.join(root, 'application', 'client') : path.dirname(path.dirname(file));
@@ -69,17 +71,53 @@ async function fixture(t, options = {}) {
     } };
   vm.runInNewContext(fs.readFileSync(file, 'utf8'), context, { filename: file });
   context.module.exports.install({ app, ipcMain: { handle: (id, fn) => handlers.set(id, fn) },
-    identityOf: () => ({ ...secureIdentity }) });
+    identityOf: () => ({ ...secureIdentity }),
+    sessionOf: (_app, hub, clientId) => {
+      assert.equal(hub, secureIdentity.hub);
+      assert.equal(clientId, secureIdentity.clientId);
+      return session;
+    } });
   await Promise.resolve();
   const configure = () => handlers.get('runner-configure')(null, { hub: 'https://fixture.invalid', clientId: 'fixture-device' });
   if (!options.existingConfig) await configure();
   return { configure, children, timers, python, client,
+    activate: () => { session = 'fixture-session'; },
     setSecret: secret => { secureIdentity.secret = secret; },
     configText: () => fs.readFileSync(path.join(root, 'runner', 'config.json'), 'utf8'),
     status: () => handlers.get('runner-status')(), rpc: context.module.exports.rpc,
     mobile: context.module.exports.setMobileCapabilities,
     report: data => children.at(-1).stdout.emit('data', '@@SODUWORK_RUNNER_STATUS@@' + JSON.stringify(data) + '\n') };
 }
+
+for (const existingConfig of [false, true]) {
+  test(`pending device waits for login with ${existingConfig ? 'a legacy' : 'no'} Runner configuration`, async t => {
+    const f = await fixture(t, { existingConfig, noSession: true });
+    await f.configure();
+    await f.configure();
+    assert.equal(f.children.length, 0);
+    assert.equal(f.timers.length, 0);
+    f.activate();
+    await f.configure();
+    f.report({ state: 'online' });
+    await f.configure();
+    assert.equal(f.children.length, 1);
+    assert.equal(f.status().connected, true);
+    assert.equal(JSON.parse(f.configText()).activationConfirmed, true);
+  });
+}
+
+test('a previously activated device starts on cold boot while the Hub session is offline', async t => {
+  const f = await fixture(t, { existingConfig: true, confirmed: true, noSession: true });
+  assert.equal(f.children.length, 1);
+});
+
+test('a saved activation cannot start a different Hub or device before login', async t => {
+  for (const savedIdentity of [{ hub: 'https://other.invalid' }, { clientId: 'other-device' }]) {
+    const f = await fixture(t, { existingConfig: true, confirmed: true, noSession: true, savedIdentity });
+    await f.configure();
+    assert.equal(f.children.length, 0);
+  }
+});
 
 test('unchanged secure identity and configuration keep the current Runner', async t => {
   const f = await fixture(t), child = f.children.at(-1);

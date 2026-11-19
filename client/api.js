@@ -3221,8 +3221,6 @@
         var wr = (typeof workRoot === 'function') ? String(workRoot() || '').trim() : '';
         if (wr) body.workRoot = wr;
       } catch (e) { /* A missing workspace value must not prevent registration. */ }
-      /* Start the Runner with an existing local secret while Hub is offline; refresh after initial registration and let it reconnect. */
-      await syncRunnerConfig(body.workRoot || '', registration);
       try {
         if (window.soduWorkAPI && window.soduWorkAPI.deviceAuthBootstrap) {
           var secure = await registration.step(function () { return window.soduWorkAPI.deviceAuthBootstrap({
@@ -3246,7 +3244,9 @@
               rememberLoginAccount(loginAccount(secure.user.email) || loginAccount(secure.user.username), secure);
             }
             rememberSession(secure);
-            await syncRunnerConfig(body.workRoot || '', registration);
+            if (secure.ok && secure.session && !secure.activationRequired) {
+              await syncRunnerConfig(body.workRoot || '', registration);
+            }
             registration.check();
             if (secure.ok) mark(true);
             return secure;
@@ -3259,7 +3259,7 @@
         }
         var r = await registration.step(function () { return jfetch('/clients/register', { method: 'POST', body: JSON.stringify(body) }); });
         if (r && r.secret) setSecret(r.secret);  // Persist the initial device binding for subsequent requests.
-        await syncRunnerConfig(body.workRoot || '', registration);
+        if (r?.authState === 'active') await syncRunnerConfig(body.workRoot || '', registration);
         registration.check();
         mark(true); return r;
       }

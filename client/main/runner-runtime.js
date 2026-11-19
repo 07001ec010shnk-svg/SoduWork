@@ -18,6 +18,7 @@ let _connectionState = 'stopped';
 let _lastConfig = '';
 let _processCredential = '';
 let _identityOf = null;
+let _sessionOf = null;
 const _ownedRunners = new Map();
 const _runnerStops = new Set();
 const LOCAL_RPC_PREFIX = '@@SODUWORK_LOCAL_RPC@@';
@@ -236,6 +237,17 @@ function _stored(cfg) {
     capabilityGrants: cfg.capabilityGrants, dataRoot: cfg.dataRoot };
 }
 
+function _activationConfirmed(app, saved, id) {
+  // Old configurations could be written before first login. Once Hub has issued
+  // a session for this device, it can also start offline on later desktop boots.
+  return (saved.activationConfirmed === true && saved.hub === id.hub && saved.clientId === id.clientId)
+    || !!_sessionOf(app, id.hub, id.clientId);
+}
+
+function _encodeConfig(cfg) {
+  return JSON.stringify({ ..._stored(cfg), activationConfirmed: true });
+}
+
 function _credentialFingerprint(cfg) {
   // Credentials are injected only at spawn. Keep this comparison in memory:
   // the persisted configuration deliberately excludes the device secret.
@@ -294,9 +306,10 @@ function _readConfig(app) {
     const raw = JSON.parse(encodedFile);
     const migrated = _migrateRaw(raw);
     const id = _identityOf ? _identityOf(app, raw.hub, raw.clientId) : null;
+    if (id && !_activationConfirmed(app, raw, id)) return null;
     const clean = _clean(migrated, path.join(_dir(app), 'data'), id);
     _prepareWorkRoot(clean.workRoot);
-    const encoded = JSON.stringify(_stored(clean));
+    const encoded = _encodeConfig(clean);
     /*
      * Persist configuration migrations before spawning Runner. Updating only memory can let it
      * register stale settings while later comparisons incorrectly suppress restart.
@@ -528,12 +541,16 @@ function pauseForHubChange() {
 
 function _applyConfig(app, raw) {
   try {
-    const merged = _mergeRaw(_migrateRaw(_rawConfig(app)), raw);
+    const saved = _rawConfig(app);
+    const merged = _mergeRaw(_migrateRaw(saved), raw);
     const id = _identityOf
       ? _identityOf(app, merged && merged.hub, merged && merged.clientId) : null;
+    if (id && !_activationConfirmed(app, saved, id)) {
+      return { ok: false, running: false, error: '请先登录以激活本机 Runner。' };
+    }
     const cfg = _clean(merged, path.join(_dir(app), 'data'), id);
     _prepareWorkRoot(cfg.workRoot);
-    const encoded = JSON.stringify(_stored(cfg));
+    const encoded = _encodeConfig(cfg);
     _writeConfig(app, encoded);
     _wanted = true;
     if (encoded !== _lastConfig || (_proc && _processCredential !== _credentialFingerprint(cfg))) {
@@ -554,8 +571,9 @@ function _applyConfig(app, raw) {
   }
 }
 
-function install({ app, ipcMain, identityOf }) {
+function install({ app, ipcMain, identityOf, sessionOf }) {
   _identityOf = identityOf || null;
+  _sessionOf = sessionOf;
   ipcMain.handle('runner-configure', async (_event, raw) => _applyConfig(app, raw || {}));
   ipcMain.handle('runner-capability-set', async (event, rawKey, enabled) => {
     const key = String(rawKey || '').trim().toLowerCase();
@@ -618,7 +636,7 @@ function install({ app, ipcMain, identityOf }) {
   app.whenReady().then(() => {
     const cfg = _readConfig(app);
     if (cfg) {
-      _lastConfig = JSON.stringify(_stored(cfg));
+      _lastConfig = _encodeConfig(cfg);
       _wanted = true;
       _start(app);
     }
