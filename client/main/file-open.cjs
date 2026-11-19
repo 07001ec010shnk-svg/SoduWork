@@ -63,7 +63,7 @@ function relaunchArgs(argv, files) {
   return [...args, RELAUNCH_FILES, JSON.stringify(normalizeFiles(files))];
 }
 
-function instanceFiles(argv, cwd, packaged = true, additionalData, appPath) {
+function instanceFiles(argv, cwd, packaged = true, additionalData) {
   if (additionalData && Object.prototype.hasOwnProperty.call(additionalData, 'soduworkOpenFiles')) {
     const request = additionalData.soduworkOpenFiles;
     if (request?.version !== 1 || !Array.isArray(request.files)) return [];
@@ -71,7 +71,7 @@ function instanceFiles(argv, cwd, packaged = true, additionalData, appPath) {
   }
   // Keep the legacy path conservative: never guess which trailing argument is
   // the user's file rather than an Electron entry point or a profile directory.
-  return commandFiles(argv, cwd, packaged, appPath);
+  return commandFiles(argv, cwd, packaged);
 }
 
 function create(deps) {

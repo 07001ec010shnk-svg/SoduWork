@@ -30,12 +30,12 @@ test('launch arguments preserve Unicode, spaces and metacharacters without shell
 });
 
 test('source launch switches before the known application entry never queue that entry as a file', () => {
-  const entry = path.resolve('source-app'), file = path.resolve('report.html');
+  const entry = path.resolve(__dirname, '..'), file = path.resolve('report.html');
   assert.deepEqual(commandFiles(['electron', '--inspect=9222', entry], process.cwd(), false, entry), []);
   assert.deepEqual(commandFiles(['electron', '--inspect=9222', entry, file], process.cwd(), false, entry), [file]);
   assert.deepEqual(instanceData(['electron', '--inspect=9222', entry, file], process.cwd(), false, entry),
     { soduworkOpenFiles: { version: 1, files: [file] } });
-  assert.deepEqual(instanceFiles(['electron', '--inspect=9222', entry, file], process.cwd(), false, undefined, entry), [file]);
+  assert.deepEqual(instanceFiles(['electron', '--inspect=9222', entry, file], process.cwd(), false), [file]);
 });
 
 test('source instance capture recognizes both loaded application entries without extra caller arguments', () => {
@@ -85,9 +85,9 @@ test('source entry filtering preserves relaunch handoffs and never reopens an ea
     assert.deepEqual(commandFiles(handoff, process.cwd(), false, root), expected);
     assert.deepEqual(instanceData(handoff, process.cwd(), false, root),
       { soduworkOpenFiles: { version: 1, files: expected } });
-    assert.deepEqual(instanceFiles(handoff, process.cwd(), false, undefined, root), expected);
+    assert.deepEqual(instanceFiles(handoff, process.cwd(), false), expected);
     assert.deepEqual(instanceFiles(argv, process.cwd(), false,
-      instanceData(handoff, process.cwd(), false, root), root), expected);
+      instanceData(handoff, process.cwd(), false, root)), expected);
   }
   assert.deepEqual(commandFiles([...argv, '--soduwork-relaunch-files', '{'], process.cwd(), false, root), []);
 });
