@@ -60,6 +60,22 @@ test('the installed source file broker uses its actual application entry when co
   assert.equal(await fs.readFile(result.file.path, 'utf8'), '<h1>Exact user file</h1>');
 });
 
+test('a source broker given the application directory also excludes its package main script', async t => {
+  const h = await setup(t), file = path.join(h.root, 'report.html');
+  const root = path.resolve(__dirname, '..'), entry = path.resolve(root, require('../package.json').main);
+  h.app.getAppPath = () => root;
+  await fs.writeFile(file, '<h1>Source script launch</h1>');
+  assert.equal(h.broker.fromCommand(['electron', '--inspect=9222', entry], process.cwd()), 0);
+  assert.equal(h.broker.fromCommand(['electron', '--inspect=9222', entry, file], process.cwd()), 1);
+  const list = await h.call('list');
+  assert.deepEqual(list.items.map(row => row.name), ['report.html']);
+  const result = await h.call('claim', list.items[0].id);
+  assert.equal(result.ok, true);
+  assert.notEqual(result.file.path, file);
+  assert.equal(await fs.readFile(result.file.path, 'utf8'), '<h1>Source script launch</h1>');
+  assert.equal(await fs.readFile(file, 'utf8'), '<h1>Source script launch</h1>');
+});
+
 test('source entry filtering preserves relaunch handoffs and never reopens an earlier file', () => {
   const root = path.resolve(__dirname, '..'), entry = path.resolve(root, require('../package.json').main);
   const old = path.resolve('earlier.html'), current = path.resolve('材料 & current.html');

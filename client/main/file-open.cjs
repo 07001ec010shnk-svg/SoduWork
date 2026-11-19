@@ -25,7 +25,8 @@ function commandFiles(argv, cwd, packaged = true, appPath) {
   // identifies its application root and package-declared script; native callers
   // can supply their exact entry without changing the launch-envelope format.
   const root = path.resolve(__dirname, '..');
-  const entries = appPath ? [path.resolve(appPath)] : [root, path.resolve(root, require('../package.json').main)];
+  const entries = [root, path.resolve(root, require('../package.json').main)];
+  if (appPath) entries.push(path.resolve(appPath));
   const sourceEntry = !packaged ? args.findIndex((value, index) =>
     index > 0 && value && entries.includes(path.resolve(cwd || process.cwd(), String(value)))) : -1;
   const candidates = explicit >= 0 ? args.slice(explicit + 1, explicit + 2)
