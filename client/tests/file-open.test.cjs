@@ -2,7 +2,7 @@
 const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs/promises'), path = require('node:path'), os = require('node:os');
 const { EventEmitter } = require('node:events'), { pathToFileURL } = require('node:url');
-const { commandFiles, instanceData, instanceFiles, create, MAX_BYTES } = require('../main/file-open.cjs');
+const { commandFiles, instanceData, instanceFiles, relaunchArgs, create, MAX_BYTES } = require('../main/file-open.cjs');
 const artifactRuntime = require('../main/conversation/artifact-runtime');
 async function setup(t) {
   // Match the OS-resolved spelling (e.g. Windows TEMP versus Temp).
@@ -58,6 +58,22 @@ test('the installed source file broker uses its actual application entry when co
   const result = await h.call('claim', list.items[0].id);
   assert.equal(result.ok, true);
   assert.equal(await fs.readFile(result.file.path, 'utf8'), '<h1>Exact user file</h1>');
+});
+
+test('source entry filtering preserves relaunch handoffs and never reopens an earlier file', () => {
+  const root = path.resolve(__dirname, '..'), entry = path.resolve(root, require('../package.json').main);
+  const old = path.resolve('earlier.html'), current = path.resolve('材料 & current.html');
+  const argv = ['electron', '--inspect=9222', entry, '--soduwork-open-file', old];
+  for (const expected of [[current], []]) {
+    const handoff = ['electron', ...relaunchArgs(argv, expected)];
+    assert.deepEqual(commandFiles(handoff, process.cwd(), false, root), expected);
+    assert.deepEqual(instanceData(handoff, process.cwd(), false, root),
+      { soduworkOpenFiles: { version: 1, files: expected } });
+    assert.deepEqual(instanceFiles(handoff, process.cwd(), false, undefined, root), expected);
+    assert.deepEqual(instanceFiles(argv, process.cwd(), false,
+      instanceData(handoff, process.cwd(), false, root), root), expected);
+  }
+  assert.deepEqual(commandFiles([...argv, '--soduwork-relaunch-files', '{'], process.cwd(), false, root), []);
 });
 
 test('second-instance preserves the requested file when Chromium reorders switches', () => {
