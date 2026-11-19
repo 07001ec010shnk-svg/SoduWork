@@ -15,7 +15,7 @@ class InstallationDiscoveryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
 
     def package(self, root, version):
         directory = root / '@openma/deepseek-harness-acp'
@@ -323,7 +323,10 @@ class InstallationDiscoveryTests(unittest.TestCase):
             self.skipTest('requires a compatible native Node')
         entry = self.package(self.root / 'external/node_modules', '0.4.41')
         entry.write_text("const c=require('node:child_process').spawnSync('node',['-p','process.execPath'],{encoding:'utf8'});"
-                         "console.log(JSON.stringify({status:c.status,child:c.stdout,error:c.error?.code}));")
+                         "const canonical=p=>{const r=require('node:fs').realpathSync(p);"
+                         "return process.platform==='win32'?r.toLowerCase():r;};"
+                         "console.log(JSON.stringify({status:c.status,sameNode:c.status===0&&"
+                         "canonical(c.stdout.trim())===canonical(process.execPath)}));")
         profile = {'acp_key': 'path-fixture', 'bin': lambda: str(entry), 'needs_llm': False}
         with patch.dict(acp_agents.CATALOG, {'path-fixture': {'pkg': '@openma/deepseek-harness-acp'}}), \
                 patch.dict(os.environ, {'PATH': ''}), \
@@ -336,10 +339,10 @@ class InstallationDiscoveryTests(unittest.TestCase):
             from app.services.agent_setup_runtime import _short
             probe_output = json.loads(_short(node, [str(entry)], timeout=5))
             self.assertEqual(probe_output['status'], 0, probe_output)
+            self.assertTrue(probe_output['sameNode'], probe_output)
         output = json.loads(result.stdout)
         self.assertEqual(output['status'], 0, output)
-        self.assertEqual(os.path.normcase(os.path.realpath(output['child'].strip())),
-                         os.path.normcase(os.path.realpath(node)))
+        self.assertTrue(output['sameNode'], output)
 
     def test_windows_external_discovery_ignores_extensionless_shell_shim(self):
         entry = self.package(self.root / 'external/node_modules', '0.4.41')
@@ -404,6 +407,32 @@ class InstallationDiscoveryTests(unittest.TestCase):
             binary.write_text(binary.read_text() + '\necho custom-post-hook\n')
             with self.subTest(kind=kind, custom=True), patch.object(N, 'node_env', side_effect=AssertionError('customized template must stay intact')):
                 self.assertEqual(acp_agents.executable_command('dsh', str(binary)), [str(binary)])
+
+    def test_npm_shims_under_directory_alias_keep_selected_package_identity(self):
+        from app.services.agent_installation import selected_manifest, selected_node_entry
+        prefix = self.root / 'real-prefix'
+        entry = self.package(prefix / 'node_modules', '0.4.41')
+        alias = self.root / 'aliased-prefix'
+        if os.name == 'nt':
+            import _winapi
+            _winapi.CreateJunction(str(prefix), str(alias))
+            self.addCleanup(alias.rmdir)
+        else:
+            alias.symlink_to(prefix, target_is_directory=True)
+            self.addCleanup(alias.unlink)
+        aliased_entry = alias / entry.relative_to(prefix)
+        self.assertNotEqual(str(aliased_entry.absolute()), str(aliased_entry.resolve()))
+        for kind, suffix in (('cmd', '.cmd'), ('sh', ''), ('ps1', '.ps1')):
+            binary = alias / ('dsh-acp' + suffix)
+            self.npm_shim(binary, aliased_entry, kind)
+            with self.subTest(kind=kind):
+                manifest = selected_manifest('@openma/deepseek-harness-acp', str(binary))
+                self.assertTrue(manifest)
+                self.assertEqual(Path(manifest).resolve(), entry.with_name('package.json').resolve())
+                self.assertEqual(selected_node_entry('@openma/deepseek-harness-acp', str(binary)),
+                                 (str(entry.resolve()), '>=22.15.0'))
+                binary.write_text(binary.read_text() + '\necho custom-post-hook\n')
+                self.assertEqual(selected_node_entry('@openma/deepseek-harness-acp', str(binary)), ('', ''))
 
     def test_direct_js_preserves_shebang_flags_interpreters_and_bom(self):
         entry = self.package(self.root / 'external/node_modules', '0.4.41')

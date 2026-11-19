@@ -83,7 +83,7 @@ def _shim_references(shim: Path, target: Path) -> bool:
         if shim.suffix.lower() not in {'.cmd', '.ps1'} and not content.startswith(b'#!'):
             return False
         text = content.decode('utf8').replace('\\', '/')
-        relative = os.path.relpath(target, shim.parent).replace('\\', '/')
+        relative = os.path.relpath(target, shim.parent.resolve()).replace('\\', '/')
         return any('"' + prefix + relative + '"' in text
                    for prefix in ('%dp0%/', '$basedir/', '${basedir}/'))
     except (OSError, UnicodeError, ValueError):
@@ -104,7 +104,7 @@ def _standard_npm_shim(shim: Path, target: Path) -> bool:
         if len(content) > 65536:
             return False
         text = content.decode('utf8').replace('\r\n', '\n')
-        relative = os.path.relpath(target, shim.parent).replace('\\', '/')
+        relative = os.path.relpath(target, shim.parent.resolve()).replace('\\', '/')
         tokens = ('"%dp0%\\' + relative.replace('/', '\\') + '"',
                   '"$basedir/' + relative + '"')
         for token in tokens:
