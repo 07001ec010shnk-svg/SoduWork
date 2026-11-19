@@ -9,6 +9,15 @@ on:
         options: [all, 1.13.17, 1.13.18, 1.13.19]
         default: all
         required: true
+      model:
+        description: Optional model override; otherwise use RELEASE_NOTES_MODEL
+        type: string
+      api_url:
+        description: Optional endpoint override; otherwise use RELEASE_NOTES_API_URL
+        type: string
+      api_key_secret:
+        description: Optional secret name override; never enter the key itself
+        type: string
 
 permissions:
   contents: read
@@ -30,9 +39,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_NOTES_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          RELEASE_NOTES_API_URL: https://openrouter.ai/api/v1/chat/completions
-          RELEASE_NOTES_MODEL: google/gemma-4-26b-a4b-it:free
+          RELEASE_NOTES_API_KEY: ${{ secrets[inputs.api_key_secret || vars.RELEASE_NOTES_API_KEY_SECRET || 'RELEASE_NOTES_API_KEY'] }}
+          RELEASE_NOTES_API_URL: ${{ inputs.api_url || vars.RELEASE_NOTES_API_URL }}
+          RELEASE_NOTES_MODEL: ${{ inputs.model || vars.RELEASE_NOTES_MODEL }}
           PYTHONUNBUFFERED: '1'
         run: |
           python - <<'PY'
@@ -68,6 +77,7 @@ jobs:
           """
 
           model = os.environ['RELEASE_NOTES_MODEL']
+          assert os.environ['RELEASE_NOTES_API_URL'] == 'https://openrouter.ai/api/v1/chat/completions'
           with urllib.request.urlopen('https://openrouter.ai/api/v1/models', timeout=30) as response:
               catalog = json.load(response)['data']
           entry = next(row for row in catalog if row['id'] == model)
@@ -122,7 +132,12 @@ jobs:
                           'response_format', 'max_tokens', 'stream', 'thinking',
                           'unauthorized', 'forbidden', 'quota', 'rate limit',
                           'not found', 'overload', 'model', 'api key', 'invalid',
-                          'privacy', 'data policy', 'provider', 'endpoint', 'unsupported') if term in body]
+                          'privacy', 'data policy', 'provider', 'endpoint', 'unsupported',
+                          'upstream', 'temporarily rate-limited', 'daily', 'per-day',
+                          'per-minute', 'free-models-per-day') if term in body]
+                      row['rateLimitHeaders'] = {name.lower(): value for name, value in error.headers.items()
+                          if (name.lower().startswith('x-ratelimit-') or name.lower() == 'retry-after')
+                          and value.isdigit()}
                   if isinstance(error, urllib.error.URLError):
                       row['transportReasonType'] = type(error.reason).__name__
                   row['locations'] = [f'{Path(frame.filename).name}:{frame.lineno}'
@@ -164,6 +179,30 @@ jobs:
           root = Path.cwd()
           evidence_dir = root / 'release-evidence'
           evidence_dir.mkdir(exist_ok=True)
+          account_checks = []
+          def check_account_limits(stage):
+              row = {'stage': stage}
+              try:
+                  request = urllib.request.Request('https://openrouter.ai/api/v1/key',
+                      headers={'Authorization': 'Bearer ' + os.environ['RELEASE_NOTES_API_KEY']})
+                  class NoRedirect(urllib.request.HTTPRedirectHandler):
+                      def redirect_request(self, *args, **kwargs):
+                          return None
+                  with original_opener(NoRedirect).open(request, timeout=30) as response:
+                      data = json.load(response)['data']
+                  if isinstance(data.get('is_free_tier'), bool):
+                      row['isFreeTier'] = data['is_free_tier']
+                  daily = data.get('free_model_daily_requests') or {}
+                  row['freeModelDailyRequests'] = {name: daily[name] for name in ('used', 'limit', 'remaining')
+                      if isinstance(daily.get(name), int)}
+              except Exception as error:
+                  row['exception'] = type(error).__name__
+                  if isinstance(error, urllib.error.HTTPError):
+                      row['httpStatus'] = error.code
+              account_checks.append(row)
+              print(json.dumps(row), flush=True)
+              (evidence_dir / 'account-limits.json').write_text(json.dumps(account_checks, indent=2), encoding='utf-8')
+          check_account_limits('account-before')
           for version in versions:
               assert version in ['1.13.17', '1.13.18', '1.13.19']
               active = {'version': version, 'model': model, 'promptVariant': 'user-focused-v3'}
@@ -191,6 +230,7 @@ jobs:
                       subprocess.run(['git', 'worktree', 'remove', str(source)], check=True)
                       (evidence_dir / 'metrics.json').write_text(json.dumps(metrics, indent=2), encoding='utf-8')
               assert not active.get('usage', {}).get('cost', 0), 'Expected a free model response'
+          check_account_limits('account-after')
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
