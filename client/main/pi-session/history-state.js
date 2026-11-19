@@ -1,4 +1,6 @@
 'use strict';
+const turnOutcome = require('./turn-outcome');
+const goalFinalizer = require('../conversation/goal-finalizer');
 
 /* Conversation history is a projection of persisted rows plus live handles.
    Keeping it outside session.js prevents UI presence from leaking into runtime. */
@@ -17,17 +19,53 @@ function presenceState(status) {
    must not be presented as completed. Live handles override this state. */
 function archivedTurnState(entries) {
   const stored = Array.isArray(entries) ? entries : [];
+  const lastUser = stored.findLastIndex(entry => entry?.type === 'message' && entry.message?.role === 'user');
+  const user = lastUser >= 0 ? require('../conversation/message-time').storedMessage(stored[lastUser]) : null;
+  if (user && stored.slice(lastUser + 1).some(entry => entry?.type === 'custom' &&
+      entry.customType === turnOutcome.ENTRY_TYPE && entry.data?.kind === 'stopped' &&
+      (!entry.data.submissionId || entry.data.submissionId === user.submissionId) &&
+      (!entry.data.sentAt || entry.data.sentAt === user.sentAt))) return 'aborted';
   for (let index = stored.length - 1; index >= 0; index -= 1) {
+    if (stored[index]?.customType === goalFinalizer.ENTRY_TYPE &&
+        goalFinalizer.fromEntries([stored[index]])) return 'idle';
     const message = stored[index]?.type === 'message' && stored[index].message;
     if (!message) continue;
     if (message.role === 'assistant') {
       if (message.stopReason === 'toolUse') return 'interrupted';
       if (message.stopReason === 'aborted') return 'aborted';
+      if (message.stopReason === 'error') return 'unreachable';
+      if (message.stopReason === 'length') return 'incomplete';
       return 'idle';
     }
     if (message.role === 'toolResult' || message.role === 'user') return 'interrupted';
   }
   return 'idle';
+}
+
+// The incremental archive index deliberately does not retain message bodies.
+// Keep just enough terminal metadata to use the same classifier on real files.
+function archiveTurn() {
+  let user = null, last = null, stopped = null;
+  return {
+    observe(entry) {
+      if (entry?.type === 'message') {
+        const message = entry.message;
+        if (!['user', 'assistant', 'toolResult'].includes(message?.role)) return;
+        if (message.role === 'user') {
+          const stored = require('../conversation/message-time').storedMessage(entry);
+          user = { type: 'message', message: { role: 'user', sentAt: stored.sentAt, submissionId: stored.submissionId } };
+          stopped = null;
+        }
+        last = { type: 'message', message: { role: message.role, stopReason: message.stopReason } };
+      } else if (entry?.customType === turnOutcome.ENTRY_TYPE && entry.data?.kind === 'stopped') {
+        stopped = { type: 'custom', customType: turnOutcome.ENTRY_TYPE, data: {
+          kind: 'stopped', sentAt: entry.data.sentAt, submissionId: entry.data.submissionId } };
+      } else if (entry?.customType === goalFinalizer.ENTRY_TYPE && goalFinalizer.fromEntries([entry])) {
+        last = { type: 'message', message: { role: 'assistant', stopReason: 'stop' } }; stopped = null;
+      }
+    },
+    state() { return archivedTurnState([user, last?.message.role === 'user' ? null : last, stopped].filter(Boolean)); },
+  };
 }
 
 function messageTitle(snapshot) {
@@ -74,4 +112,4 @@ function mergeHistory(diskRows, handles, limit) {
     .slice(0, Math.max(1, Number(limit) || 20));
 }
 
-module.exports = { presenceState, archivedTurnState, messageTitle, originalMessageTitle, mergeHistory };
+module.exports = { presenceState, archivedTurnState, archiveTurn, messageTitle, originalMessageTitle, mergeHistory };

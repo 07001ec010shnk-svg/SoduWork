@@ -1,5 +1,8 @@
 (function (global) {
   const messages = {
+    "你已停止": "You stopped",
+    "你在 {seconds} 秒后停止了": "You stopped after {seconds} seconds",
+    "本轮已中断": "This turn was interrupted",
     "编辑 Markdown": "Edit Markdown",
     "始终允许": "Always allow",
     "内容由 AI 生成，请核实重要信息": "AI-generated content; please verify important information",

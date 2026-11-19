@@ -62,7 +62,7 @@ test('archived turns cut off before the model finished are not completed', () =>
 test('archived turns that ended normally or were stopped keep their state', () => {
   const user = message('user');
   assert.equal(historyState.archivedTurnState([user, message('assistant', { stopReason: 'stop' })]), 'idle');
-  assert.equal(historyState.archivedTurnState([user, message('assistant', { stopReason: 'error' })]), 'idle');
+  assert.equal(historyState.archivedTurnState([user, message('assistant', { stopReason: 'error' })]), 'unreachable');
   assert.equal(historyState.archivedTurnState([user, message('assistant', { stopReason: 'aborted' })]), 'aborted');
   assert.equal(historyState.archivedTurnState([]), 'idle');
   assert.equal(historyState.archivedTurnState(null), 'idle');
@@ -81,5 +81,5 @@ test('the sidebar shows interrupted archives as stopped, never completed', () =>
 
 test('session history rows carry the archived turn state', () => {
   const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'main', 'pi-session', 'session.js'), 'utf8');
-  assert.match(source, /archivedTurnState\(entries\) === 'interrupted' \? \{ state: 'interrupted' \}/);
+  assert.match(source, /archivedState !== 'idle' \? \{ state: archivedState === 'interrupted' \? 'interrupted'/);
 });

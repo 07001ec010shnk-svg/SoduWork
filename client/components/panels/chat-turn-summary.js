@@ -36,6 +36,7 @@
         (Number(tool.after) || 0) >= from && (Number(tool.after) || 0) <= to)) return;
       const absolute = owner(snap, index);
       const metric = (snap.turnMetrics || []).find(row => row.fromMessage <= absolute && row.toMessage >= absolute);
+      if (metric?.outcome) return;
       const start = messages[from]?.role === 'user' ? epoch(messages[from].sentAt) : NaN;
       const end = epoch(message.completedAt);
       const wallTime = Number.isFinite(start) && start > 0 && Number.isFinite(end) && end >= start ? end - start : null;
@@ -50,6 +51,17 @@
         wallTime: !latestCloud && !Number.isFinite(metric?.elapsedMs),
       });
     });
+    for (const metric of snap.turnMetrics || []) {
+      if (!['stopped', 'interrupted'].includes(metric.outcome)) continue;
+      const indices = messages.map((_, index) => index).filter(index =>
+        owner(snap, index) >= metric.fromMessage && owner(snap, index) <= metric.toMessage);
+      if (!indices.length) continue;
+      const to = indices.at(-1);
+      // A pending followup may start before its user message is echoed. The
+      // previous turn's receipt remains historical even while the chat is busy.
+      turns.push({ key: 'outcome:' + metric.fromMessage, from: indices[0], to,
+        outcome: metric.outcome, elapsedMs: metric.elapsedMs, finalIndex: -1, lastToolBlock: -1 });
+    }
     return turns;
   }
   function create(ctx) {
@@ -69,6 +81,14 @@
       return byIndex;
     }
     function html(turn, currentMetrics) {
+      if (turn.outcome) {
+        const text = turn.outcome === 'stopped'
+          ? Number.isFinite(turn.elapsedMs)
+            ? tx('你在 {seconds} 秒后停止了').replace('{seconds}', String(Math.floor(turn.elapsedMs / 1000)))
+            : tx('你已停止')
+          : tx('本轮已中断');
+        return '<div class="nturn-outcome" data-chat-node="turn-summary:' + ctx.esc(turn.key) + '">' + ctx.esc(text) + '</div>';
+      }
       const open = expanded.has(turn.key);
       const label = ctx.esc(tx(open ? '收起过程' : '展开过程'));
       // A completed turn owns immutable timing, including after switching or
@@ -115,7 +135,7 @@
         const index = message ? Number(message[1]) : tools ? Number(tools[1]) :
           /^(?:(?:tools|process):tail|goal-progress:)/.test(key) ? (ctx._snap?.messages?.length || 1) - 1 : -1;
         const turn = byIndex.get(index);
-        if (!turn || expanded.has(turn.key) || row.classList.contains('user')) continue;
+        if (!turn || turn.outcome || expanded.has(turn.key) || row.classList.contains('user')) continue;
         if (message) {
           row.querySelectorAll(':scope > .nthink').forEach(hide);
           row.querySelectorAll(':scope > .ntext').forEach(node => {
