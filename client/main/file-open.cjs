@@ -10,10 +10,16 @@ const { pipeline } = require('node:stream/promises');
 const { Transform } = require('node:stream');
 const { createReadStream, createWriteStream } = require('node:fs');
 const MAX_BYTES = 256 * 1024 * 1024;
+const RELAUNCH_FILES = '--soduwork-relaunch-files';
 const PREVIEW = /\.(?:html?|pdf|md|markdown|txt|csv|json|ya?ml|xml|js|jsx|ts|tsx|css|scss|py|java|go|rs|sql|sh|ps1|png|jpe?g|gif|webp|svg|mp4|m4v|webm|mov|ogv)$/i;
 
 function commandFiles(argv, cwd, packaged = true) {
   const args = Array.isArray(argv) ? argv : [];
+  const handoff = args.indexOf(RELAUNCH_FILES);
+  if (handoff >= 0) {
+    try { return normalizeFiles(JSON.parse(args[handoff + 1])); }
+    catch { return []; }
+  }
   const explicit = args.indexOf('--soduwork-open-file');
   const candidates = explicit >= 0 ? args.slice(explicit + 1, explicit + 2)
     : args.slice(packaged ? 1 : 2).filter(value => path.isAbsolute(String(value)));
@@ -32,12 +38,28 @@ function instanceData(argv, cwd, packaged = true) {
   return { soduworkOpenFiles: { version: 1, files: commandFiles(argv, cwd, packaged) } };
 }
 
+function normalizeFiles(files) {
+  if (!Array.isArray(files)) return [];
+  return [...new Set(files.slice(0, 20).filter(file =>
+    typeof file === 'string' && path.isAbsolute(file) && !/[\x00-\x1f]/.test(file)))];
+}
+
+// Preserve this process's startup/profile switches, but replace any previous
+// handoff. Even an empty list must override files from the original launch.
+function relaunchArgs(argv, files) {
+  const args = [];
+  for (let i = 1; i < argv.length; i++) {
+    if (argv[i] === RELAUNCH_FILES) { i++; continue; }
+    args.push(argv[i]);
+  }
+  return [...args, RELAUNCH_FILES, JSON.stringify(normalizeFiles(files))];
+}
+
 function instanceFiles(argv, cwd, packaged = true, additionalData) {
   if (additionalData && Object.prototype.hasOwnProperty.call(additionalData, 'soduworkOpenFiles')) {
     const request = additionalData.soduworkOpenFiles;
     if (request?.version !== 1 || !Array.isArray(request.files)) return [];
-    return [...new Set(request.files.slice(0, 20).filter(file =>
-      typeof file === 'string' && path.isAbsolute(file) && !/[\x00-\x1f]/.test(file)))];
+    return normalizeFiles(request.files);
   }
   // Keep the legacy path conservative: never guess which trailing argument is
   // the user's file rather than an Electron entry point or a profile directory.
@@ -67,6 +89,8 @@ function create(deps) {
     if (win && !win.isDestroyed()) win.webContents.send('file-open-pending');
   };
   function enqueue(files) {
+    // The existing quit policy owns handoff; this broker must not reveal an exiting workspace.
+    if (deps.deferLaunch?.(files)) return 0;
     for (const value of files || []) {
       const file = String(value || '');
       if (!file || !path.isAbsolute(file) || /[\x00-\x1f]/.test(file)) continue;
@@ -151,4 +175,4 @@ function create(deps) {
   return { enqueue, signal, fromCommand: (argv, cwd) => enqueue(commandFiles(argv, cwd, app.isPackaged)) };
 }
 
-module.exports = { create, commandFiles, instanceData, instanceFiles, PREVIEW, MAX_BYTES };
+module.exports = { create, commandFiles, instanceData, instanceFiles, relaunchArgs, normalizeFiles, PREVIEW, MAX_BYTES };
