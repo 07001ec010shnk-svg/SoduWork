@@ -1,293 +1,99 @@
-name: Draft release
+name: Release notes diagnostics
 
 on:
   workflow_dispatch:
     inputs:
-      component:
-        description: all builds Client and Hub together; source/client/hub are diagnostic subsets
-        type: choice
-        options: [all, source, client, hub]
-        default: all
-        required: true
       version:
-        description: Unified version X.Y.Z from the protected release/X.Y.x maintenance branch
+        description: Release version whose commit titles are being diagnosed
         type: string
         required: true
 
 permissions:
   contents: read
 
-concurrency:
-  group: draft-release-${{ github.ref }}
-  cancel-in-progress: false
-
-env:
-  RELEASE_COMPONENT: ${{ inputs.component }}
-  RELEASE_VERSION: ${{ inputs.version }}
-  PUBLIC_RELEASE_REPOSITORY: ${{ vars.PUBLIC_RELEASE_REPOSITORY }}
-  GITHUB_REF_PROTECTED: ${{ github.ref_protected }}
-  PYTHONUTF8: '1'
-
 jobs:
-  preflight:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-      - run: python tools/github/release.py preflight
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  release-notes:
-    needs: preflight
-    if: inputs.component == 'client' || inputs.component == 'all'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      artifact-id: ${{ steps.notes.outputs.artifact-id || steps.generate.outputs.artifact-id }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 0
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-      - name: Generate and validate user-facing release notes once
-        id: generate
-        run: python tools/github/release_notes.py generate
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_NOTES_API_KEY: ${{ secrets.RELEASE_NOTES_API_KEY }}
-          RELEASE_NOTES_API_URL: ${{ vars.RELEASE_NOTES_API_URL }}
-          RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        id: notes
-        if: steps.generate.outputs.artifact-id == ''
-        with:
-          name: release-notes
-          path: release-evidence/release-notes.json
-          if-no-files-found: error
-          retention-days: 30
-
-  quality:
-    needs: preflight
-    uses: ./.github/workflows/ci.yml
-
-  security:
-    needs: preflight
-    uses: ./.github/workflows/security.yml
-
-  source:
-    needs: [quality, security]
-    if: inputs.component == 'source'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-      - run: python tools/github/build.py source --output release-out/source
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: accepted-source
-          path: release-out/source/*
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
-
-  client:
-    needs: [quality, security, release-notes]
-    if: inputs.component == 'client' || inputs.component == 'all'
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {shard: windows, os: windows-2022, arch: x64}
-          - {shard: linux, os: ubuntu-22.04, arch: x64}
-          - {shard: macos-arm64, os: macos-26, arch: arm64}
-          - {shard: macos-x64, os: macos-15-intel, arch: x64}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 180
-    env:
-      NPM_CONFIG_REGISTRY: https://registry.npmjs.org
-      PIP_INDEX_URL: https://pypi.org/simple
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-          architecture: ${{ matrix.arch }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: '22'
-          architecture: ${{ matrix.arch }}
-          package-manager-cache: false
-      - name: Prepare Linux package tools
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-15 rpm gnupg libarchive-tools
-      - name: Use TCP for Apple ticket downloads on Intel macOS
-        if: matrix.shard == 'macos-x64'
-        shell: bash
-        run: |
-          # GitHub-hosted Intel runners can drop Apple's HTTP/3 connections.
-          # https://github.com/actions/runner-images/issues/14924
-          # Apply the runner workaround before both stapling and validation.
-          printf '%s\n' 'block return out quick proto udp from any to any port 443' | sudo pfctl -f -
-          sudo pfctl -E
-      - name: Prepare macOS signing and notarization
-        if: startsWith(matrix.shard, 'macos-')
-        run: bash tools/ci/prepare-macos-signing.sh
-        env:
-          SODUWORK_MAC_CERTIFICATE_B64: ${{ secrets.SODUWORK_MAC_CERTIFICATE_B64 }}
-          SODUWORK_MAC_CERTIFICATE_PASSWORD: ${{ secrets.SODUWORK_MAC_CERTIFICATE_PASSWORD }}
-          SODUWORK_MAC_KEYCHAIN_PASSWORD: ${{ secrets.SODUWORK_MAC_KEYCHAIN_PASSWORD }}
-          SODUWORK_MAC_SIGN_IDENTITY: ${{ secrets.SODUWORK_MAC_SIGN_IDENTITY }}
-          SODUWORK_MAC_NOTARY_KEY_ID: ${{ secrets.SODUWORK_MAC_NOTARY_KEY_ID }}
-          SODUWORK_MAC_NOTARY_ISSUER: ${{ secrets.SODUWORK_MAC_NOTARY_ISSUER }}
-          SODUWORK_MAC_NOTARY_PRIVATE_KEY_B64: ${{ secrets.SODUWORK_MAC_NOTARY_PRIVATE_KEY_B64 }}
-          SODUWORK_MAC_NOTARY_PROFILE: ${{ secrets.SODUWORK_MAC_NOTARY_PROFILE }}
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          artifact-ids: ${{ needs.release-notes.outputs.artifact-id }}
-          path: release-evidence
-          merge-multiple: true
-      - name: Build once and run native installation acceptance
-        run: python tools/github/build.py ${{ matrix.shard }} --output release-out/${{ matrix.shard }}
-        env:
-          SODUWORK_MAC_SIGN_IDENTITY: ${{ startsWith(matrix.shard, 'macos-') && secrets.SODUWORK_MAC_SIGN_IDENTITY || '' }}
-          SODUWORK_LINUX_SIGNING_KEY_B64: ${{ matrix.shard == 'linux' && secrets.SODUWORK_LINUX_SIGNING_KEY_B64 || '' }}
-          SODUWORK_LINUX_SIGNING_PASSPHRASE: ${{ matrix.shard == 'linux' && secrets.SODUWORK_LINUX_SIGNING_PASSPHRASE || '' }}
-          SODUWORK_LINUX_SIGNING_FINGERPRINT: ${{ matrix.shard == 'linux' && vars.SODUWORK_LINUX_SIGNING_FINGERPRINT || '' }}
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: accepted-${{ matrix.shard }}
-          path: release-out/${{ matrix.shard }}/*
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
-      - name: Clean up macOS signing material
-        if: always() && startsWith(matrix.shard, 'macos-')
-        run: bash tools/ci/cleanup-macos-signing.sh
-      - name: Retain failed installation diagnostics
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: diagnostics-${{ matrix.shard }}
-          path: |
-            release-evidence/**/*.log
-            release-evidence/**/*.json
-          if-no-files-found: ignore
-          retention-days: 7
-
-  hub:
-    needs: [quality, security]
-    if: inputs.component == 'hub' || inputs.component == 'all'
-    runs-on: ubuntu-22.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-      - run: python tools/github/build.py hub --output release-out/hub
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: accepted-hub
-          path: release-out/hub/*
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
-
-  candidate:
-    needs: [source, client, hub, release-notes]
-    if: >-
-      always() && !cancelled() &&
-      (needs.source.result == 'success' || needs.client.result == 'success' || needs.hub.result == 'success') &&
-      !contains(needs.*.result, 'failure')
+  notes-only:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: 2ae758bb31937a91df32e3e0289376535f2490d2
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: accepted-*
-          merge-multiple: true
-          path: release-out/candidate
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        if: inputs.component == 'client' || inputs.component == 'all'
-        with:
-          artifact-ids: ${{ needs.release-notes.outputs.artifact-id }}
-          path: release-out/candidate
-          merge-multiple: true
-      - run: python tools/github/release.py candidate --folder release-out/candidate
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        id: candidate
-        with:
-          name: release-candidate
-          path: release-out/candidate/*
-          if-no-files-found: error
-          retention-days: 30
-          compression-level: 0
-      - name: Explain the manual gate
-        shell: bash
-        run: |
-          echo 'Candidate passed. The next job creates a Draft Release for internal testing. No automatic public publication.' >> "$GITHUB_STEP_SUMMARY"
-          echo "Commit: $GITHUB_SHA / Run: $GITHUB_RUN_ID" >> "$GITHUB_STEP_SUMMARY"
-    outputs:
-      artifact-id: ${{ steps.candidate.outputs.artifact-id }}
-
-  draft:
-    needs: candidate
-    if: ${{ !cancelled() && needs.candidate.result == 'success' }}
-    runs-on: ubuntu-22.04
-    timeout-minutes: 60
-    permissions:
-      contents: write
-      actions: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-          fetch-depth: 1
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        with:
-          python-version: '3.12'
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          artifact-ids: ${{ needs.candidate.outputs.artifact-id }}
-          path: release-out/candidate
-          merge-multiple: true
-      - name: Upload and verify the accepted bytes as a draft only
-        run: python tools/github/release.py draft --folder release-out/candidate
+      - name: Diagnose the original generator without recording provider content
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_NOTES_API_KEY: ${{ secrets.RELEASE_NOTES_API_KEY }}
+          RELEASE_NOTES_API_URL: ${{ vars.RELEASE_NOTES_API_URL }}
+          RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
+          PYTHONUNBUFFERED: '1'
+        run: |
+          python - <<'PY'
+          import json, os, sys, time, traceback, urllib.error
+          from pathlib import Path
+          sys.path.insert(0, str(Path('tools/github').resolve()))
+          import release_notes as notes
+
+          def report_error(stage, error):
+              seen = set()
+              while error is not None and id(error) not in seen:
+                  seen.add(id(error))
+                  row = {'stage': stage, 'exception': type(error).__name__}
+                  if isinstance(error, urllib.error.HTTPError):
+                      row['httpStatus'] = error.code
+                      body = error.read(8192).decode('utf-8', errors='replace').lower()
+                      row['knownErrorTerms'] = [term for term in (
+                          'response_format', 'max_tokens', 'stream', 'thinking',
+                          'unauthorized', 'forbidden', 'quota', 'rate limit',
+                          'not found', 'overload', 'model', 'api key', 'invalid') if term in body]
+                  if isinstance(error, urllib.error.URLError):
+                      row['transportReasonType'] = type(error.reason).__name__
+                  row['locations'] = [f'{Path(frame.filename).name}:{frame.lineno}'
+                                      for frame in traceback.extract_tb(error.__traceback__)]
+                  print(json.dumps(row), flush=True)
+                  error = error.__cause__ or error.__context__
+
+          original_model = notes.model_notes
+          def traced_model(*args, **kwargs):
+              started = time.monotonic()
+              key = os.environ.get('RELEASE_NOTES_API_KEY', '')
+              print(json.dumps({'stage': 'model-start', 'commitCount': len(args[2]),
+                  'keyPresent': bool(key), 'keyHasOuterWhitespace': key != key.strip()}), flush=True)
+              try:
+                  result = original_model(*args, **kwargs)
+                  print(json.dumps({'stage': 'model-return', 'seconds': round(time.monotonic()-started, 2)}), flush=True)
+                  return result
+              except Exception as error:
+                  print(json.dumps({'stage': 'model-failed', 'seconds': round(time.monotonic()-started, 2)}), flush=True)
+                  report_error('model', error)
+                  raise
+          notes.model_notes = traced_model
+
+          original_validate = notes.validate
+          def traced_validate(*args, **kwargs):
+              try:
+                  return original_validate(*args, **kwargs)
+              except Exception as error:
+                  report_error('validation', error)
+                  raise
+          notes.validate = traced_validate
+          ctx = {'schema': 1, 'component': 'client', 'version': os.environ['RELEASE_VERSION'],
+                 'repository': os.environ['GITHUB_REPOSITORY'], 'commit': notes.git('rev-parse', 'HEAD'),
+                 'runId': os.environ['GITHUB_RUN_ID']}
+          output = Path('release-evidence/release-notes.json')
+          record = notes.generate(ctx, output)
+          print(json.dumps({'stage': 'complete', 'status': record.get('status', 'generated'),
+              'items': {locale: sum(len(section['items']) for section in content['sections'])
+                        for locale, content in record['locales'].items()}}), flush=True)
+          PY
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-notes-diagnostic
+          path: release-evidence/release-notes.json
+          if-no-files-found: error
+          retention-days: 7
