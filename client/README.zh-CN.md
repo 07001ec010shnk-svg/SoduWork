@@ -22,6 +22,7 @@ SODUWORK_DEFAULT_HUB_URL=https://hub.example.com npm run build:linux
 
 手动运行 Actions 的 **On-demand client packages**，填写 `default_hub_url` 和
 `artifact_label`（如 `cn`），选择包含目标版本及这些构建工具的受保护分支。
+该版本必须已有正式 Release；每个平台的安装包复用经校验的正式发布说明。
 流程执行质量检查、签名和原生安装验收，产物按标签区分，在 Actions 保留 30 天；
 不创建 GitHub Release，也不部署 Hub。每份下载附有 `client-packages.json`，记录
 默认地址、源码提交、构建编号和文件摘要。不同环境的下载应放入独立目录。

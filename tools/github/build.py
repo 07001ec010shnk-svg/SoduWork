@@ -119,8 +119,8 @@ def package_native(ctx, shard, scratch, *, validation=False):
 def native(ctx, shard, folder, scratch, *, preserve_release_history=False):
     import release_notes
     if preserve_release_history:
-        # On-demand packages retain the version's committed notes. They are not
-        # a new Release and must not regenerate or publish that version's notes.
+        # On-demand packages prepare the published version's notes beforehand.
+        # Do not regenerate or publish notes for a different build identity.
         notes_digest = hashlib.sha256((ROOT / "client/main/release-history.json").read_bytes()).hexdigest()
     else:
         notes_digest = release_notes.bundle(ctx, ROOT / "release-evidence" / release_notes.NAME, ROOT)

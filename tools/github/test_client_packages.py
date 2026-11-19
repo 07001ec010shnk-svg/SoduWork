@@ -11,6 +11,8 @@ from unittest.mock import patch
 import client_packages as packages
 import build
 import hashlib
+import json
+from test_release_notes import example_record
 from release import expected, fingerprint, write
 
 
@@ -71,6 +73,8 @@ class ClientPackagesTests(unittest.TestCase):
             (folder / name).write_bytes(b"synthetic accepted installer")
         checks = {"ok": True, "sourceCommit": self.ctx["commit"], "pipelineId": self.ctx["runId"],
                   "defaultHubUrl": self.ctx["defaultHubUrl"], "bundledReleaseHistorySha256": "b" * 64,
+                  "publishedReleaseNotes": {"version": self.ctx["version"], "sourceCommit": "c" * 40,
+                                            "runId": "120", "sha256": "d" * 64, "manifestSha256": "e" * 64},
                   "artifacts": [fingerprint(p) for p in folder.iterdir()]}
         return folder, checks
 
@@ -85,7 +89,8 @@ class ClientPackagesTests(unittest.TestCase):
     def test_other_environment_build_or_replaced_bytes_cannot_be_registered_as_accepted(self):
         folder, checks = self.candidate()
         for key, value in [("ok", False), ("sourceCommit", "b" * 40), ("pipelineId", "124"),
-                           ("defaultHubUrl", "https://other.example.test"), ("bundledReleaseHistorySha256", "")]:
+                           ("defaultHubUrl", "https://other.example.test"), ("bundledReleaseHistorySha256", ""),
+                           ("publishedReleaseNotes", {})]:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 packages.record_packages(self.ctx, "windows", folder, {**checks, key: value})
         original = copy.deepcopy(checks)
@@ -99,7 +104,7 @@ class ClientPackagesTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Linux package signing"):
             packages.record_packages(self.ctx, "linux", folder, checks)
 
-    def test_on_demand_native_build_preserves_committed_release_history(self):
+    def test_on_demand_native_build_preserves_prepared_release_history(self):
         folder, checks = self.candidate()
         history = self.root / "client/main/release-history.json"
         history.write_bytes(b'{"versions":[]}\n')
@@ -117,6 +122,74 @@ class ClientPackagesTests(unittest.TestCase):
         self.assertEqual(result["bundledReleaseHistorySha256"], hashlib.sha256(history.read_bytes()).hexdigest())
         self.assertNotIn("releaseNotesSha256", result)
         self.assertEqual((folder / name).read_bytes(), (dist / name).read_bytes())
+
+    def published_inputs(self):
+        folder = self.root / "published"
+        record = example_record()
+        record.update(version=self.ctx["version"], runId="120")
+        write(folder / "release-notes.json", record)
+        manifest = {**self.ctx, "commit": record["sourceCommit"], "runId": record["runId"],
+                    "tag": "v" + self.ctx["version"], "component": "all",
+                    "assets": [fingerprint(folder / "release-notes.json")]}
+        write(folder / "release-manifest.json", manifest)
+        return folder, record, manifest
+
+    def test_published_notes_reuse_original_prose_and_provenance_without_claiming_original_build(self):
+        folder, record, manifest = self.published_inputs()
+        history = self.root / "client/main/release-history.json"
+        write(history, {"schema": 1, "releases": [{"version": "1.0.0", "notes": ["Older notes"]}]})
+        result = packages.bundle_published_notes(self.ctx, folder, self.root)
+        self.assertEqual(result["runId"], "120")
+        self.assertEqual(self.ctx["runId"], "123")
+        self.assertEqual(result["sha256"], manifest["assets"][0]["sha256"])
+        bundled = json.loads(history.read_text())["releases"]
+        self.assertEqual(bundled[0]["version"], self.ctx["version"])
+        self.assertEqual(bundled[0]["locales"], record["locales"])
+        self.assertEqual(bundled[1]["version"], "1.0.0")
+
+    def test_wrong_version_or_replaced_published_notes_fail_closed(self):
+        folder, record, manifest = self.published_inputs()
+        for key, value in [("version", "1.0.0"), ("repository", "other/repo"), ("commit", "f" * 40),
+                           ("runId", "121"), ("tag", "v1.0.0")]:
+            write(folder / "release-manifest.json", {**manifest, key: value})
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                packages.verify_published_notes(self.ctx, folder)
+        write(folder / "release-manifest.json", manifest)
+        (folder / "release-notes.json").write_bytes(b"changed")
+        with self.assertRaisesRegex(ValueError, "differ"):
+            packages.verify_published_notes(self.ctx, folder)
+
+    def test_unavailable_published_notes_preserve_the_same_history_without_inventing_notes(self):
+        folder, record, manifest = self.published_inputs()
+        record.update(status="unavailable", locales={}, sources=[], omitted=[])
+        write(folder / "release-notes.json", record)
+        manifest["assets"] = [fingerprint(folder / "release-notes.json")]
+        write(folder / "release-manifest.json", manifest)
+        history = self.root / "client/main/release-history.json"
+        original = b'{"schema":1,"releases":[]}\n'
+        history.write_bytes(original)
+        packages.bundle_published_notes(self.ctx, folder, self.root)
+        self.assertEqual(history.read_bytes(), original)
+
+    def test_fetch_requires_stable_release_and_pinned_published_asset_bytes(self):
+        folder, _, _ = self.published_inputs()
+        release = {"tag_name": "v" + self.ctx["version"], "draft": False, "prerelease": False,
+                   "assets": [{"name": p.name, "digest": "sha256:" + fingerprint(p)["sha256"],
+                               "browser_download_url": "https://github.com/example/project/releases/download/v" +
+                                                       self.ctx["version"] + "/" + p.name} for p in folder.iterdir()]}
+        target = self.root / "download"
+        def download(url, file, digest):
+            self.assertEqual(fingerprint(folder / file.name)["sha256"], digest)
+            shutil.copyfile(folder / file.name, file)
+        with patch.object(packages, "api", return_value=release), patch.object(packages, "download", side_effect=download):
+            packages.fetch_published_notes(self.ctx, target)
+        self.assertEqual(packages.verify_published_notes(self.ctx, target)["runId"], "120")
+        for flag in ["draft", "prerelease"]:
+            with patch.object(packages, "api", return_value={**release, flag: True}), self.assertRaises(ValueError):
+                packages.fetch_published_notes(self.ctx, self.root / flag)
+        release["assets"][0]["digest"] = ""
+        with patch.object(packages, "api", return_value=release), self.assertRaisesRegex(ValueError, "digest"):
+            packages.fetch_published_notes(self.ctx, self.root / "invalid")
 
     def test_workflow_only_uploads_actions_artifacts_and_reuses_native_quality_gates(self):
         workflow = (packages.ROOT / ".github/workflows/client-packages.yml").read_text()

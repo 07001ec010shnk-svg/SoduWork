@@ -110,8 +110,12 @@ the public quality, binary-review, signing and installation acceptance gates.
 The existing `public-release` reviewer environment controls signing jobs. Original
 installer basenames, app identities, data directories, version and update trust
 remain unchanged. Native acceptance checks the installed candidate's default Hub;
-existing user-selected addresses continue to take precedence. Committed release
-history is preserved without generating or publishing new notes for that version.
+existing user-selected addresses continue to take precedence. The version must
+already have a stable Release with `release-manifest.json` and `release-notes.json`.
+Preflight verifies both assets against their published digests, checks the notes
+against the release manifest, and shares the same inputs with all native jobs.
+Packages reuse the published version's notes without regenerating or publishing
+them. Receipts retain both the original notes provenance and the new build identity.
 
 Download the four `client-<version>-<label>-<shard>-<run>` artifacts from Actions
 within 30 days. Each contains original installers, any Linux package signatures,
