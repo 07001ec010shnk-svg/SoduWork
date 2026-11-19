@@ -20,9 +20,12 @@ if (typeof electron === 'string') {
     const original = spawn(electron, [__filename, '--native-file-probe-root', root,
       '--soduwork-open-file', path.join(root, 'earlier.txt')],
     { env, windowsHide: true, stdio: ['ignore', log, log] });
+    let launchError;
+    original.once('error', error => { launchError = error; });
     async function waitFor(name) {
       const filename = path.join(root, name + '.json'), started = Date.now();
       while (!fs.existsSync(filename)) {
+        if (launchError) throw launchError;
         if (Date.now() - started > 20000) throw Error('Timed out waiting for ' + name);
         await delay(40);
       }
@@ -66,7 +69,7 @@ if (typeof electron === 'string') {
       await win.loadURL('data:text/html,<title>Native file restart</title>');
       write('restarted', { pid: process.pid, files: files.commandFiles(process.argv, process.cwd(), false) });
       app.once('quit', () => write('finished', { pid: process.pid })); app.quit();
-    });
+    }).catch(error => { console.error(error); app.exit(2); });
   } else {
     const state = require('../main/quit-relaunch.cjs').create(app);
     files.create({ app, ipcMain: { handle() {} }, getWorkspace: () => null,
@@ -91,7 +94,7 @@ if (typeof electron === 'string') {
         write('stopping', { pid: process.pid });
         timer = setTimeout(() => { cleanupReady = true; app.quit(); }, 2500);
       }
-    });
+    }).catch(error => { console.error(error); app.exit(2); });
     app.whenReady().then(async () => {
       const win = new BrowserWindow({ show: false });
       await win.loadURL('data:text/html,<title>Native file shutdown</title>');
