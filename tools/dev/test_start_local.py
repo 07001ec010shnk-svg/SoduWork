@@ -1775,7 +1775,7 @@ class WindowsPathPreflightTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='soduwork-path-unit-')
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.state = self.root / 'service'
         self.state.mkdir()
 
