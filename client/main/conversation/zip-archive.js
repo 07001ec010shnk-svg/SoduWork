@@ -58,8 +58,9 @@ async function createEntries(entries) {
   return encode(prepared);
 }
 function createZip(root) {
-  const base = fs.realpathSync(root); const { result } = collect(base); let total = 0;
-  const archive = encode(result.map(item => { const bytes = readBounded(item.full, MAX_BYTES - total); total += bytes.length; return {
+  const { fs, collect } = createBoundedSource();
+  const base = fs.realpathSync(root); const { result, total } = collect(base);
+  const archive = encode(result.map(item => { const bytes = fs.readFileSync(item.full); return {
     name: item.name, bytes, st: item.st, compressed: zlib.deflateRawSync(bytes, { level: 6 }),
   }; }));
   if (archive.length > MAX_BYTES) throw new Error("ZIP archive is larger than 24 MB; remove large files");
@@ -83,6 +84,19 @@ function readBounded(filename, remaining) {
       chunks.push(chunk.subarray(0, read));
     }
   } finally { fs.closeSync(fd); }
+}
+function createBoundedSource() {
+  const contents = new Map(), sourceFs = Object.create(fs);
+  sourceFs.readFileSync = filename => contents.get(filename);
+  return { fs: sourceFs, collect: root => {
+    const collected = collect(root); let total = 0;
+    // Capture bytes under the input budget before the encoders consume them.
+    for (const item of collected.result) {
+      const bytes = readBounded(item.full, MAX_BYTES - total);
+      total += bytes.length; contents.set(item.full, bytes);
+    }
+    return { ...collected, total };
+  } };
 }
 // Keep the synchronous primitive for worker/test callers. Native UI handlers
 // must use the bounded worker so scanning, reads, zlib and CRC stay off-thread.

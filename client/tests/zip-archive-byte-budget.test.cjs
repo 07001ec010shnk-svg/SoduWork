@@ -75,3 +75,22 @@ test('an unchanged compressible file at exactly the input budget is still sharea
   assert.equal(result.total, archive.MAX_BYTES); assert.equal(result.files, 1);
   assert.ok(result.size < archive.MAX_BYTES);
 });
+
+test('encoding cannot replace bytes already captured from another source file', t => {
+  const root = folder(t), target = path.join(root, 'b.txt');
+  fs.writeFileSync(path.join(root, 'a.txt'), 'first');
+  fs.writeFileSync(target, 'second');
+  const expected = archive.createZip(root), deflate = zlib.deflateRawSync;
+  let changed = false;
+  t.mock.method(zlib, 'deflateRawSync', function (...args) {
+    if (!changed) {
+      changed = true;
+      fs.writeFileSync(target, 'changed during encoding');
+    }
+    return deflate.apply(zlib, args);
+  });
+  const result = archive.createZip(root);
+  assert.equal(fs.readFileSync(target, 'utf8'), 'changed during encoding');
+  assert.equal(result.total, expected.total);
+  assert.deepEqual(result.data, expected.data);
+});
