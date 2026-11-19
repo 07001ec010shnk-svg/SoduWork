@@ -748,6 +748,30 @@ class LocalStartupTests(unittest.TestCase):
         with closing(sqlite3.connect(self.state / "soduwork.db")) as db:
             self.assertEqual(db.execute("SELECT password_hash FROM app_user").fetchone()[0], "existing-password-hash")
 
+    def test_damaged_database_reports_startup_error_instead_of_traceback(self):
+        # A truncated/non-SQLite file (disk full, interrupted migration, partial
+        # copy) raises sqlite3.DatabaseError, not the OperationalError subclass.
+        self.state.mkdir()
+        (self.state / "soduwork.db").write_bytes(b"this is not a sqlite database")
+        with self.assertRaisesRegex(start.StartupError, "Cannot inspect the local database"):
+            start.initialized(self.state)
+
+    def test_damaged_database_surfaces_friendly_error_through_password_prompt(self):
+        config = start.initialize(self.state, "admin")
+        (self.state / "soduwork.db").write_bytes(b"\x00\x01not-a-database")
+        with patch("sys.stdin", io.StringIO("must-not-consume\n")) as stream:
+            with self.assertRaisesRegex(start.StartupError, "Cannot inspect the local database"):
+                start.password_for_start(self.state, config, True)
+            self.assertEqual(stream.tell(), 0)
+
+    def test_empty_database_still_means_not_initialized(self):
+        # Regression guard: "no such table" is an OperationalError and must keep
+        # returning False rather than being treated as a damaged database.
+        self.state.mkdir()
+        with closing(sqlite3.connect(self.state / "soduwork.db")):
+            pass
+        self.assertFalse(start.initialized(self.state))
+
     def test_no_inherited_database_or_account_or_remote_store(self):
         config = start.initialize(self.state, "admin")
         with patch.dict(os.environ, {"DATABASE_URL": "postgresql://production", "AUTH_SECRET": "company-key",
