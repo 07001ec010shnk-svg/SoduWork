@@ -310,7 +310,11 @@ for (const [from, to] of [['pi', 'dsh'], ['dsh', 'pi'], ['dsh', 'codex-harness']
   test(`historical outputs remain addressable when switching ${from} to ${to}`, async t => {
     const f = fixture(t, { nativeOutputs: true }), runtime = require('../main/conversation/artifact-runtime');
     const handle = (await f.bridge.open({ ...options(f), adapterId: from })).session;
-    fs.writeFileSync(path.join(f.root, 'saved.txt'), 'Retained content');
+    const file = path.join(f.root, 'saved.txt');
+    fs.writeFileSync(file, 'Retained content');
+    // Filesystem write timestamps can precede the session's wall-clock boundary.
+    const writtenAt = new Date();
+    fs.utimesSync(file, writtenAt, writtenAt);
     const item = (await runtime.snapshotAsync(handle)).items.find(row => row.name === 'saved.txt');
     assert.ok(item);
     await new Promise(resolve => setTimeout(resolve, 20));
