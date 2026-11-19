@@ -86,7 +86,7 @@ test('an otherwise valid signed manifest is rejected when isolated public trust 
     fs.rmSync(root, { recursive: true, force: true });
   });
   fs.mkdirSync(path.join(root, 'main'));
-  for (const file of ['distribution.cjs', 'hub-endpoint.cjs']) {
+  for (const file of ['distribution.cjs', 'hub-endpoint.cjs', 'default-hub.cjs']) {
     fs.copyFileSync(path.join(__dirname, '../main', file), path.join(root, 'main', file));
   }
   fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify(require('../package.json')));

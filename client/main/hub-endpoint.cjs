@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const PRODUCTION_HUB = 'https://service.soduwork.ai';
+const PRODUCTION_HUB = require('./default-hub.cjs').bundledDefaultHub();
 const connections = new WeakMap();
 
 const BAD_HUB = '后台地址应为不带路径的 http:// 或 https:// 地址';
