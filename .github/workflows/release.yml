@@ -32,7 +32,7 @@ jobs:
           RELEASE_VERSION: ${{ inputs.version }}
           RELEASE_NOTES_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           RELEASE_NOTES_API_URL: https://openrouter.ai/api/v1/chat/completions
-          RELEASE_NOTES_MODEL: baidu/ernie-5.5-flash-preview:free
+          RELEASE_NOTES_MODEL: google/gemma-4-31b-it:free
           PYTHONUNBUFFERED: '1'
         run: |
           python - <<'PY'
