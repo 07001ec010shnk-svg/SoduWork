@@ -5,7 +5,9 @@ on:
     inputs:
       version:
         description: Release version whose commit titles are being diagnosed
-        type: string
+        type: choice
+        options: [all, 1.13.17, 1.13.18, 1.13.19]
+        default: all
         required: true
 
 permissions:
@@ -28,16 +30,59 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VERSION: ${{ inputs.version }}
-          RELEASE_NOTES_API_KEY: ${{ secrets.RELEASE_NOTES_API_KEY }}
-          RELEASE_NOTES_API_URL: ${{ vars.RELEASE_NOTES_API_URL }}
-          RELEASE_NOTES_MODEL: ${{ vars.RELEASE_NOTES_MODEL }}
+          RELEASE_NOTES_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          RELEASE_NOTES_API_URL: https://openrouter.ai/api/v1/chat/completions
+          RELEASE_NOTES_MODEL: baidu/ernie-5.5-flash-preview:free
           PYTHONUNBUFFERED: '1'
         run: |
           python - <<'PY'
-          import json, os, sys, time, traceback, urllib.error
+          import json, os, subprocess, sys, tempfile, time, traceback, urllib.error, urllib.request
           from pathlib import Path
           sys.path.insert(0, str(Path('tools/github').resolve()))
           import release_notes as notes
+
+          model = os.environ['RELEASE_NOTES_MODEL']
+          with urllib.request.urlopen('https://openrouter.ai/api/v1/models', timeout=30) as response:
+              catalog = json.load(response)['data']
+          entry = next(row for row in catalog if row['id'] == model)
+          assert model.endswith(':free')
+          assert float(entry['pricing']['prompt']) == float(entry['pricing']['completion']) == 0
+          assert 'response_format' in entry['supported_parameters']
+          print(json.dumps({'stage': 'catalog', 'model': model, 'free': True,
+                            'jsonOutputSupported': True}), flush=True)
+          metrics = {}
+          active = {}
+
+          original_opener = urllib.request.build_opener
+          def traced_opener(*args, **kwargs):
+              opener = original_opener(*args, **kwargs)
+              original_open = opener.open
+              def traced_open(*open_args, **open_kwargs):
+                  response = original_open(*open_args, **open_kwargs)
+                  original_read = response.read
+                  def traced_read(*read_args, **read_kwargs):
+                      raw = original_read(*read_args, **read_kwargs)
+                      try:
+                          reply = json.loads(raw)
+                          choice = reply.get('choices', [{}])[0]
+                          finish = choice.get('finish_reason')
+                          if finish in ('stop', 'length', 'content_filter', 'tool_calls'):
+                              active['finishReason'] = finish
+                          usage = reply.get('usage', {})
+                          active['usage'] = {key: usage[key] for key in
+                              ('prompt_tokens', 'completion_tokens', 'total_tokens', 'cost')
+                              if isinstance(usage.get(key), (int, float))}
+                          details = usage.get('completion_tokens_details') or {}
+                          if isinstance(details.get('reasoning_tokens'), int):
+                              active['usage']['reasoning_tokens'] = details['reasoning_tokens']
+                      except (ValueError, TypeError, KeyError, IndexError):
+                          pass
+                      return raw
+                  response.read = traced_read
+                  return response
+              opener.open = traced_open
+              return opener
+          urllib.request.build_opener = traced_opener
 
           def report_error(stage, error):
               seen = set()
@@ -50,25 +95,31 @@ jobs:
                       row['knownErrorTerms'] = [term for term in (
                           'response_format', 'max_tokens', 'stream', 'thinking',
                           'unauthorized', 'forbidden', 'quota', 'rate limit',
-                          'not found', 'overload', 'model', 'api key', 'invalid') if term in body]
+                          'not found', 'overload', 'model', 'api key', 'invalid',
+                          'privacy', 'data policy', 'provider', 'endpoint', 'unsupported') if term in body]
                   if isinstance(error, urllib.error.URLError):
                       row['transportReasonType'] = type(error.reason).__name__
                   row['locations'] = [f'{Path(frame.filename).name}:{frame.lineno}'
                                       for frame in traceback.extract_tb(error.__traceback__)]
                   print(json.dumps(row), flush=True)
+                  active.setdefault('errors', []).append(row)
                   error = error.__cause__ or error.__context__
 
           original_model = notes.model_notes
           def traced_model(*args, **kwargs):
               started = time.monotonic()
               key = os.environ.get('RELEASE_NOTES_API_KEY', '')
-              print(json.dumps({'stage': 'model-start', 'commitCount': len(args[2]),
+              active['commitCount'] = len(args[2])
+              active['titleCharacters'] = sum(len(change['message']) for change in args[2])
+              print(json.dumps({'stage': 'model-start', 'version': args[0]['version'], 'commitCount': len(args[2]),
                   'keyPresent': bool(key), 'keyHasOuterWhitespace': key != key.strip()}), flush=True)
               try:
                   result = original_model(*args, **kwargs)
+                  active['modelSeconds'] = round(time.monotonic()-started, 2)
                   print(json.dumps({'stage': 'model-return', 'seconds': round(time.monotonic()-started, 2)}), flush=True)
                   return result
               except Exception as error:
+                  active['modelSeconds'] = round(time.monotonic()-started, 2)
                   print(json.dumps({'stage': 'model-failed', 'seconds': round(time.monotonic()-started, 2)}), flush=True)
                   report_error('model', error)
                   raise
@@ -82,18 +133,42 @@ jobs:
                   report_error('validation', error)
                   raise
           notes.validate = traced_validate
-          ctx = {'schema': 1, 'component': 'client', 'version': os.environ['RELEASE_VERSION'],
-                 'repository': os.environ['GITHUB_REPOSITORY'], 'commit': notes.git('rev-parse', 'HEAD'),
-                 'runId': os.environ['GITHUB_RUN_ID']}
-          output = Path('release-evidence/release-notes.json')
-          record = notes.generate(ctx, output)
-          print(json.dumps({'stage': 'complete', 'status': record.get('status', 'generated'),
-              'items': {locale: sum(len(section['items']) for section in content['sections'])
-                        for locale, content in record['locales'].items()}}), flush=True)
+          selected = os.environ['RELEASE_VERSION']
+          versions = ['1.13.17', '1.13.18', '1.13.19'] if selected == 'all' else [selected]
+          root = Path.cwd()
+          evidence_dir = root / 'release-evidence'
+          evidence_dir.mkdir(exist_ok=True)
+          for version in versions:
+              assert version in ['1.13.17', '1.13.18', '1.13.19']
+              active = {'version': version, 'model': model}
+              metrics[version] = active
+              with tempfile.TemporaryDirectory(prefix='notes-source-') as temporary:
+                  source = Path(temporary) / 'source'
+                  ref = 'v' + version if version != '1.13.19' else notes.git('rev-parse', 'HEAD')
+                  subprocess.run(['git', 'worktree', 'add', '--detach', str(source), ref], check=True)
+                  try:
+                      assert not (source / 'docs/releases' / (version + '.json')).exists()
+                      ctx = {'schema': 1, 'component': 'client', 'version': version,
+                             'repository': os.environ['GITHUB_REPOSITORY'],
+                             'commit': notes.git('rev-parse', 'HEAD', root=source),
+                             'runId': os.environ['GITHUB_RUN_ID']}
+                      output = evidence_dir / version / 'release-notes.json'
+                      record = notes.generate(ctx, output, root=source)
+                      active.update(status=record.get('status', 'generated'),
+                          previousTag=record['previousTag'], sourceCommit=ctx['commit'],
+                          items={locale: sum(len(section['items']) for section in content['sections'])
+                                 for locale, content in record['locales'].items()})
+                      print(json.dumps({'stage': 'complete', **active}), flush=True)
+                      for locale in record['locales']:
+                          output.with_name(locale + '.md').write_text(notes.markdown(record, locale), encoding='utf-8')
+                  finally:
+                      subprocess.run(['git', 'worktree', 'remove', str(source)], check=True)
+                      (evidence_dir / 'metrics.json').write_text(json.dumps(metrics, indent=2), encoding='utf-8')
+              assert not active.get('usage', {}).get('cost', 0), 'Expected a free model response'
           PY
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: release-notes-diagnostic
-          path: release-evidence/release-notes.json
+          name: release-notes-openrouter
+          path: release-evidence/
           if-no-files-found: error
           retention-days: 7
