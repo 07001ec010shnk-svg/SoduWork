@@ -333,10 +333,16 @@ test('repeated switches and cold reopening retain exact outputs without claiming
   const f = fixture(t), runtime = require('../main/conversation/artifact-runtime');
   const handle = (await f.bridge.open({ ...options(f), adapterId: 'dsh' })).session;
   fs.writeFileSync(path.join(f.root, 'first.txt'), 'First content');
+  // Align fixture timestamps with the session clock, as in the single-switch
+  // cases above; filesystem timestamps may otherwise precede the turn boundary.
+  const firstWrittenAt = new Date();
+  fs.utimesSync(path.join(f.root, 'first.txt'), firstWrittenAt, firstWrittenAt);
   const first = (await runtime.snapshotAsync(handle)).items.find(row => row.name === 'first.txt');
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal((await handle.selectAgent('kimi')).ok, true);
   fs.writeFileSync(path.join(f.root, 'second.txt'), 'Second content');
+  const secondWrittenAt = new Date();
+  fs.utimesSync(path.join(f.root, 'second.txt'), secondWrittenAt, secondWrittenAt);
   const second = (await runtime.snapshotAsync(handle)).items.find(row => row.name === 'second.txt');
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.equal((await handle.selectAgent('qwen')).ok, true);
