@@ -1630,6 +1630,10 @@ async function createRunnerHandle(request, defaults, initialSession) {
     // Resolve the conversation's current selection at dequeue. Every turn
     // obtains its own grant; queued or cancelled drafts cannot change it early.
     const requested = pluginTurn.requestedIds(next.options);
+    // Main-process admission can freeze an inherited selection for app/MCP
+    // isolation. Keep that snapshot rather than borrowing another queued turn.
+    const capturedInheritance = next.options.inheritedPluginSelection === true;
+    const inheritedPlugins = (!requested.length || capturedInheritance) && next.options.clearPluginSelection !== true;
     if (next.options.clearPluginSelection === true) {
       state.activePluginIds = [];
     }
@@ -1642,6 +1646,25 @@ async function createRunnerHandle(request, defaults, initialSession) {
       if (next.options.controlled) return next.options.controlled.execute(handle, next.text, next.attachments);
       const send = () => {
         if (state.disposed || state.cancelRequested || state.goalPaused || next.stopRequested) return { ok: true, cancelled: true };
+        if (inheritedPlugins && !next.options.internal && !next.options.controlled && !next.options.taskId &&
+            !handle.taskRef && !handle.taskIds?.length && !next.options.goalMode && !state.goalVisible &&
+            !state.taskGoalContract && state.intent !== 'goal' && next.options.source !== 'automation' &&
+            !handle.appPluginId && !opts.appContext) {
+          try {
+            const inheritedIds = capturedInheritance ? requested : state.activePluginIds;
+            const retained = require('../personal-plugins').pruneUnavailableInherited(app, inheritedIds);
+            if (retained.length !== inheritedIds.length) {
+              // Record even an empty selection before any later model/provider
+              // failure; replay must not revive a deleted plugin from old turns.
+              taskJournal.append(state.seq, { kind: 'plugin-selection', pluginIds: retained });
+              state.activePluginIds = retained;
+            }
+            next.options = { ...next.options, pluginIds: retained };
+          } catch (error) {
+            return { ok: false, failureKind: 'plugin-grant', retrySafe: true,
+              reason: '插件没能在发送前完成授权：' + String(error?.message || error) };
+          }
+        }
         if (state.model.historicalLocal) throw Error('原本地模型已删除或不可用，请先选择一个当前可用模型后再发送');
         const byteAttachments = (Array.isArray(next.attachments) ? next.attachments : []).some(item =>
           item && item.data != null && !path.isAbsolute(String(item.path || item.stagedPath || '')));
