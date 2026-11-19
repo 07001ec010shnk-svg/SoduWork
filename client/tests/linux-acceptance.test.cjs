@@ -33,7 +33,7 @@ async function exercise(firstRelease, overrides = {}) {
   };
   const modules = {
     'node:fs/promises': { mkdtemp: async () => '/fixture/packages', mkdir: async () => {}, copyFile: async () => {}, rm: async () => {} },
-    'node:path': path, 'node:os': { tmpdir: () => '/fixture', userInfo: () => ({ uid: 12001 }) },
+    'node:path': path.posix, 'node:os': { tmpdir: () => '/fixture', userInfo: () => ({ uid: 12001 }) },
     'node:assert/strict': assert, 'node:crypto': require('node:crypto'),
     '../ci/release-artifacts.cjs': contract,
     '../ci/acceptance-common.cjs': { run: async (...args) => { calls.push(args); },
