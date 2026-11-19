@@ -822,6 +822,9 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         previous_round = int(previous_meta.get("round") or 1)
         incoming_round = int(snap.get("round") or previous_round)
         incoming_state = canonical_state(snap.get("status") or snap.get("state"))
+        next_round = int(snap.get("round") or previous_round)
+        new_turn = next_round > previous_round or (
+            old_state in _TERMINAL and incoming_state not in _TERMINAL)
         if (incoming_round < previous_round or
                 (incoming_round == previous_round and (
                     int(snap.get("seq") or 0) < int(row.seq or 0) or
@@ -840,10 +843,12 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         # The model is part of the execution identity.  A heartbeat may arrive
         # late (or from a compromised/stale Runner), so it must never replace a
         # model that was already frozen at dispatch or by an earlier snapshot.
+        # A new turn is an explicit execution-selection change and may choose a
+        # different model, even though the same session row is reused.
         incoming_model = str(snap.get("model") or "")[:160]
         frozen_model = str((previous_meta.get("executionIdentity") or {}).get("model")
                            or row.model or "")[:160]
-        if incoming_model and not frozen_model:
+        if incoming_model and (new_turn or not frozen_model):
             row.model = incoming_model
         row.state = canonical_state(
             snap.get("status") or snap.get("state") or row.state, "running")[:32]
@@ -862,9 +867,6 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
             row.finished_at = _no_future(_dt(snap.get("ended")), now) \
                 or row.finished_at or now
         meta = dict(row.metadata_ or {})
-        next_round = int(snap.get("round") or previous_round)
-        new_turn = next_round > previous_round or (
-            old_state in _TERMINAL and row.state not in _TERMINAL)
         if new_turn:
             # Keep the transcript and task audit events; retire only the current
             # turn's status/settlement so a resumed ref can deliver again.
@@ -902,6 +904,8 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         # identity object yet.  Seed the identity from that frozen value before
         # accepting any snapshot fields, so a late heartbeat cannot backfill a
         # different model into the identity.
+        if new_turn and incoming_model:
+            identity.pop("model", None)
         if row.model and not identity.get("model"):
             identity["model"] = row.model
         meta["executionIdentity"] = execution_identity.from_snapshot(
