@@ -40,10 +40,10 @@ function commandFiles(argv, cwd, packaged = true, appPath) {
   }).filter(Boolean))].slice(0, 20);
 }
 
-function instanceData(argv, cwd, packaged = true, appPath) {
+function instanceData(argv, cwd, packaged = true) {
   // Capture the original arguments in the launching process. Chromium can move
   // switches ahead of positional arguments before emitting second-instance.
-  return { soduworkOpenFiles: { version: 1, files: commandFiles(argv, cwd, packaged, appPath) } };
+  return { soduworkOpenFiles: { version: 1, files: commandFiles(argv, cwd, packaged) } };
 }
 
 function normalizeFiles(files) {
