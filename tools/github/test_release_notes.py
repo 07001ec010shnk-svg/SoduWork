@@ -149,7 +149,7 @@ class NotesTests(unittest.TestCase):
     def test_reviewed_notes_allow_only_notes_file_changes_to_be_omitted_automatically(self):
         reviewed = self.root / 'docs/releases/1.2.3.json'
         self.save(reviewed, self.record)
-        changes = [{'commit': sha, 'message': 'Fixture', 'files': ['client/example.js']}
+        changes = [{'commit': sha, 'message': 'Fixture title\nLong body that must not be sent', 'files': ['client/example.js']}
                    for sha in self.record['commits']]
         changes.append({'commit': 'd' * 40, 'message': 'Add notes', 'files': ['docs/releases/1.2.3.json']})
         with patch.object(notes, 'git', return_value=self.ctx['commit']), \
@@ -211,7 +211,7 @@ class NotesTests(unittest.TestCase):
         self.assertEqual(len(evidence), 3)
 
     def generate_with_fixture_evidence(self, **model_patch):
-        changes = [{'commit': sha, 'message': 'Fixture', 'files': ['client/example.js']}
+        changes = [{'commit': sha, 'message': 'Fixture title\nLong body that must not be sent', 'files': ['client/example.js']}
                    for sha in self.record['commits']]
         with patch.object(notes, 'git', return_value=self.ctx['commit']), \
                 patch.object(notes, 'previous', return_value=('v1.2.2', 'b' * 40)), \
@@ -277,27 +277,38 @@ class NotesTests(unittest.TestCase):
         self.assertFalse((self.root / notes.NAME).exists())
 
     def test_model_compact_ids_expand_to_exact_commit_evidence(self):
-        result = {key: copy.deepcopy(self.record[key]) for key in ['locales', 'sources', 'omitted']}
+        result = {key: copy.deepcopy(self.record[key]) for key in ['locales', 'sources']}
         result['sources'][0]['commits'] = ['c1']
-        result['omitted'][0]['commit'] = 'c2'
         response = {'choices': [{'finish_reason': 'stop', 'message': {'content': json.dumps(result)}}]}
         class Response(io.BytesIO):
             pass
         opener = unittest.mock.Mock()
         opener.open.return_value = Response(json.dumps(response).encode())
-        changes = [{'commit': sha, 'message': 'Fixture', 'files': ['client/example.js']}
+        changes = [{'commit': sha, 'message': 'Fixture title\nLong body that must not be sent', 'files': ['client/example.js']}
                    for sha in self.record['commits']]
         with patch.dict(os.environ, {'RELEASE_NOTES_API_KEY': 'fixture-model-key',
                                      'RELEASE_NOTES_MODEL': 'fixture-model'}, clear=True), \
                 patch.object(notes.urllib.request, 'build_opener', return_value=opener):
             generated = notes.model_notes(self.ctx, 'v1.2.2', changes)
         self.assertEqual(generated['sources'], self.record['sources'])
-        self.assertEqual(generated['omitted'], self.record['omitted'])
+        self.assertEqual(generated['omitted'], [{'commit': 'c' * 40, 'reason': 'not-highlighted'}])
         request = opener.open.call_args.args[0]
         sent = json.loads(request.data)
         evidence = json.loads(sent['messages'][1]['content'])
         self.assertEqual([c['commit'] for c in evidence['commits']], ['c1', 'c2'])
         self.assertEqual(sent['max_tokens'], 32768)
+        self.assertTrue(all(set(c) == {'commit', 'title'} for c in evidence['commits']))
+        self.assertTrue(all(c['title'] == 'Fixture title' for c in evidence['commits']))
+        self.assertNotIn('Long body', sent['messages'][1]['content'])
+        self.assertNotIn('client/example.js', sent['messages'][1]['content'])
+
+    def test_generated_notes_over_five_highlights_are_left_blank(self):
+        result = {key: copy.deepcopy(self.record[key]) for key in ['locales', 'sources', 'omitted']}
+        for content in result['locales'].values():
+            original = content['sections'][0]['items'][0]
+            content['sections'][0]['items'] = [{'id': 'fix-' + str(i), 'text': original['text'] + str(i)} for i in range(6)]
+        result['sources'] = [{'sectionId': 'fixes', 'itemId': 'fix-' + str(i), 'commits': ['a' * 40]} for i in range(6)]
+        self.assert_blank_record(self.generate_with_fixture_evidence(return_value=result))
 
     def notes_archive(self, record=None, extra=False):
         stream = io.BytesIO()

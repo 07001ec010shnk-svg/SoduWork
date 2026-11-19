@@ -94,7 +94,8 @@ When preparing the public repository, reviewed source may be squashed into `publ
 
 For `client` and `all`, the `release-notes` job runs after preflight and before
 native builds. It compares the last published desktop ancestor release with the
-candidate commit, including merge commits. Reviewed `docs/releases/X.Y.Z.json`
+candidate commit, including merge commits, and sends only commit titles to the model
+(no commit bodies or file lists). Reviewed `docs/releases/X.Y.Z.json`
 content takes precedence; otherwise the job calls the configured OpenAI-compatible
 model. Configure secret `RELEASE_NOTES_API_KEY` and variables
 `RELEASE_NOTES_API_URL` (full chat-completions endpoint) and `RELEASE_NOTES_MODEL`.
@@ -103,7 +104,11 @@ The request uses system/user messages and a 32768-token output budget (including
 Source-only and Hub-only diagnostic builds do not generate desktop notes.
 
 The JSON contains Chinese, English, Japanese and Korean prose with matching
-section/item IDs and commit provenance. User-facing prose must describe actual
+section/item IDs and commit provenance. Each version highlights only 3–5 important
+changes (fewer when appropriate), with one short sentence per item. The model cites
+only selected commits; the tool marks the rest as `not-highlighted`, without
+claiming they have no user impact. Ambiguous titles must not be expanded with
+invented details. User-facing prose must describe actual
 changes, without links, generic placeholders or copied release infrastructure
 metadata. Model errors, timeouts and invalid generated content produce an empty
 `status: unavailable` artifact and do not block packaging. Invalid explicitly
