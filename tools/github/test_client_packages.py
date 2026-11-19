@@ -187,9 +187,12 @@ class ClientPackagesTests(unittest.TestCase):
         for flag in ["draft", "prerelease"]:
             with patch.object(packages, "api", return_value={**release, flag: True}), self.assertRaises(ValueError):
                 packages.fetch_published_notes(self.ctx, self.root / flag)
-        release["assets"][0]["digest"] = ""
-        with patch.object(packages, "api", return_value=release), self.assertRaisesRegex(ValueError, "digest"):
-            packages.fetch_published_notes(self.ctx, self.root / "invalid")
+        for index in range(len(release["assets"])):
+            invalid = copy.deepcopy(release)
+            invalid["assets"][index]["digest"] = ""
+            with patch.object(packages, "api", return_value=invalid), \
+                    patch.object(packages, "download", side_effect=download), self.assertRaisesRegex(ValueError, "digest"):
+                packages.fetch_published_notes(self.ctx, self.root / ("invalid-" + str(index)))
 
     def test_workflow_only_uploads_actions_artifacts_and_reuses_native_quality_gates(self):
         workflow = (packages.ROOT / ".github/workflows/client-packages.yml").read_text()
