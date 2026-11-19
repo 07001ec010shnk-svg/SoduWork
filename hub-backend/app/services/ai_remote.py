@@ -742,7 +742,10 @@ def comment_sync(cfg: dict, ref: str, text: str) -> dict:
     # Admission ACKs describe the accepted turn but do not carry a second `ok`.
     # Older Runners return the nested local_stream receipt, including its `ok`.
     accepted = data.get("ok", str(data.get("state") or "") not in {"failed", "cancelled"})
-    if not accepted and not data.get("uncertain"):
+    # A duplicate admission returns the original receipt; its newly uploaded
+    # packet belongs only to this retry and must not remain on runner-inputs.
+    # The original queued item retains its own transfer until it is consumed.
+    if (data.get("duplicate") or (not accepted and not data.get("uncertain"))):
         _drop_packet(r, packet)
     return {**data, "ok": bool(accepted)}
 

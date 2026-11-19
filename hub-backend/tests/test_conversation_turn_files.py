@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
 from app.conversation_handoff_models import ConversationHandoff, ConversationMessageReceipt
 from app.services import conversation_turn_files as material
 from app.services import conversation_message_receipts as receipts
-from app.services import ai_exec, ai_remote, ai_local, runner_comments
+from app.services import ai_exec, ai_remote, ai_local, runner_comments, runner_admission
 from app.services import cloud_message_recovery
 
 
@@ -61,6 +61,53 @@ class FileValidationTests(unittest.TestCase):
 
 
 class FileDeliveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runner_duplicate_drops_retry_transfer_but_keeps_original(self):
+        machine = SimpleNamespace(_admission=runner_admission.AdmissionQueue())
+        meta = {'filename': 'result.txt', 'size': 4, 'sha256': 'a' * 64,
+                'contentType': 'text/plain'}
+        original = {'ref': 'existing', 'turnId': 'turn-123456', 'text': 'read',
+                    'files': {'transfer': 'original', 'items': [meta]}}
+        accepted, reason, _ = machine._admission.submit(
+            'comment:turn-123456', 'existing', runner_admission.INTERACTIVE,
+            'comment', original)
+        self.assertTrue(accepted)
+        self.assertEqual(reason, 'accepted')
+        retry = {**original, 'files': {'transfer': 'retry', 'items': [meta]}}
+        drop = AsyncMock()
+        result = await runner_comments.comment(
+            machine, retry, None, drop_transfer=drop)
+        self.assertTrue(result['data']['duplicate'])
+        drop.assert_awaited_once_with('retry')
+
+    async def test_empty_ref_retry_preserves_original_transfer(self):
+        machine = SimpleNamespace(_admission=runner_admission.AdmissionQueue())
+        original = {'ref': 'existing', 'turnId': 'turn-empty-ref',
+                    'files': {'transfer': 'original', 'items': []}}
+        accepted, reason, _ = machine._admission.submit(
+            'comment:turn-empty-ref', 'existing', runner_admission.INTERACTIVE,
+            'comment', original)
+        self.assertTrue(accepted)
+        self.assertEqual(reason, 'accepted')
+        drop = AsyncMock()
+        retry = {**original, 'ref': '', 'files': {'transfer': 'original', 'items': []}}
+        result = await runner_comments.comment(machine, retry, None, drop_transfer=drop)
+        self.assertFalse(result['ok'])
+        drop.assert_not_awaited()
+
+    async def test_remote_duplicate_drops_newly_uploaded_packet(self):
+        runner = SimpleNamespace(id='personal-pc', caps=['turnFiles1'])
+        packet = {'transfer': 'retry', 'items': []}
+        with patch.object(ai_remote, '_runner_of_ref', return_value=runner), \
+                patch.object(ai_remote, '_upload_inputs', return_value=(packet, '')), \
+                patch.object(ai_remote.runner_hub, 'call_sync', return_value={
+                    'ok': True, 'data': {'duplicate': True, 'state': 'running'}}), \
+                patch.object(ai_remote, '_drop_packet') as drop:
+            result = ai_remote.comment_sync(
+                {'_turnFiles': [('result.txt', b'data', 'text/plain')],
+                 '_messageId': 'stable-id'}, 'original-ref', 'read')
+        self.assertTrue(result['ok'])
+        drop.assert_called_once_with(runner, packet)
+
     async def test_receipt_hash_fences_changed_material_and_retries_do_not_send_twice(self):
         engine=create_async_engine('sqlite+aiosqlite:///:memory:')
         async with engine.begin() as connection:

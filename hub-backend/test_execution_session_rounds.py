@@ -56,12 +56,34 @@ class ExecutionSessionRoundsTests(unittest.IsolatedAsyncioTestCase):
                                 "ref": self.ref, "provider": "fixture", "runnerId": self.runner.id})])
             await session.commit()
 
-    async def ingest(self, session, round_no, state, seq, *, error=""):
-        return await execution_sessions.ingest_runner_snapshots(session, self.runner, [{
+    async def ingest(self, session, round_no, state, seq, *, error="", model=None):
+        snapshot = {
             "ref": self.ref, "taskId": self.tid, "cli": "pi", "round": round_no,
             "status": state, "seq": seq, "error": error,
             "items": [{"seq": seq, "round": round_no,
-                       "kind": "error" if error else "text", "text": error or "Round completed"}]}])
+                       "kind": "error" if error else "text", "text": error or "Round completed"}]}
+        if model is not None:
+            snapshot["model"] = model
+        return await execution_sessions.ingest_runner_snapshots(session, self.runner, [snapshot])
+
+    async def test_late_snapshot_cannot_change_frozen_model(self):
+        await self.seed()
+        async with db.SessionLocal() as session:
+            row = await session.scalar(select(ExecutionSession).where(
+                ExecutionSession.task_id == self.tid))
+            row.model = "frozen-model"
+            row.metadata_ = {
+                "round": 1,
+                "executionIdentity": {"model": "frozen-model"},
+            }
+            await session.commit()
+
+            await self.ingest(session, 1, "running", 1, model="frozen-model")
+            await self.ingest(session, 1, "running", 2, model="stale-or-forged-model")
+            await session.refresh(row)
+
+            self.assertEqual(row.model, "frozen-model")
+            self.assertEqual(row.metadata_["executionIdentity"]["model"], "frozen-model")
 
     def provider(self, state):
         stack = ExitStack()

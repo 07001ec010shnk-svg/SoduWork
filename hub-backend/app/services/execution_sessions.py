@@ -837,8 +837,14 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         row.runner_client_id = str(getattr(runner, "client_id", "") or "")[:64]
         row.host = str(getattr(runner, "host", "") or "")[:100]
         row.engine = str(snap.get("cli") or snap.get("engine") or row.engine or "")[:60]
-        if "model" in snap:
-            row.model = str(snap.get("model") or "")[:160]
+        # The model is part of the execution identity.  A heartbeat may arrive
+        # late (or from a compromised/stale Runner), so it must never replace a
+        # model that was already frozen at dispatch or by an earlier snapshot.
+        incoming_model = str(snap.get("model") or "")[:160]
+        frozen_model = str((previous_meta.get("executionIdentity") or {}).get("model")
+                           or row.model or "")[:160]
+        if incoming_model and not frozen_model:
+            row.model = incoming_model
         row.state = canonical_state(
             snap.get("status") or snap.get("state") or row.state, "running")[:32]
         state_changed = old_state != row.state
@@ -893,8 +899,11 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
             meta.pop("turnCorrelationVersion", None)
         meta["executionIdentity"] = execution_identity.from_snapshot(
             meta.get("executionIdentity"), snap, runner)
-        if not row.model and "model" not in snap:
-            row.model = str(meta["executionIdentity"].get("model") or "")[:160]
+        identity_model = str(meta["executionIdentity"].get("model") or "")[:160]
+        if identity_model:
+            # Keep the read model aligned with the frozen identity, including
+            # legacy rows whose denormalized model column was empty.
+            row.model = identity_model
         row.metadata_ = meta
         settlement = dict(meta.get("terminalSettlement") or {})
         settlement_state = str(settlement.get("state") or "")

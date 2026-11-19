@@ -3,6 +3,7 @@
 This is not a second job scheduler. The task row lock prevents duplicate work,
 and the native conversation queue owns the order of sends.
 """
+import asyncio
 import hashlib
 from fastapi import HTTPException
 from . import task_status, task_events
@@ -160,7 +161,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
 
     from sqlalchemy import select
     from ..models import Attachment, TaskEvent
-    from . import delivery_manifest, storage
+    from . import delivery_collections, delivery_manifest, storage
     from .ai_exec import EV_ARTIFACTS
 
     if not files:
@@ -197,7 +198,13 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
         except (TypeError, ValueError):
             pass
 
-    from . import delivery_manifest
+    # Validate every supplied name before writing any object.  The old path
+    # normalizer removed ``..`` and empty segments, which made malformed input
+    # look valid until a later storage call (and allowed earlier files in a
+    # multi-file delivery to become orphaned when a later name failed).
+    for name, _data, _ctype in files:
+        delivery_collections.safe_path(str(name or "").replace("\\", "/"))
+
     who = "agent:" + (provider or "conversation")
     got: list[str] = []
     valid: set[str] = set()
@@ -206,8 +213,9 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
     evidence: set[str] = set()
     ignored: set[str] = set()
     invalid: list[dict] = []
+    stored_objects: list[tuple[str, str]] = []
     for name, data, ctype in files:
-        fn = delivery_manifest.normalize_name(name)
+        fn = delivery_manifest.normalize_name(str(name or "").replace("\\", "/"))
         if not fn or fn in received:
             continue
         declared = (categories or {}).get(name)
@@ -244,9 +252,36 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
             ignored.add(fn)
             valid.add(fn)
         key = f"ai/{task.id}/{_uuid.uuid4().hex[:8]}-{fn}"
+        try:
+            backend = storage.put(key, data, ctype)
+        except Exception:
+            # Storage writes are outside the database transaction.  Remove
+            # objects already created by this collection before propagating a
+            # later write failure, otherwise partial delivery leaves orphans.
+            async def cleanup_partial_delivery():
+                try:
+                    await session.rollback()
+                except Exception:
+                    pass
+                for stored_key, stored_backend in stored_objects:
+                    try:
+                        await asyncio.to_thread(storage.delete, stored_key, stored_backend)
+                    except Exception:
+                        pass
+
+            cleanup = asyncio.create_task(cleanup_partial_delivery())
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                # A cancellation must not interrupt compensation halfway
+                # through the object list.  Preserve cancellation afterward.
+                await cleanup
+                raise
+            raise
+        stored_objects.append((key, backend))
         session.add(Attachment(
             task_id=task.id, filename=fn, content_type=ctype, size=len(data),
-            storage_key=key, backend=storage.put(key, data, ctype), uploaded_by=who,
+            storage_key=key, backend=backend, uploaded_by=who,
             role=role, source_ref=ref,
             evidence_meta={"provider": provider or "conversation",
                            "sha256": hashlib.sha256(data).hexdigest(),
