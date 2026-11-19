@@ -106,6 +106,16 @@ if (typeof electron === 'string') {
     await publish({ ...snap, execution: { running: false, elapsedMs: 999999 } });
     assert.equal(await js('document.querySelector(".nturn-outcome").textContent'), '你在 19 秒后停止了');
     await shot('stopped-zh');
+    for (const [elapsedMs, expected, name] of [[318000, '你在 5 分 18 秒后停止了', 'minutes'],
+      [3661000, '你在 1 小时 1 分 1 秒后停止了', 'hours']]) {
+      const longer = snapshot(entries.concat({ type: 'custom', customType: require('../main/pi-session/turn-outcome').ENTRY_TYPE,
+        data: { kind: 'stopped', sentAt: 1000, at: 1000 + elapsedMs } }));
+      await publish(longer);
+      assert.equal(await js('document.querySelector(".nturn-outcome").textContent'), expected);
+      await publish({ ...longer, execution: { running: false, elapsedMs: 999999999 } });
+      assert.equal(await js('document.querySelector(".nturn-outcome").textContent'), expected);
+      await shot('stopped-' + name);
+    }
     for (const [locale, file] of [['en-US', 'en-US-chat.js'], ['ja-JP', 'ja-JP-runtime-surfaces.js'], ['ko-KR', 'ko-KR-runtime-surfaces.js']]) {
       const translations = require('../core/locales/' + file);
       await js(`window.locale=${JSON.stringify(locale)};window.translations=${JSON.stringify(translations)};void 0`);

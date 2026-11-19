@@ -5,6 +5,15 @@
     ((Number(snap.history?.messageStart) || 0) + index);
   const epoch = value => typeof value === 'number' ? value : Date.parse(value || '');
   const tx = value => global.SoduWorkI18n?.translateText?.(value) || value;
+  function stoppedText(elapsedMs) {
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) return tx('你已停止');
+    const total = Math.floor(elapsedMs / 1000);
+    const template = total >= 3600 ? '你在 {hours} 小时 {minutes} 分 {seconds} 秒后停止了'
+      : total >= 60 ? '你在 {minutes} 分 {seconds} 秒后停止了' : '你在 {seconds} 秒后停止了';
+    return tx(template).replace('{hours}', String(Math.floor(total / 3600)))
+      .replace('{minutes}', String(Math.floor(total / 60) % 60))
+      .replace('{seconds}', String(total % 60));
+  }
   function tokenInfo(messages, from, to, metric) {
     if (Number.isFinite(metric?.tokens)) return { tokens: metric.tokens, tokensEstimated: false };
     const counter = global.ChatStatus || (typeof require === 'function' ? require('./panels-chat-status') : null);
@@ -83,9 +92,7 @@
     function html(turn, currentMetrics) {
       if (turn.outcome) {
         const text = turn.outcome === 'stopped'
-          ? Number.isFinite(turn.elapsedMs)
-            ? tx('你在 {seconds} 秒后停止了').replace('{seconds}', String(Math.floor(turn.elapsedMs / 1000)))
-            : tx('你已停止')
+          ? stoppedText(turn.elapsedMs)
           : tx('本轮已中断');
         return '<div class="nturn-outcome" data-chat-node="turn-summary:' + ctx.esc(turn.key) + '">' + ctx.esc(text) + '</div>';
       }
