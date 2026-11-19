@@ -245,6 +245,7 @@ def spawn(
         from . import local_task_goal
         current = _RUNS.get(ref) or {}
         goal_guarded = local_task_goal.enabled(current)
+        opencode_guarded = current.get('cli') == 'opencode'
         goal_owned_turn = bool(current.get('goalTurnOwned', local_task_goal.active(current)))
         if ref in _RUNS:
             if _RUNS[ref].get('cli') != 'pi':
@@ -268,6 +269,16 @@ def spawn(
         return bool(current.get('_workerIdentity') is not owner
                     or current.get('state') != 'running' or current.get('stopping')
                     or goal_guarded and goal_owned_turn and not local_task_goal.active(current))
+
+    def preparation_cancelled() -> bool:
+        if not opencode_guarded:
+            return False
+        with _LOCK:
+            current = _RUNS.get(ref) or {}
+            cancelled = launch_cancelled(current)
+            if cancelled and current.get('_workerIdentity') is owner and current.get('state') == 'running':
+                current['stopping'] = True
+            return cancelled
 
     def close_broker() -> None:
         from . import access_broker
@@ -367,6 +378,14 @@ def spawn(
             return
         try:
             env = _env_for(prof or {}, cfg or {}, runtime_ref=ref)
+            with _LOCK:
+                execution = dict(_RUNS.get(ref) or {})
+            if execution.get('cli') == 'opencode' and execution.get('cliSid'):
+                from .opencode_session_migration import migrate_session
+                migrate_session(env, execution['cliSid'], ws, exe)
+            if preparation_cancelled():
+                finish(ref, 0, {}, '')
+                return
             # The task controller owns one durable output-recovery budget.
             # Never inherit this host-only switch from a shell or model config.
             with _LOCK:
@@ -386,8 +405,16 @@ def spawn(
             env['SODUWORK_DESKTOP_CONTROL_SCOPE'] = f'runner:{ref}:{desktop_round}'
             argv = _command_argv(exe, args, ws, cfg or {}, prof or {})
             from . import access_broker
+            # Recheck after command preparation without holding the run lock
+            # across the broker's own condition locks and server lifecycle.
+            if preparation_cancelled():
+                finish(ref, 0, {}, '')
+                return
             access_broker.attach(ref, cfg or {}, env)
         except Exception as exc:  # noqa: BLE001
+            if preparation_cancelled():
+                finish(ref, 0, {}, '')
+                return
             reason = str(exc).strip() or type(exc).__name__
             _append_raw(ref, '\n[preflight] ' + reason + '\n')
             finish(ref, 1, {}, reason)
@@ -398,10 +425,16 @@ def spawn(
         try:
             spool, launch = local_spool.prepare(_store_dir(ref), argv, ws)
             with _LOCK:
+                cancelled = preparation_cancelled()
                 prepared = _RUNS.get(ref)
-                if prepared is not None and prepared.get('_workerIdentity') is owner:
+                if not cancelled and prepared is not None and prepared.get('_workerIdentity') is owner:
                     prepared['stream'] = spool
                     prepared['terminal'] = {}
+            if cancelled:
+                close_broker()
+                local_spool.cleanup(_store_dir(ref), spool)
+                finish(ref, 0, {}, '')
+                return
             _save_meta(ref)
             # A durable sidecar outlives this Runner. Give a frozen child its
             # own extraction lifetime instead of sharing the parent's _MEIPASS.

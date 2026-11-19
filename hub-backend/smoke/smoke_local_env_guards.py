@@ -166,7 +166,10 @@ def t_remote_reinjection() -> None:
                 current = {"llm": {"key": "synthetic-turn-%d" % index},
                            "pluginResourceBundles": []}
                 admission = "comment:smoke-%d" % index
-                prepared = {**current, "_admissionKey": admission, "_inputImages": []}
+                # Remote follow-ups explicitly clear resources from a previous
+                # plugin turn before preparing this turn's inputs.
+                admitted = {**current, "_admissionKey": admission, "pluginResourceBundles": []}
+                prepared = {**admitted, "_inputImages": []}
                 message = {"op": "job.comment", "ref": ref, "text": "continue",
                            "turnId": "smoke-%d" % index, "cfg": current,
                            "_admitted": True, "_admissionKey": admission}
@@ -175,7 +178,7 @@ def t_remote_reinjection() -> None:
                         patch.object(local_stream, "comment_sync", return_value={"ok": True}) as comment:
                     result = asyncio.run(Runner._job(object.__new__(Runner), message))
                 forwarded.append(result.get("ok") is True and
-                    images.call_args.args == ({**current, "_admissionKey": admission},
+                    images.call_args.args == (admitted,
                                               [], os.path.join(store, "inputs")) and
                     comment.call_args.args == (prepared, ref, "continue") and
                     comment.call_args.args[0] is prepared and "_admissionKey" not in current)
