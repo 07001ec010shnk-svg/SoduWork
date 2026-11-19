@@ -3,8 +3,8 @@
  * Hub is authoritative for tasks. store.js queues per-task put/patch/delete
  * operations and replays them on reconnect instead of overwriting the task table.
  * Exposes task operations, configuration sync, registerClient, and connectWS.
- * The default Hub is https://service.soduwork.ai; the login gate can change it through
- * the main-process hub-endpoint policy. Identities and pending operations remain
+ * The main-process hub-endpoint policy selects the default: local for source runs,
+ * hosted for packaged clients. The login gate can change it. Identities and pending operations remain
  * isolated by service. X-Soduwork-Device identifies the installation using Electron
  * secure storage; User.id is only a legacy first-migration hint.
  * window.SoduWorkAPI is canonical; compatibility aliases remain at the end.
