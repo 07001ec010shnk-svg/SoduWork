@@ -67,19 +67,23 @@ class ExecutionSessionRoundsTests(unittest.IsolatedAsyncioTestCase):
         return await execution_sessions.ingest_runner_snapshots(session, self.runner, [snapshot])
 
     async def test_late_snapshot_cannot_change_frozen_model(self):
-        await self.seed()
+        await self.seed(state="running")
         async with db.SessionLocal() as session:
             row = await session.scalar(select(ExecutionSession).where(
                 ExecutionSession.task_id == self.tid))
             row.model = "frozen-model"
             row.metadata_ = {
                 "round": 1,
-                "executionIdentity": {"model": "frozen-model"},
+                # Legacy rows can have the denormalized model without the
+                # identity field; the first post-upgrade heartbeat must seed
+                # the identity from that frozen value.
+                "executionIdentity": {},
             }
             await session.commit()
 
-            await self.ingest(session, 1, "running", 1, model="frozen-model")
-            await self.ingest(session, 1, "running", 2, model="stale-or-forged-model")
+            with patch.object(execution_sessions, "_allowed", new=AsyncMock(return_value=True)):
+                await self.ingest(session, 1, "running", 1, model="frozen-model")
+                await self.ingest(session, 1, "running", 2, model="stale-or-forged-model")
             await session.refresh(row)
 
             self.assertEqual(row.model, "frozen-model")

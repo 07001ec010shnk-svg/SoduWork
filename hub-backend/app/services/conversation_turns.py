@@ -214,6 +214,38 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
     ignored: set[str] = set()
     invalid: list[dict] = []
     stored_objects: list[tuple[str, str]] = []
+
+    async def commit_delivery():
+        """Commit metadata and compensate objects when the commit is rejected.
+
+        A lost commit acknowledgement may still have persisted an Attachment,
+        so only objects absent from a post-rollback lookup are safe to delete.
+        """
+        try:
+            await session.commit()
+        except Exception:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
+            persisted = None
+            if stored_objects:
+                try:
+                    persisted = set((await session.scalars(select(Attachment.storage_key).where(
+                        Attachment.storage_key.in_([key for key, _backend in stored_objects])))).all())
+                except Exception:
+                    # A failed lookup cannot prove that an object is unused;
+                    # retain it rather than risking deletion after a lost ACK.
+                    pass
+            if persisted is not None:
+                for stored_key, stored_backend in stored_objects:
+                    if stored_key not in persisted:
+                        try:
+                            await asyncio.to_thread(storage.delete, stored_key, stored_backend)
+                        except Exception:
+                            pass
+            raise
+
     for name, data, ctype in files:
         fn = delivery_manifest.normalize_name(str(name or "").replace("\\", "/"))
         if not fn or fn in received:
@@ -253,7 +285,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
             valid.add(fn)
         key = f"ai/{task.id}/{_uuid.uuid4().hex[:8]}-{fn}"
         try:
-            backend = storage.put(key, data, ctype)
+            backend = await asyncio.to_thread(storage.put, key, data, ctype)
         except Exception:
             # Storage writes are outside the database transaction.  Remove
             # objects already created by this collection before propagating a
@@ -312,7 +344,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
                             "files": sorted(got),
                             "reason": "轮次未完成，本轮产出仅留证，待轮次完成后再交付"},
                            actor=who)
-        await session.commit()
+        await commit_delivery()
         return {"ok": True, "files": got, "round": round_no,
                 "deferred": True, "invalid": invalid[-100:],
                 "submissionMode": submission_mode,
@@ -325,7 +357,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
             _delivery_issue(task, "invalid_delivery", reason)
             task_events.record(session, task.id, "artifact.delivery_rejected",
                                {"ref": ref, "identifier": turn_id, "files": sorted(got), "reason": reason}, actor=who)
-            await session.commit()
+            await commit_delivery()
             from . import task_access, tasks as tasks_svc
             await task_access.publish_task(session, task, "task.updated", await tasks_svc.task_to_api_live(session, task))
             return {"ok": True, "files": got, "round": round_no, "invalid": invalid[-100:],
@@ -344,7 +376,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
                            {"ref": ref, "identifier": turn_id, "round": round_no,
                             "files": sorted(got), "submissionMode": submission_mode},
                            actor=who)
-        await session.commit()
+        await commit_delivery()
         from . import task_access, tasks as tasks_svc
         await task_access.publish_task(session, task, "task.updated",
                                        await tasks_svc.task_to_api_live(session, task))
@@ -379,7 +411,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
             await _cd.notify_reviewer(session, task, "、".join(deliverables or got))
         except OutputAwaitingRework:
             # A late delivery receipt cannot undo a reviewer's rejection.
-            await session.commit()
+            await commit_delivery()
             return {"ok": True, "files": got, "round": round_no, "deferred": True,
                     "pendingRework": True, "submissionMode": submission_mode}
         except ValueError as error:
@@ -409,7 +441,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
                 await publish_owner(session, task, {
                     "type": "notice", "taskId": task.id,
                     "text": f"「{task.title}」的产出自检未通过，未进入待验收：{reason}{('（' + hint + '）') if hint else ''}"})
-    await session.commit()
+    await commit_delivery()
     # Ingestion changes candidate and review state, so push task.updated.
     # This keeps board and send-queue snapshots synchronized with the task version.
     from . import task_access, tasks as tasks_svc

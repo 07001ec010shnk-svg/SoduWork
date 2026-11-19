@@ -897,10 +897,17 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
             meta.pop("admissionKey", None)
             meta.pop("admissionStartSeq", None)
             meta.pop("turnCorrelationVersion", None)
+        identity = dict(meta.get("executionIdentity") or {})
+        # Legacy rows may have a denormalized model but no model field in the
+        # identity object yet.  Seed the identity from that frozen value before
+        # accepting any snapshot fields, so a late heartbeat cannot backfill a
+        # different model into the identity.
+        if row.model and not identity.get("model"):
+            identity["model"] = row.model
         meta["executionIdentity"] = execution_identity.from_snapshot(
-            meta.get("executionIdentity"), snap, runner)
+            identity, snap, runner)
         identity_model = str(meta["executionIdentity"].get("model") or "")[:160]
-        if identity_model:
+        if identity_model and not row.model:
             # Keep the read model aligned with the frozen identity, including
             # legacy rows whose denormalized model column was empty.
             row.model = identity_model

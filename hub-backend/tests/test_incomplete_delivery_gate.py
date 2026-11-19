@@ -124,6 +124,31 @@ class IncompleteTurnDeliveryTests(_Base):
         finally:
             await self._dispose(engine, session)
 
+    async def test_commit_failure_removes_unpersisted_storage_objects(self):
+        engine, session, task = await self._prepared()
+        written = []
+        deleted = []
+
+        def put(key, _data, _content_type):
+            written.append(key)
+            return "local"
+
+        def delete(key, backend):
+            deleted.append((key, backend))
+
+        try:
+            with mock.patch.object(storage, "put", side_effect=put), \
+                 mock.patch.object(storage, "delete", side_effect=delete), \
+                 mock.patch.object(session, "commit", side_effect=RuntimeError("db unavailable")):
+                with self.assertRaises(RuntimeError):
+                    await conversation_turns.deliver_artifacts(
+                        session, task, conversation_id="conv-9", turn_id="turn-9",
+                        provider="conversation", outcome="incomplete",
+                        files=[("one.md", b"# one", "text/markdown")])
+            self.assertEqual(deleted, [(written[0], "local")])
+        finally:
+            await self._dispose(engine, session)
+
     async def test_completed_delivery_still_submits(self):
         """Completed turns still create candidate versions and reviews for valid output."""
         engine, session, task = await self._prepared()
