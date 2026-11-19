@@ -24,7 +24,8 @@ data directories, update trust and installer filenames stay the same.
 
 The manual **On-demand client packages** Actions workflow accepts `default_hub_url`
 and an `artifact_label` such as `cn`. Select a protected branch with the intended
-version and these build tools. It runs quality checks, signing and native installation
+version and these build tools. That version must already have a stable Release;
+its verified release notes are reused in every package. It runs quality checks, signing and native installation
 acceptance, then keeps environment-labelled Actions artifacts for 30 days. It does
 not create a GitHub Release or deploy a Hub. Each download includes
 `client-packages.json` with the default address, source commit, build run and hashes.

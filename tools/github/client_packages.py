@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,7 +10,7 @@ import re
 import subprocess
 import tempfile
 
-from build import native
+from build import download, native
 from release import ROOT, SHARDS, api, expected, fingerprint, policy, read, require, validate_linux_signing, write
 
 
@@ -44,6 +45,44 @@ def preflight(ctx, root=ROOT):
     policy(ctx, root)
 
 
+def verify_published_notes(ctx, folder):
+    import release_notes
+    manifest = read(folder / "release-manifest.json")
+    require(manifest.get("repository") == ctx["repository"] and manifest.get("version") == ctx["version"]
+            and manifest.get("tag") == "v" + ctx["version"] and manifest.get("component") in ("client", "all"),
+            "Published release belongs to another product/version")
+    assets = [a for a in manifest["assets"] if a["name"] == release_notes.NAME]
+    require(len(assets) == 1 and fingerprint(folder / release_notes.NAME) == assets[0],
+            "Published release notes differ from their release manifest")
+    release_notes.validate(read(folder / release_notes.NAME), manifest)
+    return manifest
+
+
+def fetch_published_notes(ctx, folder):
+    release = api("/releases/tags/v" + ctx["version"])
+    require(release.get("tag_name") == "v" + ctx["version"] and not release.get("draft")
+            and not release.get("prerelease"), "On-demand packages require an existing stable release")
+    folder.mkdir(parents=True, exist_ok=False)
+    for name in ("release-manifest.json", "release-notes.json"):
+        assets = [a for a in release["assets"] if a["name"] == name]
+        require(len(assets) == 1, "Published release notes and manifest are required")
+        asset = assets[0]
+        require(re.fullmatch(r"sha256:[a-f0-9]{64}", asset.get("digest", "")), "Published asset digest required")
+        url = "https://github.com/" + ctx["repository"] + "/releases/download/v" + ctx["version"] + "/" + name
+        require(asset["browser_download_url"] == url, "Published asset URL differs")
+        download(url, folder / name, asset["digest"].split(":")[1])
+    verify_published_notes(ctx, folder)
+
+
+def bundle_published_notes(ctx, folder, root=ROOT):
+    import release_notes
+    manifest = verify_published_notes(ctx, folder)
+    digest = release_notes.bundle(manifest, folder / release_notes.NAME, root)
+    return {"version": manifest["version"], "sourceCommit": manifest["commit"],
+            "runId": manifest["runId"], "sha256": digest,
+            "manifestSha256": hashlib.sha256((folder / "release-manifest.json").read_bytes()).hexdigest()}
+
+
 def record_packages(ctx, shard, folder, checks):
     require(shard in SHARDS["client"], "Desktop platform required")
     require(checks.get("ok") is True, "Native acceptance did not pass")
@@ -51,6 +90,11 @@ def record_packages(ctx, shard, folder, checks):
             "Acceptance belongs to another build")
     require(checks.get("defaultHubUrl") == ctx["defaultHubUrl"], "Acceptance used another default Hub")
     require(re.fullmatch(r"[a-f0-9]{64}", checks.get("bundledReleaseHistorySha256", "")), "Bundled notes evidence required")
+    notes = checks.get("publishedReleaseNotes", {})
+    require(notes.get("version") == ctx["version"] and re.fullmatch(r"[a-f0-9]{40}", notes.get("sourceCommit", ""))
+            and re.fullmatch(r"[1-9]\d*", str(notes.get("runId", "")))
+            and all(re.fullmatch(r"[a-f0-9]{64}", notes.get(k, "")) for k in ("sha256", "manifestSha256")),
+            "Published release notes provenance required")
     if shard == "linux":
         validate_linux_signing(ctx, checks)
     names = expected(ctx, shard)
@@ -75,6 +119,7 @@ def main():
     policy(ctx)
     if args.command == "preflight":
         preflight(ctx)
+        fetch_published_notes(ctx, ROOT / "release-evidence/published-notes")
         if os.environ.get("GITHUB_OUTPUT"):
             with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as stream:
                 stream.write(f"version={ctx['version']}\nlabel={ctx['artifactLabel']}\ndefault_hub_url={ctx['defaultHubUrl']}\n")
@@ -82,8 +127,10 @@ def main():
         return
     require(args.output is not None, "Output directory required")
     args.output.mkdir(parents=True, exist_ok=False)
+    notes = bundle_published_notes(ctx, ROOT / "release-evidence/published-notes")
     with tempfile.TemporaryDirectory(prefix="soduwork-client-packages-") as temporary:
         checks = native(ctx, args.command, args.output.resolve(), Path(temporary), preserve_release_history=True)
+        checks["publishedReleaseNotes"] = notes
         record = record_packages(ctx, args.command, args.output, checks)
     print(json.dumps({key: record[key] for key in ("version", "artifactLabel", "defaultHubUrl", "shard")}))
 
