@@ -3,7 +3,10 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const { createRequire } = require('node:module');
 const { pathToFileURL } = require('node:url');
 
-test('automation and UI really call the same chat open/send pipeline; internal completion stays out of IPC', async () => {
+test('automation and UI really call the same chat open/send pipeline; internal completion stays out of IPC', async t => {
+  // This offline Hub fixture must not depend on external DNS or live sockets.
+  t.mock.method(global, 'fetch', async () => { throw new Error('Fixture Hub is unavailable'); });
+  t.mock.method(global, 'WebSocket', function () { throw new Error('Fixture WebSocket is unavailable'); });
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'soduwork-chat-pipeline-test-'));
   const archivePath = path.join(directory, 'pi-agent', 'sessions', 'archived-chat.jsonl');
   fs.mkdirSync(path.dirname(archivePath), { recursive: true });

@@ -100,6 +100,32 @@ DeepSeek ACP 适配器 0.4.40 和 0.4.41 可能在子代理仍运行时返回完
 
 工具活动结束后，DeepSeek Harness 可在原会话中从已保存的结果接着做，并使用更小的工具调用。自动恢复最多续跑一次，只有原生压缩成功后才能再续跑一次。持续达到上限时，会显示本轮未完成并保留进度，不再作为协议错误呈现。续跑成功会清除旧截断状态；协议错误和宿主清理失败仍优先处理。
 
+使用托管模型路由时，SoduWork 显式启用 DeepSeek 原生自动压缩并配置预算，
+在当前回合的工具步骤之间执行。
+触发阈值取模型上下文窗口的 80% 与扣除当前输出、摘要预算后剩余空间的较小值。
+摘要输出不超过模型配置的输出上限，不再沿用原生的 65,536 token 预留。
+正常输出上限保持不变；只有几乎占满上下文窗口的输出上限才会下调，为输入留出空间。
+原生压缩保留当前会话、工具结果、权限与取消归属，无需用户再次发送消息。
+这不会把模型单次输出上限误判为上下文溢出，也不会移除上述有界续跑限制。
+
+运行 `python3 -m unittest test_dsh_gateway test_context_recovery
+test_acp_error_messages test_local_turn_outcome` 可验证模型预算与恢复回归。
+配置或推断的上下文大小仍需符合实际服务限制；如果窗口连原生指令和工具定义都容纳不下，
+仅靠压缩无法解决。
+
+真实原生进程验证可运行 `python3 e2e_dsh_auto_compaction.py`，使用上述生命周期验证相同的
+`--adapter-entry`、`--runtime-root`、`--node` 和 `--output` 明确路径参数。
+合成本机模型服务使 64k 窗口在一条用户需求内反复压缩；测试与旧的仅配置模型路由的 bundle
+对照，检查持久检查点和已完成工具，并要求压缩后的原生用量回执下降。
+这不替代生产模型或桌面界面验收。
+
+托管 Kimi 和 Qwen 同样接收所选模型的上下文窗口，不再沿用更大的原生默认值。
+Kimi 接收明确配置的输出上限；Qwen 保留管理员的采样与输出参数。
+二者均使用各自原生的步骤间压缩。托管 Codex Harness 接收模型窗口和 80% 的自动压缩阈值。
+个人账号版 Codex 保留原生模型设置；OpenCode 已传入上下文与输出限制，并保留原生自动压缩。
+运行 `python3 -m unittest test_kimi_runtime test_qwen_runtime test_acp_permission_inputs
+test_codex_account_acp` 可验证这些配置与隔离边界。
+
 DeepSeek 运行时预检按归档锁定版本检查 Windows、macOS 和 Linux 的 x64/arm64
 sharp、koffi 和 ripgrep 包；macOS/Linux 还检查 libvips，Linux 区分 glibc 与 musl
 二进制。清单缺失、版本错误或关键加载器/二进制缺失会阻止激活临时安装，并使缓存的

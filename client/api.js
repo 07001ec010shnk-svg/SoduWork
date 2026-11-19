@@ -1103,7 +1103,7 @@
     var result;
     try {
       result = await bridge.localRequirementParse({ model: reference, input: localParseInput(text, attachments),
-        instructions: localParseInstructions(options), maxOutputTokens: 1024, timeoutMs: 60000, requestId });
+        instructions: localParseInstructions(options), timeoutMs: 60000, requestId });
     } catch (_) {
       return { _parseError: '本地需求解析未能完成；原文已保留，请检查本地模型后重试或手动填写' };
     }
