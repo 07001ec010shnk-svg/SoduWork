@@ -25,6 +25,8 @@ Select only the 3-5 most important user-visible changes (fewer if there are fewe
 Each item is ONE short sentence. Group related commits, remove duplicates and account
 for reverts. Exclude pure tests, docs and internal maintenance. Retain user-facing installation
 and upgrade fixes. Distinguish desktop and Hub administration changes and platform restrictions.
+Prioritize desktop user workflows over deployment maintenance, dependency pins or test/probe diagnostics.
+Never describe a CI acceptance check as a change to all users' default installation behavior.
 Use only facts explicit in the titles. Skip ambiguous details rather than guessing.
 Do not invent features, guarantees, tests or benefits. Do not copy commit titles as release notes.
 No URLs, HTML, Markdown links, placeholders, credentials or generic 'fixed known issues' prose.
