@@ -98,8 +98,9 @@ test('an otherwise valid signed manifest is rejected when isolated public trust 
 
 for (const isPackaged of [false, true]) test(`self-hosted ${isPackaged ? 'packaged' : 'source'} clients persist an editable Hub`, t => {
   const app = appFixture(t, isPackaged);
-  assert.deepEqual(endpoint.initialize(app, {}), { hub: 'https://service.soduwork.ai', editable: true, internalTest: false });
-  for (const hub of ['http://127.0.0.1:18989', 'https://hub.example.test']) {
+  const defaultHub = isPackaged ? 'https://service.soduwork.ai' : 'http://127.0.0.1:18989';
+  assert.deepEqual(endpoint.initialize(app, {}), { hub: defaultHub, editable: true, internalTest: false });
+  for (const hub of ['http://127.0.0.1:18990', 'https://service.soduwork.ai', 'https://hub.example.test']) {
     assert.equal(endpoint.prepare(app, hub).ok, true);
     assert.equal(endpoint.initialize(app, {}).hub, hub);
   }
