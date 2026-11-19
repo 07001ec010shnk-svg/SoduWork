@@ -49,7 +49,9 @@ def legacy_max_path():
 
 def deep_root(folder, length=220):
     """A storage root of ``length`` characters, like a nested Windows data directory."""
-    return Path(folder) / ("r" * max(1, length - len(str(Path(folder))) - 1))
+    # Resolve first: runner temp directories can be 8.3 short names (RUNNER~1).
+    folder = Path(folder).resolve()
+    return folder / ("r" * max(1, length - len(str(folder)) - 1))
 
 
 def long_tempdir(case):
