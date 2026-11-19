@@ -158,10 +158,12 @@ def _native_path(path: Path) -> Path:
 
 
 def _ensure_local_ready() -> bool:
-    root = _local_root()
     try:
-        root.mkdir(parents=True, exist_ok=True)
-        probe = root / (".soduwork-library-probe-" + uuid4().hex)
+        # The readiness probe must use the same long-path handling as object
+        # I/O, or a deep root reports "unavailable" although writes succeed.
+        root = _local_root().resolve()
+        _native_path(root).mkdir(parents=True, exist_ok=True)
+        probe = _native_path(root / (".soduwork-library-probe-" + uuid4().hex))
         probe.write_bytes(b"ok")
         probe.unlink(missing_ok=True)
     except Exception as exc:
