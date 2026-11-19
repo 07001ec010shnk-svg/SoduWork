@@ -15,9 +15,42 @@ function u16(n) { const b = Buffer.alloc(2); b.writeUInt16LE(n & 0xffff); return
 function u32(n) { const b = Buffer.alloc(4); b.writeUInt32LE(n >>> 0); return b; }
 function dosDate(st) {
   const modified = new Date(st.mtimeMs ?? Date.now());
+  if (Number.isNaN(modified.getTime())) return { date: 33, time: 0 };
   const date = modified.getFullYear() < 1980 ? new Date(1980, 0, 1)
     : modified.getFullYear() > 2107 ? new Date(2107, 11, 31, 23, 59, 58) : modified;
   return { date: ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate(), time: (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2) };
+}
+
+// Windows Node stat loses the high bits of the Unix seconds. Read the native
+// times in one batch while the packaging worker still owns the file snapshot.
+function captureFileEntries(entries) {
+  if (process.platform !== 'win32' || !entries.length) return entries;
+  const powershell = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const script = `
+    $ErrorActionPreference = 'Stop'
+    [Console]::InputEncoding = [Text.Encoding]::UTF8
+    $paths = ConvertFrom-Json ([Console]::In.ReadToEnd())
+    $times = foreach ($p in $paths) {
+      $file = [IO.FileInfo]::new($p)
+      if (!$file.Exists) { throw 'Cannot read ZIP source file metadata' }
+      try { ([DateTimeOffset]$file.get_LastWriteTimeUtc()).ToUnixTimeMilliseconds() }
+      catch [ArgumentOutOfRangeException] {
+        # NTFS can represent years above DateTime.MaxValue, all beyond the DOS maximum.
+        [DateTimeOffset]::MaxValue.ToUnixTimeMilliseconds()
+      }
+    }
+    ConvertTo-Json -Compress -InputObject @($times)
+  `;
+  const result = require('node:child_process').spawnSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    input: JSON.stringify(entries.map(item => path.toNamespacedPath(item.filename))),
+    encoding: 'utf8', windowsHide: true, timeout: 120000, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  if (result.status !== 0) throw Error('Could not read Windows file modification times for ZIP export', { cause: result.error });
+  const times = JSON.parse(result.stdout);
+  if (!Array.isArray(times) || times.length !== entries.length || !times.every(Number.isSafeInteger)) {
+    throw Error('Invalid Windows ZIP source file timestamps');
+  }
+  return entries.map(({ name, bytes }, index) => ({ name, bytes, st: { mtimeMs: times[index] } }));
 }
 function collect(root) {
   const result = []; let total = 0;
@@ -74,9 +107,8 @@ function createEntriesSync(entries) {
 }
 function createZip(root) {
   const base = fs.realpathSync(root); const { result, total } = collect(base);
-  const archive = encode(result.map(item => { const bytes = fs.readFileSync(item.full); return {
-    name: item.name, bytes, st: item.st, compressed: zlib.deflateRawSync(bytes, { level: 6 }),
-  }; }));
+  const entries = result.map(item => ({ name: item.name, filename: item.full, st: item.st, bytes: fs.readFileSync(item.full) }));
+  const archive = createEntriesSync(captureFileEntries(entries));
   if (archive.length > MAX_BYTES) throw new Error("ZIP archive is larger than 24 MB; remove large files");
   return { data: archive, name: path.basename(base) + ".zip", size: archive.length, files: result.length, total,
     website: result.some(file => /(?:^|\/)index\.(?:html?|xhtml)$/i.test(file.name)) };
@@ -84,4 +116,4 @@ function createZip(root) {
 // Keep the synchronous primitive for worker/test callers. Native UI handlers
 // must use the bounded worker so scanning, reads, zlib and CRC stay off-thread.
 function createZipAsync(root, options) { return require('./zip-archive-worker').create(root, options); }
-module.exports = { createZip, createZipAsync, createEntries, createEntriesSync, collect, MAX_BYTES, MAX_FILES };
+module.exports = { createZip, createZipAsync, createEntries, createEntriesSync, captureFileEntries, collect, MAX_BYTES, MAX_FILES };
