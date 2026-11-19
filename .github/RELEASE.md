@@ -91,6 +91,53 @@ When replacing old `release/X.Y.Z` branches, first preserve their published `vX.
 
 When preparing the public repository, reviewed source may be squashed into `public` without private development history, old tags or internal artifacts. The source exporter creates a ZIP from the committed tree, generates its manifest from the archived bytes, and verifies the archive before returning it. The manifest is not tracked in Git.
 
+## On-demand client packages
+
+The normal **Draft release** workflow continues to build the AWS-default public
+client and a deployment-independent Hub image. For an occasional deployment with
+another default address, run **On-demand client packages** (`client-packages.yml`).
+Select a protected branch containing the desired package version and these tools;
+older tags without this capability cannot use it directly. For an already released
+version, use a reviewed build-only branch based on that version. Record its actual
+source commit; do not move the published tag or claim the modified build has the
+original release's SHA. The workflow must be present on the default branch before
+GitHub exposes its manual entry.
+
+Inputs are `default_hub_url` (empty means `https://service.soduwork.ai`) and
+`artifact_label` (a short lowercase label such as `cn`, used only for downloads).
+It builds one environment, six desktop installers across four native jobs, reusing
+the public quality, binary-review, signing and installation acceptance gates.
+The existing `public-release` reviewer environment controls signing jobs. Original
+installer basenames, app identities, data directories, version and update trust
+remain unchanged. Native acceptance checks the installed candidate's default Hub;
+existing user-selected addresses continue to take precedence. The version must
+already have a stable Release with `release-manifest.json` and `release-notes.json`.
+Preflight verifies both assets against their published digests, checks the notes
+against the release manifest, and shares the same inputs with all native jobs.
+Packages reuse the published version's notes without regenerating or publishing
+them. Receipts retain both the original notes provenance and the new build identity.
+
+Download the four `client-<version>-<label>-<shard>-<run>` artifacts from Actions
+within 30 days. Each contains original installers, any Linux package signatures,
+and `client-packages.json` binding the URL, source, run, native acceptance and hashes.
+These are authenticated workflow downloads, not permanent public download links.
+The workflow has no Release-writing permission and never changes existing Release
+assets. Keep each environment's artifacts in a separate directory.
+
+Deployment remains outside this build workflow. Reuse the official same-version
+Hub image with the target environment's database, storage and service configuration.
+Verify migration/rollback readiness and deploy the Hub before enabling new clients.
+Verify the downloaded installer hashes and sign their update manifests with a key
+trusted by supported installed clients. Upload `installer` and signed JSON `bundle`
+as multipart fields to `POST /api/v1/admin/client-releases/upload`; this stages a
+disabled record. Review all intended platform records, then enable each with
+`PATCH /api/v1/admin/client-releases/<id>` and `{"enabled": true}`. Verify public
+downloads, signatures and the old client's update API. Preserve old records and
+rollback evidence. Keep deployment credentials and update-signing private keys on
+the deployment side; this workflow needs no Hub credentials. Same-version packages
+do not trigger an automatic upgrade. Old separate CN/Global installation identities
+still require the previously documented manual migration.
+
 ## User-facing release notes
 
 For `client` and `all`, the `release-notes` job runs after preflight and before

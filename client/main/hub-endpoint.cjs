@@ -2,7 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const PRODUCTION_HUB = 'https://service.soduwork.ai';
+const PRODUCTION_HUB = require('./default-hub.cjs').bundledDefaultHub();
 const SOURCE_HUB = 'http://127.0.0.1:18989';
 const connections = new WeakMap();
 
