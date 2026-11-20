@@ -246,16 +246,20 @@ async def request_observability(request: Request, call_next):
         runtime_telemetry.record(request.method, route_path, 500, elapsed,
                                  request_id, type(exc).__name__,
                                  getattr(request.state, "model_timing", None))
-        # Ensure 500 responses carry X-Request-ID for log correlation
+        # Keep the response generic while retaining the request id for support
+        # correlation. The exception details are already present in the log.
         from starlette.responses import PlainTextResponse
         return PlainTextResponse(
-            f"Internal Server Error: {type(exc).__name__}: {str(exc)[:200]}",
+            "Internal Server Error",
             status_code=500,
             headers={
                 "X-Request-ID": request_id,
                 "X-Content-Type-Options": "nosniff",
                 "X-Frame-Options": "DENY",
+                "X-XSS-Protection": "1; mode=block",
                 "Content-Security-Policy": "default-src 'self'; script-src 'self'",
+                "Referrer-Policy": "strict-origin-when-cross-origin",
+                "Cache-Control": "no-store",
             }
         )
     elapsed = (time.perf_counter() - started) * 1000
