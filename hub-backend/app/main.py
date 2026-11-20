@@ -267,13 +267,19 @@ async def request_observability(request: Request, call_next):
         getattr(request.state, "model_timing", None),
     )
     response.headers["X-Request-ID"] = request_id
-    # Security headers
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Cache-Control"] = "no-store"
+    # Apply defaults without replacing route-specific policies, such as the
+    # sandbox CSP and private cache policy used for attachment downloads.
+    security_headers = {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "X-XSS-Protection": "1; mode=block",
+        "Content-Security-Policy": "default-src 'self'; script-src 'self'",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Cache-Control": "no-store",
+    }
+    for header, value in security_headers.items():
+        if header not in response.headers:
+            response.headers[header] = value
     timing = getattr(request.state, "model_timing", None) or {}
     parts = [f"app;dur={elapsed:.1f}"]
     for key, label in (("admissionMs", "model-admission"),
