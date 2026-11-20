@@ -51,6 +51,27 @@ class LocalStartupTests(unittest.TestCase):
                                  'http://127.0.0.1:18991', io.BytesIO())
             self.assertEqual(popen.call_args.kwargs['env'].get('SODUWORK_REQUIREMENT_DIAGNOSTICS_DIR'), destination)
 
+    def test_bind_failure_reports_unavailable_address_not_port_conflict(self):
+        with patch.object(start.socket, 'socket') as socket_factory:
+            probe = socket_factory.return_value.__enter__.return_value
+            probe.bind.side_effect = OSError(errno.EADDRNOTAVAIL, 'address unavailable')
+            with self.assertRaises(start.StartupError) as caught:
+                start.assert_available('192.0.2.1', 18989)
+        message = str(caught.exception)
+        self.assertIn('192.0.2.1:18989', message)
+        self.assertIn('address unavailable', message)
+        self.assertNotIn('already in use', message)
+
+    def test_bind_failure_reports_name_resolution_error(self):
+        with patch.object(start.socket, 'socket') as socket_factory:
+            probe = socket_factory.return_value.__enter__.return_value
+            probe.bind.side_effect = socket.gaierror(socket.EAI_NONAME, 'unknown host')
+            with self.assertRaises(start.StartupError) as caught:
+                start.assert_available('invalid.example', 18989)
+        self.assertIn('invalid.example:18989', str(caught.exception))
+        self.assertIn('unknown host', str(caught.exception))
+        self.assertNotIn('already in use', str(caught.exception))
+
     def test_linux_root_desktop_fails_before_initialization_password_or_downloads(self):
         for options in ([], ['--prepare-only'], ['--check']):
             with self.subTest(options=options), patch.object(sys, 'platform', 'linux'), \
