@@ -12,6 +12,7 @@ from public_source import INTERNAL_SMOKES, is_public_snapshot
 RELEASE_SMOKES = tuple(sorted((
     "test_template_catalog_revision.py",
     "test_local_process_cleanup.py",
+    "test_library_integrity.py",
     "test_skill_policy_defaults.py",
     "test_bundled_development_skills.py",
     "test_desktop_capabilities.py",
@@ -88,6 +89,7 @@ RELEASE_SMOKES = tuple(sorted((
     "smoke/smoke_admin_security.py",
     "test_admin_projects.py",
     "test_api_integer_validation.py",
+    "test_api_timestamps.py",
     "test_domain_sort_validation.py",
     "test_domain_sort_migration.py",
     "test_schedule_update_input_validation.py",
@@ -333,6 +335,7 @@ RELEASE_SMOKES = tuple(sorted((
     "test_unified_requirements.py",
     "test_task_text_compatibility.py",
     "test_admin_requirement_dispatch.py",
+    "test_admin_task_attachments.py",
     "test_user_role_updates.py",
     "test_unified_requirements_migration.py",
     "test_unified_requirements_acl.py",

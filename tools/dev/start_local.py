@@ -20,7 +20,8 @@ from urllib.request import ProxyHandler, build_opener
 import webbrowser
 
 from .local_environment import (ROOT, StartupError, check_dependencies, check_desktop_session, dependency_report,
-                                prepare, prepare_desktop, spawn_options, stop_child, wait_child)
+                                prepare, prepare_desktop, source_copy_targets, spawn_options, stop_child, wait_child)
+from .local_path_check import check_windows_source_paths
 
 
 STATE_VERSION = 1
@@ -451,6 +452,12 @@ def wait_session(server: subprocess.Popen, desktop: subprocess.Popen, state: Pat
 
 
 def main(argv=None) -> int:
+    if sys.platform == "win32":
+        # Redirected Windows output can use a legacy code page. Keep its encoding
+        # while ensuring bilingual diagnostics and Unicode paths cannot abort startup.
+        for stream in (sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-dir", type=Path, default=default_state(), help="New empty directory, or this launcher's existing directory")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="HTTP port (default: 18989)")
@@ -478,6 +485,7 @@ def main(argv=None) -> int:
         if args.check:
             profile = desktop_profile(args.data_dir.expanduser().resolve()) if args.desktop else None
             dependency_report(desktop=args.desktop)
+            check_windows_source_paths(args.data_dir.expanduser(), source_copy_targets(), probe=False)
             if profile is not None:
                 print(f'Desktop profile: {profile}')
             return 0

@@ -6,6 +6,29 @@
 
 当前工作区使用 Electron 与原生 HTML/CSS/JavaScript；管理端的 React 构建不参与桌面渲染。
 
+## 构建时指定默认 Hub
+
+常规构建仍默认连接 `https://service.soduwork.ai`。为其他部署打包时，在运行
+`npm run build`、`npm run build:linux` 或 `npm run build:mac` 时设置
+`SODUWORK_DEFAULT_HUB_URL`。地址必须是 HTTP(S) origin，不包含凭据、路径、查询参数或片段。
+例如 Linux：
+
+```sh
+SODUWORK_DEFAULT_HUB_URL=https://hub.example.com npm run build:linux
+```
+
+不设置或留空时保留原默认地址。地址在签名前写入安装包，运行时环境变量不能覆盖；
+用户已保存的服务选择仍优先。应用名称、版本、安装身份、数据目录、更新信任和安装包文件名保持一致。
+
+手动运行 Actions 的 **On-demand client packages**，填写 `default_hub_url` 和
+`artifact_label`（如 `cn`），选择包含目标版本及这些构建工具的受保护分支。
+该版本必须已有正式 Release；每个平台的安装包复用经校验的正式发布说明。
+流程执行质量检查、签名和原生安装验收，产物按标签区分，在 Actions 保留 30 天；
+不创建 GitHub Release，也不部署 Hub。每份下载附有 `client-packages.json`，记录
+默认地址、源码提交、构建编号和文件摘要。不同环境的下载应放入独立目录。
+部署时将原安装包连同更新签名清单上传到目标 Hub，详见
+[发布流程](../.github/RELEASE.md#on-demand-client-packages)。
+
 本机资料库导入时保留文件扩展名，并为重复文件的编号预留长度。旧版本保存的文件若存在重名、无效名称或疑似截断，会显示“请核对文件名”；提示不代表文件内容损坏。在资料菜单选择“修复文件名”，确认包含正确扩展名的完整名称，即可替换错误后缀或补回缺失后缀，并保留资料 ID、内容、来源和所在文件夹。普通“重命名”仍保留原扩展名。所有本机文件都可使用修复入口，包括已被手动改过名称的旧条目；远程存储不提供此操作。
 
 旧数据不一定保留原始扩展名，客户端不会猜测后缀或自动改名。请根据原文件或来源核对后确认；不知道正确名称时，可先导出副本进行检查。旧重名条目的内容各自保留，可分别修复为不同名称。修复名称不会转换文件格式，也不会绕过程序文件的系统打开限制。

@@ -258,6 +258,18 @@ function decorate(ref, delivery) {
     .map((item) => publicArtifact(ref, item));
 }
 
+async function decorateForSharing(ref, delivery) {
+  const artifacts = decorate(ref, delivery);
+  await Promise.all(artifacts.map(async (artifact, index) => {
+    if (artifact.kind !== 'website') return;
+    // share-related archives the resolved entry's parent. Display paths may be aliases or truncated.
+    const entry = await fs.promises.realpath(delivery.items[index].path).catch(() => null);
+    artifact.websiteDirectoryId = entry
+      ? crypto.createHash('sha256').update(path.dirname(entry)).digest('hex') : artifact.artifactId;
+  }));
+  return artifacts;
+}
+
 function sendError(response, code, message) {
   response.writeHead(code, {
     'Content-Type': 'text/plain; charset=utf-8',
@@ -559,6 +571,7 @@ module.exports = {
   snapshot: sessionSnapshot,
   snapshotAsync,
   decorate,
+  decorateForSharing,
   resolve,
   resolveSnapshot,
   resolveAsync,
