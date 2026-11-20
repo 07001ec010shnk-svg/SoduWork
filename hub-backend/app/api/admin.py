@@ -278,6 +278,7 @@ async def create_user(
     try:
         position_ids = await work_catalog.validate_profession_ids(
             session, body.orgId, body.positions or [])
+        await rbac.validate_user_domains(session, body.domains)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     created = await rbac.create_user(
@@ -310,13 +311,14 @@ async def update_user(
     if "roleId" in body.model_fields_set:
         patch["roleId"] = body.roleId
     target_org_id = body.orgId if body.orgId is not None else target.org_id
-    if body.positions is not None or body.orgId is not None:
-        try:
+    try:
+        await rbac.validate_user_domains(session, body.domains)
+        if body.positions is not None or body.orgId is not None:
             patch["positions"] = await work_catalog.validate_profession_ids(
                 session, target_org_id,
                 body.positions if body.positions is not None else target.positions)
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     client_ids = []
     if was_active and patch.get("isActive") is False:
         # End this account's sessions while preserving device identity/history
@@ -453,7 +455,8 @@ async def delete_domain(
 ):
     r = await rbac.delete_domain(session, did)
     if not r.get("ok"):
-        msg = {"not_found": "领域不存在", "system": "内置领域不可删除"}.get(r.get("reason"), "删除失败")
+        msg = {"not_found": "领域不存在", "system": "内置领域不可删除",
+               "in_use": "仍有用户使用该业务域，请先解除关联"}.get(r.get("reason"), "删除失败")
         raise HTTPException(status_code=404 if r.get("reason") == "not_found" else 400, detail=msg)
     await audit.log(session, user, "domain.delete", "domain", did, did, {})
     return r

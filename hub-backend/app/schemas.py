@@ -325,7 +325,7 @@ class UserCreate(BaseModel):
     orgId: Optional[str] = None
     roleId: Optional[str] = None
     positions: Optional[list] = None
-    domains: Optional[list] = None
+    domains: Optional[list[str]] = None
     tokenQuota: Optional[UserTokenQuota] = None
 
 
@@ -337,7 +337,7 @@ class UserUpdate(BaseModel):
     isActive: Optional[bool] = None
     password: Optional[str] = None
     positions: Optional[list] = None
-    domains: Optional[list] = None
+    domains: Optional[list[str]] = None
     tokenQuota: Optional[UserTokenQuota] = None
 
 

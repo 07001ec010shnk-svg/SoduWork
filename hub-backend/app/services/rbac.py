@@ -508,12 +508,32 @@ async def update_domain(session: AsyncSession, did: str, name: str | None, sort:
     return domain_to_api(d)
 
 
+async def _lock_domains(session: AsyncSession, ids: list[str]) -> list[models.Domain]:
+    # A user assignment and deletion must agree on which domains still exist.
+    domain = models.Domain
+    if session.get_bind().dialect.name == "sqlite":
+        # SQLite ignores FOR UPDATE. Reserve the writer before checking references.
+        await session.execute(update(domain).where(domain.id.in_(ids)).values(id=domain.id))
+    rows = await session.scalars(select(domain).where(domain.id.in_(ids))
+                                 .order_by(domain.id).with_for_update())
+    return list(rows)
+
+
+async def validate_user_domains(session: AsyncSession, ids: list[str] | None) -> None:
+    if ids and len(await _lock_domains(session, ids)) != len(set(ids)):
+        raise ValueError("所选业务域不存在，请刷新后重新选择")
+
+
 async def delete_domain(session: AsyncSession, did: str) -> dict:
-    d = await session.get(models.Domain, did)
-    if d is None:
+    domains = await _lock_domains(session, [did])
+    if not domains:
         return {"ok": False, "reason": "not_found"}
+    d = domains[0]
     if d.is_system:
         return {"ok": False, "reason": "system"}
+    assignments = await session.scalars(select(models.User.domains))
+    if any(did in (ids or []) for ids in assignments):
+        return {"ok": False, "reason": "in_use"}
     await session.delete(d)
     await session.commit()
     return {"ok": True}
