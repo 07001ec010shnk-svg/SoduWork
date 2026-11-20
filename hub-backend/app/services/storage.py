@@ -2,7 +2,9 @@
 use put/get/delete without storing binary data in the database. Persist the selected backend
 with each object.
 """
+import hashlib
 import os
+import re
 import shutil
 from io import BytesIO
 
@@ -39,10 +41,64 @@ def _client():
     return _minio_client
 
 
+_NAME_LIMIT = 255  # Per-component limit: bytes on POSIX filesystems, UTF-16 units on NTFS.
+_WINDOWS_PATH_LIMIT = 259
+_WINDOWS_INVALID = re.compile(r'[<>:"|?*\x00-\x1f]')
+_WINDOWS_RESERVED = re.compile(r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)", re.I)
+_SAFE_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,16}")
+
+
+def _native_name_ok(name: str, path: str) -> bool:
+    if os.name == "nt":
+        return (len(name.encode("utf-16-le")) // 2 <= _NAME_LIMIT
+                and len(path) <= _WINDOWS_PATH_LIMIT
+                and not _WINDOWS_INVALID.search(name)
+                and not name.endswith((" ", "."))
+                and not _WINDOWS_RESERVED.match(name))
+    return len(os.fsencode(name)) <= _NAME_LIMIT
+
+
+def _hashed_names(key: str, safe: str) -> tuple[str, str]:
+    # Object keys embed the uploaded filename, which can exceed native limits
+    # (long or multibyte names) or contain characters Windows rejects. The
+    # readable form keeps an ASCII prefix and extension; the compact form keeps
+    # only the digest and extension for deep upload directories. Neither
+    # depends on the directory, so a moved or restored uploads directory still
+    # maps every key to the name it was written under.
+    head, _, tail = safe.rpartition("__")
+    suffix = os.path.splitext(tail or safe)[1]
+    suffix = suffix if _SAFE_SUFFIX.fullmatch(suffix) else ""
+    head = re.sub(r"[^A-Za-z0-9._-]", "_", head)[:120]
+    compact = "h-" + hashlib.sha256(key.encode("utf-8")).hexdigest()[:40] + suffix
+    return (head + "__" + compact if head else compact), compact
+
+
+def _extended(path: str) -> str:
+    # Last resort when even the compact name exceeds MAX_PATH: the
+    # extended-length form is not subject to the 260-character limit.
+    if os.name != "nt" or len(path) <= _WINDOWS_PATH_LIMIT or path.startswith("\\\\?\\"):
+        return path
+    path = os.path.abspath(path)
+    return "\\\\?\\UNC\\" + path[2:] if path.startswith("\\\\") else "\\\\?\\" + path
+
+
 def _local_path(key: str) -> str:
     os.makedirs(_LOCAL_DIR, exist_ok=True)
     safe = key.replace("/", "__").replace("\\", "__")
-    return os.path.join(_LOCAL_DIR, safe)
+    legacy = os.path.join(_LOCAL_DIR, safe)
+    readable, compact = (os.path.join(_LOCAL_DIR, name) for name in _hashed_names(key, safe))
+    # An object that already exists keeps the name it was written under, even
+    # if the uploads directory has since moved to a shorter or longer path.
+    for path in (legacy, readable, _extended(compact)):
+        if os.path.exists(path):
+            return path
+    # New objects: the original mapping when the filesystem can store it,
+    # otherwise the longest hashed form that fits the complete path.
+    if _native_name_ok(safe, legacy):
+        return legacy
+    if _native_name_ok(os.path.basename(readable), readable):
+        return readable
+    return _extended(compact)
 
 
 def put(key: str, data: bytes, content_type: str) -> str:
