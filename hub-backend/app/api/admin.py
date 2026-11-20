@@ -2,7 +2,7 @@
 device management. Superusers see all records; other users see their department subtree and
 unassigned devices. Client.user_ref determines device ownership.
 """
-from datetime import datetime, timedelta, timezone
+from datetime import date as calendar_date, datetime, timedelta, timezone
 import logging
 import uuid
 
@@ -221,7 +221,10 @@ async def list_roles(user: User = Depends(current_user), session: AsyncSession =
 async def create_role(body: RoleCreate,
                       user: User = Depends(require_perm("role.manage")),
                       session: AsyncSession = Depends(get_session)):
-    result = await rbac.create_role(session, body.name, body.permissions)
+    try:
+        result = await rbac.create_role(session, body.name, body.permissions)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await audit.log(session, user, "role.create", "role", result.get("id"),
                     result.get("name", ""), {"permissions": result.get("permissions", [])})
     return result
@@ -231,7 +234,10 @@ async def create_role(body: RoleCreate,
 async def update_role(rid: str, body: RoleUpdate,
                       user: User = Depends(require_perm("role.manage")),
                       session: AsyncSession = Depends(get_session)):
-    r = await rbac.update_role(session, rid, body.name, body.permissions)
+    try:
+        r = await rbac.update_role(session, rid, body.name, body.permissions)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if r is None:
         raise HTTPException(status_code=404, detail="角色不存在")
     await audit.log(session, user, "role.update", "role", rid, r.get("name", ""),
@@ -271,6 +277,15 @@ async def create_user(
     if not body.orgId:
         raise HTTPException(status_code=400, detail="请为用户指定所属部门")
     await _assert_org_in_scope(session, user, body.orgId)
+    if body.roleId and await session.get(Role, body.roleId) is None:
+        raise HTTPException(status_code=400, detail="角色不存在")
+    if body.domains:
+        domain_ids = {str(value) for value in body.domains}
+        found = set((await session.scalars(select(models.Domain.id).where(
+            models.Domain.id.in_(domain_ids)))).all())
+        missing = sorted(domain_ids - found)
+        if missing:
+            raise HTTPException(status_code=400, detail="业务域不存在：" + ", ".join(missing))
     if await rbac.get_user_by_username(session, body.username):
         raise HTTPException(status_code=400, detail="用户名已存在")
     try:
@@ -300,6 +315,15 @@ async def update_user(
     await _assert_user_in_scope(session, user, target)
     if body.orgId is not None:
         await _assert_org_in_scope(session, user, body.orgId)
+    if body.roleId and await session.get(Role, body.roleId) is None:
+        raise HTTPException(status_code=400, detail="角色不存在")
+    if body.domains is not None:
+        domain_ids = {str(value) for value in body.domains}
+        found = set((await session.scalars(select(models.Domain.id).where(
+            models.Domain.id.in_(domain_ids)))).all())
+        missing = sorted(domain_ids - found)
+        if missing:
+            raise HTTPException(status_code=400, detail="业务域不存在：" + ", ".join(missing))
     if target.is_super and body.isActive is False:
         raise HTTPException(status_code=400, detail="不能停用超级管理员")
     was_active = bool(target.is_active)
@@ -731,6 +755,10 @@ async def list_daily_reports(
     from ..services import daily_report as dr, team_daily_report as tdr
     day = (date or "").strip() or dr.today_str()
     try:
+        calendar_date.fromisoformat(day)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="非法日期，请使用 YYYY-MM-DD 格式") from None
+    try:
         data = await tdr.overview(session, user, day, org_id)
     except PermissionError as error:
         raise HTTPException(status_code=403, detail=str(error)) from error
@@ -753,6 +781,10 @@ async def generate_daily_reports(
     """
     from ..services import daily_report as dr, team_daily_report as tdr
     day = (body.get("date") or "").strip() or dr.today_str()
+    try:
+        calendar_date.fromisoformat(day)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="非法日期，请使用 YYYY-MM-DD 格式") from None
     uid = (body.get("userId") or "").strip()
 
     scope = await rbac.scope_org_ids(session, user)
@@ -1855,9 +1887,12 @@ async def create_integration(body: IntegrationCreate,
                              user: User = Depends(require_perm("integration.manage")),
                              session: AsyncSession = Depends(get_session)):
     from ..services import scm_support
-    if str(body.type or "").strip().lower() == "gerrit":
-        raise HTTPException(status_code=400, detail=scm_support.GERRIT_RETIRED)
-    result = await agg.create_integration(session, body.name, body.type, body.config)
+    try:
+        result = await agg.create_integration(session, body.name, body.type, body.config)
+    except scm_support.RetiredScmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await audit.log(session, user, "integration.create", "integration",
                     result.get("id"), result.get("name", ""),
                     {"type": result.get("type", "")})
@@ -1875,6 +1910,8 @@ async def update_integration(iid: str, body: IntegrationUpdate,
     try:
         r = await agg.update_integration(session, iid, enabled=body.enabled, config=body.config)
     except scm_support.RetiredScmError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if r is None:
         raise HTTPException(status_code=404, detail="集成不存在")

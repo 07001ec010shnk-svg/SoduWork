@@ -603,6 +603,11 @@ async def create_team_task(session: AsyncSession, client: models.Client, data: d
         org_id = raw_org_id or (me.org_id if me else None)
         if not org_id:
             return {"ok": False, "reason": "out_of_scope"}
+        if await session.get(models.OrgUnit, org_id) is None:
+            return {"ok": False, "reason": "out_of_scope"}
+        scope = await rbac.scope_org_ids(session, me)
+        if scope is not None and org_id not in scope:
+            return {"ok": False, "reason": "out_of_scope"}
         me_name = me.display_name or me.username
         payload = {
             "title": title, "note": data.get("note") or "",

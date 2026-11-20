@@ -322,6 +322,11 @@ async def save_environment(session: AsyncSession, body: dict, row: am.Environmen
     creating = row is None
     key = _text(body.get("key"), 64).lower()
     tier = _text(body.get("tier"), 24).lower() or "custom"
+    if tier not in {"dev", "development", "test", "qa", "quality", "staging",
+                    "customer-staging", "prod", "production", "customer-production",
+                    "custom", "regulated"} and not (
+                        not creating and row is not None and row.tier == tier):
+        raise ValueError("环境层级不受支持")
     if creating:
         if not _KEY.fullmatch(key):
             raise ValueError("环境标识只允许小写字母、数字和短横线，且以字母开头")

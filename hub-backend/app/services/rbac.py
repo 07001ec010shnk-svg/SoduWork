@@ -267,6 +267,9 @@ async def list_roles(session: AsyncSession) -> list[dict]:
 
 
 async def create_role(session: AsyncSession, name: str, permissions: list[str]) -> dict:
+    unknown = sorted(set(str(key) for key in (permissions or [])) - set(ALL_KEYS))
+    if unknown:
+        raise ValueError("未知权限：" + ", ".join(unknown))
     r = models.Role(name=name or "未命名角色", permissions=valid_keys(permissions))
     session.add(r)
     await session.commit()
@@ -281,6 +284,9 @@ async def update_role(session: AsyncSession, rid: str, name: str | None, permiss
     if name is not None:
         r.name = name
     if permissions is not None:
+        unknown = sorted(set(str(key) for key in permissions) - set(ALL_KEYS))
+        if unknown:
+            raise ValueError("未知权限：" + ", ".join(unknown))
         r.permissions = valid_keys(permissions)
     await session.commit()
     await session.refresh(r)
