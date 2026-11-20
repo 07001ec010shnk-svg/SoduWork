@@ -36,7 +36,7 @@ const samples = titles.flatMap((names, lane) => names.map((title, index) => ({
   priority: ['critical', 'high', 'normal', 'low'][(lane * 2 + index) % 4],
   note: '保留客户原始材料中的事实，按完成标准逐项核对，交付可直接使用的成果。',
   acceptanceCriteria: ['内容准确且覆盖全部范围', '文件可打开并清楚标注交付版本'],
-  tags: index ? ['跨团队协作与客户体验优化', 'QuarterlyReviewAndProductReadiness', '客户反馈', '验收记录'] : ['产品体验', '本周重点'],
+  tags: index ? ['需求', '1'.repeat(64), '客户反馈', '验收记录'] : ['产品体验', '本周重点'],
   assigneeName: index ? '客户成功与解决方案团队 · 欧阳长名字' : ['王维', '杨善明', '张敏', '陈小博', '李欣'][lane],
   assigneeUserId: 'design-owner-' + lane, origin: 'local', ownerClientId: 'device-a',
   readOnly: false, canEditRequirement: true, canViewExecution: true, myRoles: ['creator', 'executor'],
@@ -84,10 +84,11 @@ app.whenReady().then(async () => {
         cardOverflow:cards.filter(n=>n.scrollWidth>n.clientWidth+1).map(n=>n.dataset.hbid),
         escapingFlags:cards.filter(n=>{const c=bounds(n),f=bounds(n.querySelector('.rq-priority-flag'));return f.right>c.right+1||f.left<c.left-1||f.bottom>c.bottom+1||f.top<c.top-1}).map(n=>n.dataset.hbid),
         crowdedHeaders:cards.filter(n=>{const f=bounds(n.querySelector('.rq-card-top .rq-priority-flag')),m=bounds(n.querySelector('.rq-card-menu')),l=bounds(n.querySelector('.rq-card-labels'));return f.right>m.left||l.right>f.left}).map(n=>n.dataset.hbid),
-        crowdedMeta:cards.filter(n=>{const o=bounds(n.querySelector('.rq-owner')),t=bounds(n.querySelector('.rq-card-trailing'));return o.right>t.left-1}).map(n=>n.dataset.hbid),
+        crowdedMeta:cards.filter(n=>{const o=bounds(n.querySelector('.rq-owner')),t=bounds(n.querySelector('.rq-card-trailing'));return o.bottom>t.top+1&&o.right>t.left-1}).map(n=>n.dataset.hbid),
         tooManyTags:cards.some(n=>n.querySelectorAll('.rq-user-tag').length>2),
+        shortTagsVisible:cards.every(n=>[...n.querySelectorAll('.rq-user-tag')].every(t=>t.title!=='需求'||t.scrollWidth<=t.clientWidth+1)),
         flagLabels:cards.every(n=>n.querySelector('.rq-priority-flag')?.getAttribute('aria-label')?.startsWith('优先级：')),
-        titleClamped:cards.every(n=>getComputedStyle(n.querySelector('.rq-card-title')).webkitLineClamp==='3')}})()`);
+        titleClamped:cards.every(n=>getComputedStyle(n.querySelector('.rq-card-title')).webkitLineClamp==='2')}})()`);
       assert.equal(value.outerOverflow, false, label + ': outer overflow');
       assert.equal(value.fiveLanes && value.twoPerLane, true, label + ': five populated columns');
       assert.deepEqual(value.cardOverflow, [], label + ': card overflow');
@@ -95,6 +96,7 @@ app.whenReady().then(async () => {
       assert.deepEqual(value.crowdedHeaders, [], label + ': priority collides with type or menu');
       assert.deepEqual(value.crowdedMeta, [], label + ': owner collides with metadata');
       assert.equal(value.tooManyTags, false, label + ': tags capped at two');
+      assert.equal(value.shortTagsVisible, true, label + ': a long numeric tag leaves short tags readable');
       assert.equal(value.flagLabels && value.titleClamped, true, label + ': accessibility and long titles');
       if (value.viewport >= 1366) assert.ok(value.boardScroll.content <= value.boardScroll.client + 1, label + ': wide five columns fit');
       report.layouts.push({label, ...value});
