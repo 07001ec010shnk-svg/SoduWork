@@ -336,6 +336,11 @@ class ClusterBus:
             task = asyncio.create_task(self._answer(packet))
             self._handlers.add(task)
             task.add_done_callback(self._handlers.discard)
+            if (packet.get("method") == "runner.call"
+                    and isinstance(packet.get("data"), dict)
+                    and packet["data"].get("op") == "content.read"):
+                for _ in range(3):
+                    await asyncio.sleep(0)
 
     async def _read_loop(self):
         while True:
