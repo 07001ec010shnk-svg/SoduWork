@@ -167,6 +167,44 @@ class DeliveryCollectionsTests(DeliveryCollectionsTestCase):
                 download = await self.http.get(f"/api/v1/deliveries/{delivery_id}/download")
                 self.assertEqual(download.content, data)
 
+    async def test_zero_byte_supporting_file_is_saved_and_downloaded(self):
+        manifest = self.manifest(
+            files=[entry("marker.txt", b"", "supporting")],
+            entryPath="marker.txt",
+        )
+        made = await self.upload(manifest, b"")
+        self.assertEqual(made.status_code, 200, made.text)
+        delivery_id = made.json()["delivery"]["id"]
+        downloaded = await self.http.get(f"/api/v1/deliveries/{delivery_id}/download")
+        self.assertEqual(downloaded.status_code, 200, downloaded.text)
+        self.assertEqual(downloaded.content, b"")
+        member = await self.http.get(f"/api/v1/deliveries/{delivery_id}/files/marker.txt")
+        self.assertEqual(member.status_code, 200, member.text)
+        self.assertEqual(member.content, b"")
+
+    async def test_zero_byte_supporting_member_is_preserved_in_bundle(self):
+        files = [("index.html", b"<html><body>Ready</body></html>"), ("marker.txt", b"")]
+        manifest = self.manifest(
+            files=[entry(name, data, "primary" if name == "index.html" else "supporting")
+                   for name, data in files],
+            kind="bundle",
+            entryPath="index.html",
+        )
+        made = await self.upload(manifest, archive_bytes(files))
+        self.assertEqual(made.status_code, 200, made.text)
+        delivery_id = made.json()["delivery"]["id"]
+        member = await self.http.get(f"/api/v1/deliveries/{delivery_id}/files/marker.txt")
+        self.assertEqual(member.status_code, 200, member.text)
+        self.assertEqual(member.content, b"")
+
+    async def test_zero_byte_primary_file_still_requires_content_validation(self):
+        manifest = self.manifest(
+            files=[entry("index.html", b"", "primary")],
+            entryPath="index.html",
+        )
+        made = await self.upload(manifest, b"")
+        self.assertEqual(made.status_code, 422, made.text)
+
     async def test_invalid_html_keeps_structure_reason_and_does_not_save_a_delivery(self):
         data = b"private non-HTML content"
         manifest = self.manifest(files=[entry("report.html", data, mime="text/html")],
