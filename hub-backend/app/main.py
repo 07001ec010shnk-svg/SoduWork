@@ -246,7 +246,18 @@ async def request_observability(request: Request, call_next):
         runtime_telemetry.record(request.method, route_path, 500, elapsed,
                                  request_id, type(exc).__name__,
                                  getattr(request.state, "model_timing", None))
-        raise
+        # Ensure 500 responses carry X-Request-ID for log correlation
+        from starlette.responses import PlainTextResponse
+        return PlainTextResponse(
+            f"Internal Server Error: {type(exc).__name__}: {str(exc)[:200]}",
+            status_code=500,
+            headers={
+                "X-Request-ID": request_id,
+                "X-Content-Type-Options": "nosniff",
+                "X-Frame-Options": "DENY",
+                "Content-Security-Policy": "default-src 'self'; script-src 'self'",
+            }
+        )
     elapsed = (time.perf_counter() - started) * 1000
     route = request.scope.get("route")
     route_path = getattr(route, "path", None) or "__unmatched__"
@@ -256,6 +267,13 @@ async def request_observability(request: Request, call_next):
         getattr(request.state, "model_timing", None),
     )
     response.headers["X-Request-ID"] = request_id
+    # Security headers
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Cache-Control"] = "no-store"
     timing = getattr(request.state, "model_timing", None) or {}
     parts = [f"app;dur={elapsed:.1f}"]
     for key, label in (("admissionMs", "model-admission"),

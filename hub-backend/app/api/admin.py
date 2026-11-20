@@ -755,9 +755,11 @@ async def list_daily_reports(
     from ..services import daily_report as dr, team_daily_report as tdr
     day = (date or "").strip() or dr.today_str()
     try:
-        calendar_date.fromisoformat(day)
+        parsed_date = calendar_date.fromisoformat(day)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="非法日期，请使用 YYYY-MM-DD 格式") from None
+    if parsed_date > calendar_date.today():
+        raise HTTPException(status_code=400, detail="日报只能查询今天或之前的日期")
     try:
         data = await tdr.overview(session, user, day, org_id)
     except PermissionError as error:
@@ -782,9 +784,11 @@ async def generate_daily_reports(
     from ..services import daily_report as dr, team_daily_report as tdr
     day = (body.get("date") or "").strip() or dr.today_str()
     try:
-        calendar_date.fromisoformat(day)
+        parsed_date = calendar_date.fromisoformat(day)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400, detail="非法日期，请使用 YYYY-MM-DD 格式") from None
+    if parsed_date > calendar_date.today():
+        raise HTTPException(status_code=400, detail="不允许为未来日期生成日报")
     uid = (body.get("userId") or "").strip()
 
     scope = await rbac.scope_org_ids(session, user)

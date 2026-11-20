@@ -281,6 +281,8 @@ async def update_role(session: AsyncSession, rid: str, name: str | None, permiss
     r = await session.get(models.Role, rid)
     if r is None:
         return None
+    if r.is_system:
+        raise ValueError("系统内置角色不允许修改")
     if name is not None:
         r.name = name
     if permissions is not None:

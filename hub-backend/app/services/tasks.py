@@ -39,6 +39,43 @@ _FIELD_MAP = {
 _REQ_CONTENT_KEYS = {"title", "note", "description", "acceptanceCriteria",
                      "kind", "priority", "tags", "deps"}
 _VALID_RECUR = {"daily", "weekly", "monthly"}
+_TAG_MAX = 20
+_DUE_MIN_MS = 0  # 1970-01-01
+_DUE_MAX_MS = 4102444800000  # 2100-01-01
+
+
+def _validate_tags(tags) -> list[str]:
+    """Deduplicate and cap task tags."""
+    if not isinstance(tags, list):
+        raise HTTPException(status_code=400, detail="tags 必须是数组")
+    seen = set()
+    result = []
+    for t in tags:
+        if not isinstance(t, str):
+            continue
+        t = t.strip()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        result.append(t)
+    if len(result) > _TAG_MAX:
+        result = result[:_TAG_MAX]
+    return result
+
+
+def _validate_due(ms):
+    """Validate a due timestamp in milliseconds."""
+    if ms is None:
+        return None
+    try:
+        val = int(ms)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="due 必须是数字")
+    if val < _DUE_MIN_MS:
+        raise HTTPException(status_code=400, detail="due 不能早于 1970-01-01")
+    if val > _DUE_MAX_MS:
+        raise HTTPException(status_code=400, detail="due 不能晚于 2100-01-01")
+    return val
 
 
 def _validated_recur(value):
@@ -138,13 +175,14 @@ def apply_detail(t: "models.Task", data: dict) -> None:
     if "start" in data:
         t.start_at = ms_to_dt(data.get("start"))
     if "due" in data:
-        t.due_at = ms_to_dt(data.get("due"))
+        due = _validate_due(data.get("due"))
+        t.due_at = ms_to_dt(due)
     if "actualStart" in data:
         t.actual_start_at = ms_to_dt(data.get("actualStart"))
     if "actualEnd" in data:
         t.actual_end_at = ms_to_dt(data.get("actualEnd"))
     if data.get("tags") is not None:
-        t.tags = list(data.get("tags") or [])
+        t.tags = _validate_tags(data.get("tags"))
     if data.get("assigneeUserId") is not None:
         t.assignee_user_id = data.get("assigneeUserId") or None
     if "recur" in data:
@@ -668,7 +706,7 @@ async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dic
         if k == "start":
             t.start_at = ms_to_dt(v)
         elif k == "due":
-            t.due_at = ms_to_dt(v)
+            t.due_at = ms_to_dt(_validate_due(v))
         elif k == "actualStart":
             t.actual_start_at = ms_to_dt(v)
         elif k == "actualEnd":
@@ -678,7 +716,7 @@ async def update_task(session: AsyncSession, owner_id: str, tid: str, patch: dic
         elif k == "remindAt":
             t.remind_at = ms_to_dt(v); t.reminded = False
         elif k == "tags":
-            t.tags = list(v or [])
+            t.tags = _validate_tags(v or [])
         elif k == "deps":
             t.deps = list(v or [])
         else:
