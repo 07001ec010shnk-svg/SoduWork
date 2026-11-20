@@ -490,6 +490,14 @@ async def decide(request_id: str, body: dict = Body(default_factory=dict),
             "text": f"{who}{verb}了「{task.title}」的{request.action}环节{suffix}",
         })
     if execution is not None:
+        if execution.get("ok") is False:
+            artifact = await session.get(am.ArtifactVersion, request.artifact_version_id)
+            if artifact is not None:
+                out["artifact"] = release_control.artifact_api(artifact)
+            raise HTTPException(
+                status_code=500,
+                detail=f"授权操作失败：{execution.get('error') or '未知错误'}"
+            )
         artifact = await session.get(am.ArtifactVersion, request.artifact_version_id)
         if artifact is not None:
             out["artifact"] = release_control.artifact_api(artifact)

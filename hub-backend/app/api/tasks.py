@@ -104,8 +104,20 @@ router.include_router(personal_schedule_router)
 
 
 @router.get("/tasks")
-async def get_tasks(client: Client = Depends(current_client), session: AsyncSession = Depends(get_session)):
-    return await svc.list_tasks(session, client.id, include_related=True)
+async def get_tasks(
+    client: Client = Depends(current_client),
+    session: AsyncSession = Depends(get_session),
+    limit: int = Query(default=100, ge=1, le=500, alias="limit"),
+    offset: int = Query(default=0, ge=0, alias="offset"),
+):
+    result = await svc.list_tasks(session, client.id, include_related=True)
+    total = len(result)
+    return {
+        "items": result[offset:offset + limit],
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
 
 
 @router.post("/tasks")
@@ -1037,6 +1049,12 @@ async def put_milestones(
         m.agent_type = str(it.get("agentType") or "")[:16]
         m.model = str(it.get("model") or "")[:120]
         st = str(it.get("status") or "").strip()
+        # #662: Block downgrade of terminal states (done/tested)
+        if m.status in ("done", "tested") and st in ("planned", "skipped"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"里程碑「{m.title}」已验收，不可降级为 {st}"
+            )
         # Accept only user-editable states: skipped or planned.
         # Execution determines doing, done, and failed; clients cannot assign those results directly.
         # Preserve current state for other values instead of defaulting to planned.
@@ -1049,6 +1067,12 @@ async def put_milestones(
         keep.add(m.id)
     for mid, m in old.items():
         if mid not in keep:
+            # #662: Block deletion of milestones that have been accepted
+            if m.status in ("done", "tested"):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"里程碑「{m.title}」已验收（{m.status}），不可删除或降级"
+                )
             await session.delete(m)
     rows = await _load_milestones(session, tid)
     me = await _actor_user(session, client)
@@ -1251,6 +1275,7 @@ async def milestone_verdict(
     # False acceptance can also close unresolved source issues in a batch.
     # Use rounds to establish that an execution result exists for review.
     # Use skipped to omit a milestone; acceptance is not a substitute for skipping.
+    # #664: skipped milestones must not be accepted and back-close the source requirement.
     if (m.rounds or 0) <= 0:
         raise HTTPException(
             status_code=409,
