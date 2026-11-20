@@ -591,10 +591,19 @@ function _trayMenu() {
   ];
 }
 
+const _quitRelaunch = require('./main/quit-relaunch.cjs').create(app);
+
 function _quitSoduWork(reason) {
+  _quitRelaunch.markQuitting();
   if (tray) { tray.destroy(); tray = null; }
   _lifecycleDiagnostics.setExitReason(reason);
   app.quit();
+  if (reason === 'tray') {
+    // Background cleanup can defer quit. Let windows run their normal close handlers now.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.close();
+    }
+  }
 }
 
 function createTray() {
@@ -630,9 +639,11 @@ if (!gotTheLock) {
   app.quit();
 } else {
   app.on('second-instance', (_event, argv, workingDirectory, additionalData) => {
-    if (_linuxStartup.focusRecovery(app)) return;
-    if (_fileOpen.enqueue(_fileOpenModule.instanceFiles(
-      argv, workingDirectory, app.isPackaged, additionalData))) return;
+    if (!_quitRelaunch.quitting && _linuxStartup.focusRecovery(app)) return;
+    const files = _fileOpenModule.instanceFiles(argv, workingDirectory, app.isPackaged, additionalData);
+    // A window opened now would close with this exiting process.
+    if (_quitRelaunch.deferLaunch(files)) return;
+    if (_fileOpen.enqueue(files)) return;
     /*
      * Reopening the application always targets its workspace. The desktop overlay
      * can have every entry hidden or be recovering independently; neither state
