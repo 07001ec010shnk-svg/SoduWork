@@ -173,10 +173,10 @@ html[data-desk-panel="workspace"] #schPanel > .sch-body > :is(.sch-recipes,.sch-
     :is(#schWho,#wazAssignee) option::checkmark{grid-column:3;grid-row:1;align-self:center}
     .automation-runtime-separator{display:none}
     .automation-runtime-name{grid-column:1;grid-row:1;font-weight:600}
-    .automation-runtime-location{grid-column:1;grid-row:2;color:var(--ink-3);font-size:.9em}
+    .automation-runtime-location{grid-column:1;grid-row:2;color:var(--ink-3);font-size:max(var(--font-min-readable,12px),.9em)}
     .automation-runtime-status{
       grid-column:2;grid-row:1 / span 2;justify-self:end;color:var(--ink-2);
-      font-size:.86em;line-height:1.35;text-align:end;text-wrap:balance
+      font-size:max(var(--font-min-readable,12px),.86em);line-height:1.35;text-align:end;text-wrap:balance
     }
     :is(#schWho,#wazAssignee) option:has(.automation-runtime-location)::checkmark{grid-row:1 / span 2}
   }
