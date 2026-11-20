@@ -1,5 +1,11 @@
 // Only reviewed server message keys are translated; parameters remain business data.
 export const serverMessages = {
+  'org.delete.has_children': ['该部门下还有子部门', 'This department still has subdepartments.', 'この部門には子部門が残っています。', '이 부서에 하위 부서가 남아 있습니다.'],
+  'org.delete.has_users': ['该部门下还有用户', 'This department still has users.', 'この部門にはユーザーが所属しています。', '이 부서에 소속된 사용자가 있습니다.'],
+  'org.delete.not_found': ['部门不存在', 'Department not found.', '部門が見つかりません。', '부서를 찾을 수 없습니다.'],
+  'role.delete.in_use': ['仍有用户在用该角色', 'This role is still assigned to users.', 'このロールはユーザーに割り当てられています。', '이 역할이 할당된 사용자가 있습니다.'],
+  'role.delete.system_role': ['系统内置角色不可删', 'Built-in roles cannot be deleted.', '組み込みロールは削除できません。', '기본 제공 역할은 삭제할 수 없습니다.'],
+  'role.delete.not_found': ['角色不存在', 'Role not found.', 'ロールが見つかりません。', '역할을 찾을 수 없습니다.'],
   'plugin.routes.unneeded': ['这条流程不需要 AI 执行机', 'This workflow does not need an AI Runner.', 'このワークフローには AI Runner は不要です。', '이 워크플로에는 AI Runner가 필요하지 않습니다.'],
   'plugin.check.trust': ['版本已审批', 'Version approved', 'バージョン承認', '버전 승인'],
   'plugin.check.skills': ['技能可用', 'Skills available', 'スキルの利用可否', '스킬 사용 가능 여부'],
