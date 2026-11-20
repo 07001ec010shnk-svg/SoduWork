@@ -655,6 +655,7 @@
     "请检查凭据及模型访问权限": "Check credentials and model access permissions",
     "请检查模型 ID 和接口地址": "Check the model ID and endpoint URL",
     "服务明确返回不支持此能力": "The service explicitly reported this capability as unsupported",
+    "服务拒绝了检测请求，原因尚未确认": "The service rejected the test request. The reason is unconfirmed.",
     "服务未接受检测请求，请检查协议配置": "The service rejected the test request. Check the API protocol.",
     "未收到预期结果，暂不能确认能力": "The expected result was not received. Capability remains unconfirmed.",
     "服务响应格式无法识别": "The service response format was not recognized",

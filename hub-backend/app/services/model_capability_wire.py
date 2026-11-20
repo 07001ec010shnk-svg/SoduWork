@@ -63,8 +63,10 @@ def failure(error, check) -> tuple[str, str]:
         return "failed", "billing_unavailable"
     if error.status in (408, 429, 500, 502, 503, 504):
         return "inconclusive", "timeout" if error.status in (408, 504) else "temporarily_unavailable"
-    if error.status in (401, 403):
+    if error.status == 401:
         return "failed", "credentials_or_access"
+    if error.status == 403:
+        return "inconclusive", "request_rejected"
     if error.status == 404:
         return "failed", "model_or_endpoint_missing"
     if error.status in (400, 422):

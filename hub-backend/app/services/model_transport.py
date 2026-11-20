@@ -6,6 +6,7 @@ import logging
 import time
 import weakref
 import re
+import uuid
 
 import anyio
 import httpx
@@ -17,6 +18,16 @@ from .model_runtime_transaction import finish_cleanup
 
 log = logging.getLogger("uvicorn.error")
 _clients = weakref.WeakKeyDictionary()
+
+
+def _upstream_request_id(headers, credential: str = "") -> str:
+    """Allow bounded opaque identifiers, never arbitrary headers or credentials."""
+    for name in ("x-request-id", "request-id", "x-ms-request-id", "x-amzn-requestid"):
+        value = str(headers.get(name, ""))
+        if (re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,99}", value)
+                and not (credential and credential in value)):
+            return value
+    return ""
 
 
 def _safe_error_text(error) -> str:
@@ -227,6 +238,10 @@ async def open_response(conf, path, body, *, stream=False, timeout=None):
             finally:
                 await wrapped.aclose()
             error = UpstreamError(response.status_code, raw.decode("utf-8", "replace"))
+            error.diagnostic_id = uuid.uuid4().hex
+            error.upstream_request_id = _upstream_request_id(response.headers, str(conf.get("key") or ""))
+            log.warning("[model-transport] upstream refusal trace=%s status=%s upstream_request_id=%s",
+                        error.diagnostic_id, error.status, error.upstream_request_id or "unavailable")
             retry = response.headers.get("retry-after", "")
             if retry.isdigit():
                 error.retry_after = min(3600, max(1, int(retry)))
