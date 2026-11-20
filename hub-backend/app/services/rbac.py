@@ -2,7 +2,7 @@
 other users are scoped to their organization subtree. Clients inherit organization through
 user_ref.
 """
-from sqlalchemy import func, or_, select
+from sqlalchemy import String, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
@@ -61,6 +61,16 @@ def position_to_api(p: models.Position) -> dict:
 
 def domain_to_api(d: models.Domain) -> dict:
     return {"id": d.id, "name": d.name, "sort": d.sort, "isSystem": d.is_system}
+
+
+def _validate_org_name(name: str) -> str:
+    """Validate and normalize an organization/department name."""
+    name = str(name).strip()
+    if not name:
+        return "未命名部门"
+    if len(name) > 200:
+        name = name[:200]
+    return name
 
 
 # Authorization scope.
@@ -187,6 +197,7 @@ async def create_org(
     *, scope: set[str] | None,
 ) -> dict:
     """Create below an authorized parent; only super users may create a root."""
+    name = _validate_org_name(name) if name else "未命名部门"
     pid = str(parent_id or "").strip() or None
     if scope is not None and (not pid or pid not in scope):
         raise OrgMutationError("out_of_scope")
@@ -210,7 +221,7 @@ async def update_org(
     if scope is not None and oid not in scope:
         raise OrgMutationError("out_of_scope")
     if name is not None:
-        o.name = name
+        o.name = _validate_org_name(name)
     if parent_id is not None:
         pid = str(parent_id or "").strip() or None
         if scope is not None and (not pid or pid not in scope):
@@ -482,6 +493,13 @@ async def delete_domain(session: AsyncSession, did: str) -> dict:
         return {"ok": False, "reason": "not_found"}
     if d.is_system:
         return {"ok": False, "reason": "system"}
+    # Check for users still referencing this domain — consistent with role/position deletion.
+    # User.domains is a JSON list of domain IDs; use string match as a cross-dialect approach.
+    match_pat = f'"{did}"'
+    users = (await session.execute(select(models.User).where(
+        models.User.domains.cast(String).like(f"%{match_pat}%")))).scalars().all()
+    if users:
+        return {"ok": False, "reason": "users_remain"}
     await session.delete(d)
     await session.commit()
     return {"ok": True}
