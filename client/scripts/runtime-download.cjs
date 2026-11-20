@@ -3,6 +3,7 @@
 // Build-time transport. Each download owns its proxy dispatcher; no runtime
 // model requests or global HTTP agents inherit this policy.
 const fs = require('node:fs');
+const { isIP } = require('node:net');
 const { pipeline } = require('node:stream/promises');
 
 class DownloadError extends Error {}
@@ -50,10 +51,20 @@ async function downloadFile(url, target, { environment = process.env, timeoutMs 
   // CA injection is used by isolated TLS tests and managed certificate stores.
   // It never allows a caller to disable peer or hostname verification.
   if (Object.keys(tls).some(key => key !== 'ca')) throw new DownloadError('Only a trusted CA may configure download TLS');
-  const { EnvHttpProxyAgent, request } = require('undici');
+  const { EnvHttpProxyAgent, Client, request } = require('undici');
   const certificate = tls.ca ? { ca: tls.ca } : {};
   const dispatcher = new EnvHttpProxyAgent({ ...proxyOptions(environment),
-    connect: certificate, requestTls: certificate, proxyTls: certificate });
+    connect: certificate, requestTls: certificate, proxyTls: certificate,
+    clientFactory: (origin, options) => new Client(origin, { ...options,
+      connect: (target, callback) => {
+        // SNI carries DNS names, never IP literals. Retain Undici's connector,
+        // destination hostname and certificate verification for IP proxies.
+        const name = typeof target.servername === 'string' ? target.servername.replace(/^\[|\]$/g, '') : '';
+        const servername = name && isIP(name)
+          ? undefined : target.servername;
+        return options.connect({ ...target, servername }, callback);
+      } }),
+  });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new DownloadError('Runtime download exceeded total time limit')), timeoutMs);
   const partial = target + '.part';
