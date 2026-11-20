@@ -699,7 +699,21 @@ async def reconcile_lost_dispatches(session: AsyncSession, days: int = 30) -> in
 
 async def ingest_event_page(session: AsyncSession, row, items: list, round_no=None) -> set[int]:
     """Retain an authorized page without changing execution state, identity or billing."""
-    events = [x for x in items if isinstance(x, dict) and int(x.get("seq") or 0) > 0]
+    events = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_seq = item.get("seq")
+        if raw_seq is None:
+            seq = 0
+        elif type(raw_seq) is not int:
+            raise ValueError("execution event sequence is invalid")
+        else:
+            seq = raw_seq
+        if seq < 0 or seq > am.MAX_EVENT_SEQ:
+            raise ValueError("execution event sequence is out of range")
+        if seq > 0:
+            events.append(item)
     seqs = {int(x["seq"]) for x in events}
     have = set((await session.scalars(select(am.ExecutionEvent.seq).where(
         am.ExecutionEvent.session_id == row.id, am.ExecutionEvent.seq.in_(seqs)))).all()) if seqs else set()
@@ -784,6 +798,21 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
     clean = [x for x in snapshots if isinstance(x, dict) and x.get("ref") and x.get("taskId")]
     if not clean:
         return []
+    snapshot_seqs: list[int] = []
+    # Validate the complete heartbeat batch before loading or mutating any
+    # session rows.  A later invalid snapshot must not leave an earlier valid
+    # snapshot dirty in a caller-owned transaction.
+    for snap in clean:
+        raw_seq = snap.get("seq")
+        if raw_seq is None:
+            snapshot_seq = 0
+        elif type(raw_seq) is not int:
+            raise ValueError("execution snapshot sequence is invalid")
+        else:
+            snapshot_seq = raw_seq
+        if not 0 <= snapshot_seq <= am.MAX_EVENT_SEQ:
+            raise ValueError("execution snapshot sequence is out of range")
+        snapshot_seqs.append(snapshot_seq)
     task_ids = {str(x["taskId"]) for x in clean}
     tasks = {x.id: x for x in list((await session.execute(
         select(models.Task).where(models.Task.id.in_(task_ids)))).scalars().all())}
@@ -806,7 +835,7 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         select(am.ExecutionSession).where(am.ExecutionSession.ref.in_(refs))
         .with_for_update())).scalars().all())}
     changed: list[dict] = []
-    for snap in clean:
+    for snap, snapshot_seq in zip(clean, snapshot_seqs):
         task = tasks.get(str(snap.get("taskId") or ""))
         if task is None or not await _allowed(session, runner, task, ref=str(snap.get("ref") or "")):
             continue
@@ -828,7 +857,7 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
             old_state in _TERMINAL and incoming_state not in _TERMINAL)
         if (incoming_round < previous_round or
                 (incoming_round == previous_round and (
-                    int(snap.get("seq") or 0) < int(row.seq or 0) or
+                    snapshot_seq < int(row.seq or 0) or
                     (old_state in _TERMINAL and incoming_state not in _TERMINAL)))):
             # Delayed transport may repair historical gaps but cannot rewind a
             # newer round, its billing identity, approvals or terminal settlement.
@@ -926,7 +955,7 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         )
 
         seqs = await ingest_event_page(session, row, snap.get("items") or [], snap.get("round"))
-        row.seq = max(int(row.seq or 0), int(snap.get("seq") or 0),
+        row.seq = max(int(row.seq or 0), snapshot_seq,
                       max(seqs) if seqs else 0)
         from . import usage_ledger
         owner = owners.get(str(task.owner_client_id or ""))
