@@ -629,7 +629,9 @@ async def create_team_task(session: AsyncSession, client: models.Client, data: d
     if not uids:
         return {"ok": False, "reason": "no_assignee"}
 
-    scope = await rbac.subtree_org_ids(session, me.org_id) if me.org_id else set()
+    # Superusers are unrestricted. Regular managers may dispatch only within
+    # their organization subtree.
+    scope = await rbac.scope_org_ids(session, me)
     me_name = me.display_name or me.username
     creator = (me.id, me_name)
     # Use ordinary tasks and requester receipts instead of the retired FlowTemplate assignment flow.
@@ -651,7 +653,7 @@ async def create_team_task(session: AsyncSession, client: models.Client, data: d
     created, skipped, assigned_users = [], [], 0
     for uid in uids:
         target = await session.get(models.User, uid)
-        if target is None or target.org_id not in (scope or set()):
+        if target is None or (scope is not None and target.org_id not in scope):
             skipped.append({"userId": uid, "reason": "out_of_scope"})
             continue
         if not target.is_active:
