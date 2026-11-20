@@ -505,6 +505,11 @@ if (typeof electron === 'string') {
       ['每个月最后一天晚上八点生成月报', {every:'monthly', monthDays:[31], monthDayPolicy:'last_day', atHour:20, atMinute:0}],
       ['每小时第十五分钟检查日志', {every:'hourly', atMinute:15}],
       ['每小时整点提醒我喝水', {every:'hourly', atMinute:0}],
+      ['这个月25号到30号每天下午给我发一个写日报的提醒',
+        {every:'daily',startDate:'2026-11-25',endDate:'2026-11-30'}, /补充下午/],
+      ['本月二十五号至三十号每天下午三点发日报',
+        {every:'daily',startDate:'2026-11-25',endDate:'2026-11-30',atHour:15,atMinute:0}],
+      ['请在这个月25号到31号每天九点发送日报', {every:'daily',atHour:9,atMinute:0}, /结束日期无效/],
       ['生成一份巡检摘要\n' + rule, {every:'custom', customRule:rule}],
       ['每周上午九点发送日报', {every:'weekly', weekdays:[], atHour:9}, /星期/],
       ['每小时第六十分检查日志', {every:'hourly'}, /分钟/],
@@ -522,11 +527,31 @@ if (typeof electron === 'string') {
         const before = await js('saves.length');
         assert.ok(await js('Math.abs(activeExample("[name=assigneeId]").getBoundingClientRect().top - activeExample("[name=modelName]").getBoundingClientRect().top) < 1'));
         assert.equal(await js('activeExample("[name=every]").value'), expected.every);
+        if (expected.startDate) {
+          assert.equal(await js('activeExample("[name=startDate]").value'), expected.startDate);
+          assert.equal(await js('activeExample("[name=endDate]").value'), expected.endDate);
+        }
         assert.equal(await js('activeExample("[data-waz-save]").disabled'), Boolean(error));
         await js('activeExample("[data-waz-save]").click();void 0;');
         if (error) {
           assert.match(await js('activeExample("#wazProbe").textContent'), error);
           assert.equal(await js('saves.length'), before);
+          if (expected.startDate) {
+            assert.equal(await js('activeExample("[name=clockHour]").value'), '');
+            assert.ok((await js('sendExample("三点")')).accepted);
+            assert.equal(await js('activeExample("[name=clockHour]").value'), '15');
+            await js('activeExample("[data-waz-save]").click();void 0;');
+            const saved = await js('saves.at(-1)');
+            assert.equal(await js('saves.length'), before + 1);
+            assert.deepEqual([saved.startDate,saved.endDate,saved.atHour,saved.atMinute],
+              [expected.startDate,expected.endDate,15,0]);
+          }
+          if (phrase.includes('到31号')) {
+            await js(`const end = activeExample('[name=endDate]'); end.value = '2026-11-30';
+              end.dispatchEvent(new Event('change', {bubbles:true})); activeExample('[data-waz-save]').click();void 0;`);
+            assert.equal(await js('saves.length'), before + 1);
+            assert.deepEqual(await js('[saves.at(-1).startDate,saves.at(-1).endDate]'), ['2026-11-25','2026-11-30']);
+          }
         } else {
           assert.equal(await js('saves.length'), before + 1);
           const saved = await js('saves.at(-1)');

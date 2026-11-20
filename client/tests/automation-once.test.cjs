@@ -4,6 +4,30 @@ const fs = require('node:fs'), path = require('node:path'), vm = require('node:v
 const panels = path.join(__dirname, '../components/panels');
 const now = Date.parse('2026-10-15T01:00:00Z');
 
+test('relative month windows use the message date in the schedule zone and retain their inclusive bounds', () => {
+  const {timing} = runtime();
+  const sent = Date.parse('2026-12-31T16:20:00Z');
+  const original = '这个月25号到30号每天下午给我发一个写日报的提醒';
+  const draft = timing.infer(original, {timeZone:'Asia/Shanghai'}, sent);
+  assert.deepEqual([draft.every,draft.startDate,draft.endDate,draft.atHour,draft.atMinute],
+    ['daily','2027-01-25','2027-01-30',null,null]);
+  assert.match(timing.validate(draft), /请补充下午/);
+  for (const [reply,hour] of [['三点',15],['下午四点',16],['上午九点',9],['09:00',9]]) {
+    const next = timing.infer(reply,draft,sent);
+    assert.deepEqual([next.startDate,next.endDate,next.atHour,next.atMinute],
+      [draft.startDate,draft.endDate,hour,0]);
+    assert.equal(timing.validate(next),'');
+  }
+  const utc = timing.infer('本月二十五日至下月二日，每日下午三点提醒我', {timeZone:'UTC'}, sent);
+  assert.deepEqual([utc.startDate,utc.endDate,utc.atHour], ['2026-12-25','2027-01-02',15]);
+  const invalid = timing.infer('这个月28号到31号每天九点提醒我', {timeZone:'UTC'}, Date.parse('2028-02-01T00:00Z'));
+  assert.match(timing.validate(invalid), /结束日期无效/);
+  const reversed = timing.infer('本月30号到25号每天九点提醒我', {timeZone:'UTC'}, sent);
+  assert.match(timing.validate(reversed), /开始日期不能晚于结束日期/);
+  const content = timing.infer('每天九点汇总这个月25号到30号的销售数据', {timeZone:'UTC'}, sent);
+  assert.equal(content.startDate, undefined);
+});
+
 test('relative delays create one-off instants from the message time, including midnight and Chinese numbers', () => {
   const {timing} = runtime(), sentAt = Date.parse('2026-11-16T08:00:00Z');
   for (const [text, minutes] of [['五分钟后帮我生成日报',5], ['5分钟后生成日报',5], ['半小时后生成日报',30],

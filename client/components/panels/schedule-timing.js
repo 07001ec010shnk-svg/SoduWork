@@ -206,6 +206,22 @@
     return {index:match.index, text:match[0], minutes};
   }
   const numberToken = '[\\d零一二两三四五六七八九十]';
+  const relativeMonth = '(本月|这个月|这月|下个月|下月)';
+  const afternoonPrompt = '请补充下午的具体执行时间，例如下午三点';
+  const rangeDay = '(' + numberToken + '+)\\s*[日号]';
+  const monthWindow = new RegExp('(?:^|[，,]|日期范围(?:改为|为)?|安排在|改为)\\s*(?:【自动化】[：:]?\\s*)?(?:(?:请|帮我)\\s*)*(?:从|在)?' +
+    relativeMonth + '\\s*' + rangeDay + '\\s*(?:到|至|[-~～])\\s*' + relativeMonth + '?\\s*' + rangeDay +
+    '(?=\\s*(?:期间|之间|内|每|[，,]|$))');
+  function monthWindowDates(match, now, zone) {
+    const today = localInput(new Date(now).toISOString(), zone).slice(0, 10);
+    if (!today) return {timingIssue:'请选择有效的时区'};
+    function date(month, day) {
+      const first = new Date(today.slice(0, 7) + '-01T00:00:00Z');
+      if (month.startsWith('下')) first.setUTCMonth(first.getUTCMonth() + 1);
+      return first.toISOString().slice(0, 7) + '-' + pad(cnNumber(day));
+    }
+    return {startDate:date(match[1], match[2]), endDate:date(match[3] || match[1], match[4])};
+  }
   const weekdayToken = '[一二三四五六日天](?!\\s*[:：点时])';
   const monthDayToken = numberToken + '+(?!' + numberToken + '|\\s*[:：点时])(?:\\s*[日号])?';
   const daySeparator = '\\s*([、,，和及至到])\\s*';
@@ -339,13 +355,24 @@
       next.monthDayPolicy = lastDay ? 'last_day' : 'skip';
     }
     const time = clock(text);
+    // A bare clock in a reply inherits the requested afternoon; an explicit period wins.
+    if (!recurring && !oneTime && time && !time.invalid && prior.timingIssue === afternoonPrompt && time.atHour > 0 && time.atHour < 12 &&
+        !/(?:凌晨|早上|上午|中午|下午|傍晚|晚上)|\d\s*[:：]/.test(text)) time.atHour += 12;
     if (time && !time.invalid) Object.assign(next,time, {timingIssue:''});
     else if (time?.invalid) Object.assign(next, {atHour:null, atMinute:null, timingIssue:'执行时间无效，请填写0至23点、0至59分'});
+    else if (next.every === 'daily' && /(?:每天|每日|天天)\s*下午/.test(text))
+      Object.assign(next, {atHour:null, atMinute:null, timingIssue:afternoonPrompt});
     else if (next.every === 'hourly') {
       const minute = text.match(/(?:第\s*)?([\d零一二两三四五六七八九十]+)\s*分|整点/);
       if (minute) { next.atMinute = minute[1] ? cnNumber(minute[1]) : 0; next.timingIssue = ''; }
     }
-    if (next.every !== 'once') { next.runAt = null; next.relativeTiming = null; return next; }
+    if (next.every !== 'once') {
+      const range = text.match(monthWindow);
+      if (range && ['daily','weekly','monthly','hourly'].includes(next.every)) {
+        Object.assign(next, monthWindowDates(range, now, zone));
+      }
+      next.runAt = null; next.relativeTiming = null; return next;
+    }
     if (!explicit && !relative && !week && !time && prior.every === 'once') return next;
     next.relativeTiming = null;
     const old = localMinute(prior.runAt,zone);

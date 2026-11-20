@@ -536,6 +536,12 @@
     // keep the already selected value in the draft so a refresh/re-render does
     // not silently clear the model before the schedule is saved.
     const submittedModel = data.get('modelName');
+    // A date input renders an impossible inferred date as empty. Keep the
+    // validation error until a real date is supplied instead of dropping the bound.
+    function rangeDate(field) {
+      const prior = state.proposal?.[field];
+      return String(data.get(field) || (prior && !global.ScheduleTiming.cleanDate(prior) ? prior : ''));
+    }
     const modelName = submittedModel == null
       ? (state.proposal && state.proposal.modelName) : submittedModel;
     return {
@@ -557,8 +563,8 @@
       monthDays: selectedMonthDays,
       monthDayPolicy: (typeof form.querySelector === 'function' &&
         form.querySelector('input[name=monthDayPolicy]:checked')) ? 'last_day' : 'skip',
-      startDate: String(data.get('startDate') || ''),
-      endDate: String(data.get('endDate') || ''),
+      startDate: rangeDate('startDate'),
+      endDate: rangeDate('endDate'),
       ...(every === 'custom' ? { customRule: fullText(data.get('customRule')).trim() } : {}),
       timeZone: (state.proposal && state.proposal.timeZone) || timeZone(),
       assigneeId: cut(data.get('assigneeId'), 160),
