@@ -659,6 +659,7 @@
     if (opts && opts.taskScope && opts.taskScope !== requestScope) throw staleTaskScope();
     var o = Object.assign({ headers: {} }, opts || {});
     delete o.taskScope;
+    delete o.sessionRead;
     o.headers = Object.assign(authHeaders(true), o.headers);
     var auth = requestAuth();
     if (trace?.requestId && !Object.keys(o.headers).some(key => key.toLowerCase() === 'x-request-id')) o.headers['X-Request-ID'] = trace.requestId;
@@ -667,7 +668,7 @@
     try { res = await fetch(apiUrl(path), o); }
     catch (error) {
       global.RequirementDiagnostics?.http(global.RequirementDiagnostics.emit,path,o.body,{},0);
-      if (!opts?.signal?.aborted || error?.name !== 'AbortError') mark(false); throw error;
+      if (!opts?.sessionRead && (!opts?.signal?.aborted || error?.name !== 'AbortError')) mark(false); throw error;
     }
     try { trace?.response?.(res); } catch (_) {}
     /*
@@ -2575,9 +2576,10 @@
         if (since) params.set('since', String(since));
         if (ref) params.set('ref', String(ref));
         var q = params.size ? '?' + params.toString() : '';
-        var r = await jfetch('/tasks/' + encodeURIComponent(tid) + '/ai-session' + q);
+        var r = await jfetch('/tasks/' + encodeURIComponent(tid) + '/ai-session' + q, { sessionRead: true });
         mark(true); return r || { ok: false, items: [] };
-      } catch (e) { markFromError(e); return { ok: false, items: [], httpStatus: Number(e.status) || 0, error: '拿不到执行记录，请检查需求权限或后台连接' }; }
+      } catch (e) { return { ok: false, items: [], httpStatus: Number(e.status) || 0,
+        code: e.code || '', retryable: e.retryable, error: e.detail || '会话同步暂时不可用，已有内容已保留，请稍后重试' }; }
     },
     /*
      * Queue a message on the execution record rather than attaching to a TTY. Pending work
