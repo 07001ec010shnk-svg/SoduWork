@@ -90,21 +90,6 @@ test('看板与列表展示服务端更新时间、创建回退和缺失记录�
   }
 });
 
-test('卡片按需合并标签和完整截止日期，区分更新与创建时间', () => {
-  const view = views(), state = {archive: 'active', group: 'stage', limits: {}};
-  const render = fields => view.board([{...mine, ...fields}], state, {});
-  for (const tags of [[], ['需求']]) for (const due of [null, '2026-11-23']) {
-    const html = render({tags, due, updatedAt: '2026-11-20T03:28:00Z'});
-    assert.equal(html.includes('class="rq-card-fields"'), Boolean(tags.length || due));
-    assert.equal(html.includes('>截止</span>'), Boolean(due));
-    assert.equal(html.includes('2026/11/23'), Boolean(due));
-    assert.match(html, /class="rq-updated"><span>更新<\/span>/);
-  }
-  assert.match(render({createdAt: '2026-11-20'}), /class="rq-updated"><span>创建<\/span>/);
-  assert.match(render({}), />待分配<\/span>/);
-  assert.match(render({canClaim: true}), />待认领<\/span>/);
-});
-
 test('任务时间只接受有效时间，处理数字毫秒、带时区日期、旧创建字段和无效日期', () => {
   const ms = Date.parse('2026-10-23T02:03:04Z');
   const local = Object.fromEntries(new Intl.DateTimeFormat('en-US', {

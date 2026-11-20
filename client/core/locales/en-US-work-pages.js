@@ -151,8 +151,6 @@
     "跟进进展，处理需要确认的事项": "Follow progress and respond to decisions",
     "查看成果与验收记录": "View outputs and acceptance records",
     "保留历史，随时查阅": "Keep past work available for reference",
-    "待分配": "Unassigned",
-    "待认领": "Available to claim",
     "待安排": "Unassigned",
     "已归档，需要时可恢复": "Archived; restore when needed",
     "确认需求与完成标准": "Confirm the issue and completion criteria",

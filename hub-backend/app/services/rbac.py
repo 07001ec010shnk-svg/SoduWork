@@ -554,12 +554,6 @@ async def delete_domain(session: AsyncSession, did: str) -> dict:
     assignments = await session.scalars(select(models.User.domains))
     if any(did in {str(item) for item in (ids or [])} for ids in assignments):
         return {"ok": False, "reason": "in_use"}
-    # Check for users still referencing this domain — consistent with role/position deletion.
-    match_pat = f'"{did}"'
-    users = (await session.execute(select(models.User).where(
-        models.User.domains.cast(String).like(f"%{match_pat}%")))).scalars().all()
-    if users:
-        return {"ok": False, "reason": "users_remain"}
     await session.delete(d)
     await session.commit()
     return {"ok": True}

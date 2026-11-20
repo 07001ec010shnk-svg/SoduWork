@@ -78,7 +78,7 @@ app.whenReady().then(async()=>{
   assert.equal(await js('!!document.querySelector("#rqLane-closed")'),false,'archived work does not occupy an active column');
   assert.equal(await js('!!document.querySelector("[data-rq-open=shared-only]")'),false,'team-only work is not personal work');
   assert.equal(await js('document.querySelector("[data-rq-open=delivering-0] .rq-owner").textContent'),'Pi');
-  assert.equal(await js('document.querySelector("[data-rq-open=ready-2] .rq-owner").textContent'),'待分配');
+  assert.equal(await js('document.querySelector("[data-rq-open=ready-2] .rq-owner").textContent'),'待安排');
   assert.equal(await js('document.querySelectorAll(".rq-card-tags .is-normal").length'),0);
   await click('[data-rq-scope="actionable"]');
   assert.equal(await js('!!document.querySelector("[data-rq-open=delivering-0]")'),false);
@@ -102,7 +102,7 @@ app.whenReady().then(async()=>{
   await js('RequirementsDetail.open("approval-only")');
   assert.equal(await js('document.querySelector("[data-tfd-acceptance-mode]:checked").value'),'auto','刷新保留同一验收版本选择');
   fs.writeFileSync(path.join(output,'acceptance-auto.png'),(await win.webContents.capturePage()).toPNG());
-  await js('SoduWorkAPI.getAcceptanceContext=async id=>({criteria:["Verify the saved delivery"],artifactVersionId:"frozen-artifact-"+id});window.fixtureOriginalOpenTaskConversation=window.openTaskConversation;window.openTaskConversation=async()=>false;true');
+  await js('window.fixtureOriginalOpenTaskConversation=window.openTaskConversation;window.openTaskConversation=async()=>false;true');
   await click('[data-tfd-acceptance-session=auto]');
   assert.ok(await js('!!document.querySelector(".rq-detail")'));
   assert.ok(await js('document.querySelector("[data-tfd-approval-error]").textContent.includes("未能打开")'));
@@ -110,7 +110,7 @@ app.whenReady().then(async()=>{
   await click('[data-tfd-acceptance-session=auto]');
   assert.equal(await js('!!document.querySelector(".rq-detail")'),false);
   assert.deepEqual(await js('fixtureCalls.find(c=>c[0]==="acceptance-chat")[2]'),{
-    source:'acceptance',forceNew:false,acceptanceSession:true,acceptanceMode:'auto',approvalId:'review-1',acceptanceInstruction:''});
+    source:'acceptance',forceNew:false,acceptanceSession:true,acceptanceMode:'auto',approvalId:'review-1'});
   // Board and detail share one acceptance entry: reopen the requirement, then
   // choose the mode inside its acceptance card instead of creating a second
   // direct SoduWork button/session from the board.

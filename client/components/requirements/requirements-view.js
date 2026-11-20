@@ -31,11 +31,8 @@
   function assignable(task) { return (global.RequirementAssignment?.eligible(task) ?? global.ChatTaskController?.isPickableTask(task)) === true; }
   function project(task, ctx) { return ctx.projects?.get(String(task.projectId)) || task.projectName || (task.projectId ? '项目 ' + String(task.projectId).slice(0, 8) : '未关联项目'); }
   function human(task) { return task.assigneeName || (task.assigneeUserId ? '成员 ' + String(task.assigneeUserId).slice(0, 6) : '未指定负责人'); }
-  function owner(task, card = false) {
+  function owner(task) {
     const value = R.owner(task);
-    if (card && value.kind === 'unassigned') {
-      return '<span class="rq-owner is-empty">' + (task.canClaim === true ? esc(value.name) : '待分配') + '</span>';
-    }
     const avatar = value.kind === 'person'
       ? '<span class="rq-owner-avatar" aria-hidden="true">' + esc(Array.from(value.name.trim())[0] || '人') + '</span>'
       : '<span class="rq-owner-avatar is-' + esc(value.kind) + '" aria-hidden="true">' + icon(value.kind) + '</span>';
@@ -71,15 +68,17 @@
     const label = '优先级：' + R.priorities[priority];
     return '<span class="rq-priority-flag is-' + priority + '" role="img" aria-label="' + label + '" title="' + label + '">' + icon('flag') + '</span>';
   }
-  function due(task, card = false) {
+  function due(task) {
     const value = R.day(task.due); if (!value) return '';
-    const text = card ? '<span>截止</span>' + value.replaceAll('-', '/') : value.slice(5).replace('-', '/');
     return '<time class="rq-date' + (R.overdue(task) ? ' is-overdue' : '') + '" datetime="' + esc(value) +
-      '" title="截止日期：' + esc(value) + '">' + icon('date') + text + '</time>';
+      '" title="截止日期：' + esc(value) + '">' + icon('date') + value.slice(5).replace('-', '/') + '</time>';
   }
-  function timestamp(task) {
+  function timestamp(task, compact) {
     const value = R.timeInfo(task);
     if (!value.datetime) return '<span class="rq-updated is-empty" title="' + esc(value.title) + '">' + esc(value.text) + '</span>';
+    // compact: show the timestamp beside the card assignee without an Updated/Created prefix; tables keep the full prefixed form.
+    if (compact) return '<span class="rq-updated"><time datetime="' + esc(value.datetime) +
+      '" title="' + esc(value.title) + '" aria-label="' + esc(value.title) + '">' + esc(value.text) + '</time></span>';
     return '<span class="rq-updated"><span>' + esc(value.label) + '</span><time datetime="' + esc(value.datetime) +
       '" title="' + esc(value.title) + '" aria-label="' + esc(value.title) + '">' + esc(value.text) + '</time></span>';
   }
@@ -88,15 +87,15 @@
   function card(task, state, ctx) {
     const id = esc(task.id);
     const moving = state.movingId === String(task.id);
-    const fields = tags(task) + due(task, true);
     return '<article class="rq-card" data-hbid="' + id + '" aria-busy="' + moving + '" draggable="' + (!moving && state.group === 'stage' && R.canTriage(task)) + '">' +
       '<div class="rq-card-top">' + cardLabels(task, ctx) + priorityFlag(task) + menuButton(task) + '</div>' +
       '<button type="button" class="rq-card-open" data-rq-open="' + id + '"><span class="rq-card-title" data-user-content title="' +
       esc(R.content(task).title) + '">' + esc(R.content(task).title || '未命名需求') + '</span>' +
+      tags(task) +
       (state.group !== 'stage' ? stageBadge(task) : '') +
       (task.projectId || task.projectName ? '<span class="rq-project">' + icon('project') + '<span data-user-content>' + esc(project(task, ctx)) + '</span></span>' : '') +
-      (fields ? '<span class="rq-card-fields">' + fields + '</span>' : '') +
-      '<span class="rq-card-meta">' + owner(task, true) + '<span class="rq-card-trailing">' + timestamp(task) + '</span></span></button>' +
+      (due(task) ? '<span class="rq-card-due">' + due(task) + '</span>' : '') +
+      '<span class="rq-card-meta">' + owner(task) + '<span class="rq-card-trailing">' + timestamp(task, true) + '</span></span></button>' +
       (moving ? '<div class="rq-card-moving" role="status"><span class="rq-moving-spinner" aria-hidden="true"></span>正在变更状态…</div>' : '') + '</article>';
   }
   function groups(list, state, ctx) {

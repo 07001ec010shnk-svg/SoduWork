@@ -60,7 +60,7 @@ app.whenReady().then(async () => {
       const n=document.createElement('link');n.rel='stylesheet';n.href=href;
       const timer=setTimeout(()=>reject(Error('CSS timeout: '+href)),8000);
       n.onload=()=>{clearTimeout(timer);resolve()};n.onerror=()=>{clearTimeout(timer);reject(Error(href))};document.head.append(n)}))).then(()=>true)`);
-    await js(`tasks=[{id:'detail-design',title:'完善客户服务流程与多底座协作插件的需求管理、验收和资料归档体验'+ 'ReleaseChecklist'.repeat(8),
+    await js(`tasks=[{id:'detail-design',title:'完善客户服务流程与多底座协作插件的需求管理、验收和资料归档体验',
       note:'保留客户原始背景和验收依据。\\n'+Array.from({length:12},(_,i)=>'第 '+(i+1)+' 项背景：梳理业务参与者、处理流程和最终交付文件。').join('\\n'),
       tags:['客户体验','跨团队协作','超长标签CustomerExperienceAndRequirementManagementWithoutWhitespace','验收检查'],
       acceptanceCriteria:['提供可直接使用的交付内容','所有相关入口一致并且符合已有权限','已开始且未结束的流程不能被归档或删除'],
@@ -106,9 +106,6 @@ app.whenReady().then(async () => {
               contentBetween:c.top>=h.bottom-1&&c.bottom<=f.top+1,
               formOnly:!document.querySelector('#rqEditForm')||!content.querySelector('.rq-delivery,.rq-detail-materials'),
               tagCount:content.querySelectorAll('[data-rq-detail-tags]>span').length,
-              fullTitle:header.querySelector('h2').title===tasks[0].title,
-              titleFits:r(header.querySelector('h2')).right<=r(header.querySelector('[data-rq-dismiss]')).left,
-              tags: [...content.querySelectorAll('[data-rq-detail-tags]>span')].map(n=>({full:n.title===n.textContent,clipped:n.scrollWidth>n.clientWidth+1})),
               fields:[...content.querySelectorAll('input:not([type=hidden]),textarea,select,.rq-tag-editor')].filter(n=>n.getClientRects().length).filter(n=>{
                 const b=r(n);return b.left<d.left||b.right>d.right+1}).map(n=>n.name||n.className)}})()`);
           const label = [theme, width, zoom, editing ? 'edit' : 'detail'].join('/');
@@ -116,12 +113,7 @@ app.whenReady().then(async () => {
           assert.equal(value.footerVisible && value.contentBetween, true, label + ': header/footer layout');
           assert.equal(value.formOnly, true, label + ': edit-only content');
           assert.deepEqual(value.fields, [], label + ': escaped form fields');
-          if (!editing) {
-            assert.equal(value.tagCount, 4, label + ': all tags');
-            assert.ok(value.titleFits, label + ': long title leaves room for close');
-            assert.ok(value.fullTitle && value.tags.every(t=>t.full), label + ': complete text on hover');
-            assert.ok(!value.tags[0].clipped && value.tags[2].clipped, label + ': truncate only long tags');
-          }
+          if (!editing) assert.equal(value.tagCount, 4, label + ': all tags');
           report.layouts.push({label, ...value});
         };
         await inspect(false);

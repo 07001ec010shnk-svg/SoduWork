@@ -31,16 +31,14 @@ def validate(message: dict, runner) -> dict:
             or not isinstance(snapshot.get("taskId"), str)
             or not 0 < len(snapshot["taskId"]) <= 36
             or type(snapshot.get("round")) is not int or snapshot["round"] < 1
-            or type(snapshot.get("seq")) is not int
-            or not 0 <= snapshot["seq"] <= am.MAX_EVENT_SEQ
+            or type(snapshot.get("seq")) is not int or snapshot["seq"] < 0
             or not isinstance(snapshot.get("items"), list)
             or len(snapshot["items"]) > 300):
         raise DeliveryRejected("DELIVERY_INVALID")
     previous = 0
     for event in snapshot["items"]:
         if (not isinstance(event, dict) or type(event.get("seq")) is not int
-                or not previous < event["seq"] <= snapshot["seq"]
-                or event["seq"] > am.MAX_EVENT_SEQ):
+                or not previous < event["seq"] <= snapshot["seq"]):
             raise DeliveryRejected("DELIVERY_INVALID_EVENT_SEQUENCE")
         previous = event["seq"]
     if len(snapshot_bytes(snapshot)) > MAX_PACKET_BYTES:
