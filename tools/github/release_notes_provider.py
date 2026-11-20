@@ -39,6 +39,21 @@ def log_event(event, **fields):
     print(json.dumps({"event": "release_notes_" + event, "model": safe_model(), **fields}), flush=True)
 
 
+def log_usage(usage):
+    """Optional provider counters only; never log arbitrary response metadata."""
+    if not isinstance(usage, dict):
+        return
+    counters = {name: usage.get(name) for name in
+                ("prompt_tokens", "completion_tokens", "total_tokens")}
+    details = usage.get("completion_tokens_details")
+    if isinstance(details, dict):
+        counters["reasoning_tokens"] = details.get("reasoning_tokens")
+    counters = {name: value for name, value in counters.items()
+                if type(value) is int and value >= 0}
+    if counters:
+        log_event("usage", **counters)
+
+
 def classify_http(error):
     reason = {401: "credentials_rejected", 403: "access_denied", 404: "model_unavailable",
               429: "rate_limited"}.get(error.code, "provider_error")

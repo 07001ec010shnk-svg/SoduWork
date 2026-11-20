@@ -208,6 +208,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="SoduWork Hub", version=settings.version, lifespan=lifespan)
 
+from .services.session_read_budget import SessionReadBudgetMiddleware
+app.add_middleware(SessionReadBudgetMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_list,

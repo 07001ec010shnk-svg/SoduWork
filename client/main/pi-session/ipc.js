@@ -262,6 +262,11 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       return Reflect.get(target, property);
     },
   });
+  const firstTurnTitle = require('../conversation/first-turn-title').create({
+    app, identityOf: sendIdentityOf || identityOf, authorizeAI,
+    isCurrent: handle => session.get(handle.ref) === handle && !_cloudHandoff.guard(handle) &&
+      !session.isArchived(app, handle.sessionId),
+  });
   _deliverySync = require('../conversation/local-delivery-sync').create({
     notify: handle => _push(BrowserWindow, handle, { kind: 'delivery-sync' }, handle.snapshot()) });
   _cloudHandoff = require('../conversation/cloud-handoff-ipc').install({ app, ipcMain, session,
@@ -920,6 +925,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
         appRequest?.assertActive();
         const reply = _openReply(opened.session, { resumed: !!resume, seeded: opened.seeded || 0 });
         accessConsent?.commit();
+        if (!resume && !opts.sessionTitle && !spec.taskRef && !automationContext && !appRequest &&
+            !appPluginId && !opts.nativeRelay && !opened.seeded) firstTurnTitle.enroll(opened.session);
         return reply;
       } catch (error) {
         await closeFailedOpen(opened.session);
@@ -1171,6 +1178,8 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       try { await rawOptions.nativeRelayGuard(); }
       catch (error) { return { ok: false, accepted: false, reason: String(error.message || error) }; }
     }
+    const titleRequest = !workflowTurn && !taskId && !automationTurn && !appRequest && !rawOptions?.nativeRelayGuard
+      ? firstTurnTitle.prepare(s, text) : null;
     const submitted = workflowTurn || (typeof s.submit === 'function'
       ? await s.submit(text, staged.files, sendOptions)
       : { accepted: true, queued: false, completion: s.send(text, staged.files, sendOptions) });
@@ -1178,6 +1187,7 @@ function install({ app, ipcMain, BrowserWindow, identityOf, sendIdentityOf, capa
       if (taskTurn?.afterTurn) await taskTurn.afterTurn('stopped').catch(() => {});
       return submitted.result || { ok: false, reason: '这条消息没有被接收' };
     }
+    if (!submitted.queued) void firstTurnTitle.accepted(s, titleRequest);
     if (observe) observe(Promise.resolve(submitted.completion));
     Promise.resolve(submitted.completion).then((r) => {
       if (!r || !r.ok) _publish(BrowserWindow, s, {
