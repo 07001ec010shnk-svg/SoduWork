@@ -225,6 +225,47 @@ test('the total deadline ends a continuously active response and cleans partial 
   assert.equal(fs.existsSync(target + '.part'), false);
 });
 
+test('a known-size archive can finish beyond the original deadline with sustained progress', async t => {
+  const chunk = Buffer.alloc(32 * 1024, 0x53);
+  const chunks = 10;
+  const source = await origin(t, (_request, response) => {
+    let sent = 1;
+    response.write(chunk);
+    const timer = setInterval(() => {
+      if (++sent === chunks) response.end(chunk);
+      else response.write(chunk);
+    }, 80);
+    response.once('close', () => clearInterval(timer));
+  });
+  const target = directory(t);
+  await downloadFile(source.url, target, options({}, {
+    resume: true, expectedBytes: chunk.length * chunks, timeoutMs: 400, idleTimeoutMs: 2000,
+  }));
+  assert.deepEqual(fs.readFileSync(target), Buffer.alloc(chunk.length * chunks, 0x53));
+});
+
+test('a resumed prefix and small trickles do not renew the progress deadline', async t => {
+  const target = directory(t);
+  const prefix = Buffer.alloc(64 * 1024 - 1);
+  fs.writeFileSync(target + '.part', prefix);
+  const expectedBytes = prefix.length + 3;
+  const source = await origin(t, (_request, response) => {
+    response.writeHead(206, { 'Content-Range': `bytes ${prefix.length}-${expectedBytes - 1}/${expectedBytes}` });
+    let sent = 0;
+    const timer = setInterval(() => {
+      if (++sent === 3) response.end('x');
+      else response.write('x');
+    }, 240);
+    response.once('close', () => clearInterval(timer));
+  });
+  await assert.rejects(downloadFile(source.url, target, options({}, {
+    resume: true, expectedBytes, timeoutMs: 600, idleTimeoutMs: 1500,
+  })), /time limit|deadline|progress.*timeout/i);
+  assert.equal(fs.existsSync(target), false);
+  const retained = fs.statSync(target + '.part').size;
+  assert.ok(retained > prefix.length && retained < expectedBytes);
+});
+
 test('redirects share one total deadline', async t => {
   const source = await origin(t, (_request, response) => {
     const timer = setTimeout(() => { response.writeHead(302, { Location: '/archive' }); response.end(); }, 80);
@@ -267,6 +308,48 @@ test('a complete partial is published after a matching 416 total', async t => {
   const source = await origin(t, (_request, response) => { response.writeHead(416, { 'Content-Range': `bytes */${content.length}` }); response.end(); });
   await downloadFile(source.url, target, options({}, { resume: true }));
   assert.equal(fs.readFileSync(target, 'utf8'), content);
+});
+
+test('a 416 matching the partial cannot publish it at the wrong pinned size', async t => {
+  const target = directory(t);
+  fs.writeFileSync(target + '.part', 'part');
+  const source = await origin(t, (_request, response) => {
+    response.writeHead(416, { 'Content-Range': 'bytes */4' });
+    response.end();
+  });
+  await assert.rejects(downloadFile(source.url, target, options({}, { resume: true, expectedBytes: 8 })));
+  assert.equal(fs.existsSync(target), false);
+});
+
+test('a short complete response retains its bytes and the next request resumes from them', async t => {
+  const target = directory(t);
+  const source = await origin(t, (request, response) => {
+    if (request.headers.range) {
+      response.writeHead(206, { 'Content-Range': 'bytes 3-5/6' });
+      response.end('def');
+    } else {
+      response.write('abc');
+      response.end();
+    }
+  });
+  const settings = options({}, { resume: true, expectedBytes: 6 });
+  await assert.rejects(downloadFile(source.url, target, settings));
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(fs.readFileSync(target + '.part', 'utf8'), 'abc');
+  await downloadFile(source.url, target, settings);
+  assert.equal(source.received[1].headers.range, 'bytes=3-');
+  assert.equal(fs.readFileSync(target, 'utf8'), 'abcdef');
+});
+
+test('an oversized body removes the corrupt partial even when resume is enabled', async t => {
+  const target = directory(t);
+  const source = await origin(t, (_request, response) => {
+    response.write('abc');
+    response.end('def');
+  });
+  await assert.rejects(downloadFile(source.url, target, options({}, { resume: true, expectedBytes: 5 })));
+  assert.equal(fs.existsSync(target), false);
+  assert.equal(fs.existsSync(target + '.part'), false);
 });
 
 test('a mismatched 416 total discards the partial and retries from zero', async t => {

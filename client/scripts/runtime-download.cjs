@@ -46,7 +46,7 @@ function checkedUrl(value) {
 }
 
 async function downloadFile(url, target, { environment = process.env, timeoutMs = 300000,
-  idleTimeoutMs = 60000, resume = false, log = console.error, tls = {} } = {}) {
+  idleTimeoutMs = 60000, expectedBytes, resume = false, log = console.error, tls = {} } = {}) {
   // CA injection is used by isolated TLS tests and managed certificate stores.
   // It never allows a caller to disable peer or hostname verification.
   if (Object.keys(tls).some(key => key !== 'ca')) throw new DownloadError('Only a trusted CA may configure download TLS');
@@ -58,6 +58,7 @@ async function downloadFile(url, target, { environment = process.env, timeoutMs 
   const timer = setTimeout(() => controller.abort(new DownloadError('Runtime download exceeded total time limit')), timeoutMs);
   const partial = target + '.part';
   let body;
+  let discardPartial = !resume;
   try {
     let current = checkedUrl(url), redirects = 0, resets = 0;
     if (!resume) fs.rmSync(partial, { force: true });
@@ -83,7 +84,7 @@ async function downloadFile(url, target, { environment = process.env, timeoutMs 
       if (status === 416 && offset) {
         body.destroy(); body = null;
         const total = range.match(/^bytes \*\/(\d+)$/);
-        if (total && Number(total[1]) === offset) {
+        if (total && Number(total[1]) === offset && (expectedBytes === undefined || offset === expectedBytes)) {
           fs.renameSync(partial, target);
           return target;
         }
@@ -101,8 +102,22 @@ async function downloadFile(url, target, { environment = process.env, timeoutMs 
         continue;
       }
       let bytes = status === 206 ? offset : 0, lastProgress = Date.now();
+      let checkpoint = bytes;
       body.on('data', chunk => {
         bytes += chunk.length;
+        if (expectedBytes !== undefined) {
+          if (bytes > expectedBytes) {
+            discardPartial = true;
+            controller.abort(new DownloadError('Runtime download exceeds the expected archive size'));
+            return;
+          }
+          // Only a pinned, finite payload can earn more time, in 64 KiB steps.
+          // Redirects, cached prefixes and tiny keepalive writes earn no extension.
+          if (bytes - checkpoint >= 64 * 1024) {
+            timer.refresh();
+            checkpoint = bytes;
+          }
+        }
         if (Date.now() - lastProgress >= 30000) {
           log(`[runtime-download] ${downloadLabel(current)}: ${bytes} bytes received`);
           lastProgress = Date.now();
@@ -111,11 +126,14 @@ async function downloadFile(url, target, { environment = process.env, timeoutMs 
       await pipeline(body, fs.createWriteStream(partial, { flags: status === 206 ? 'a' : 'w' }),
         { signal: controller.signal });
       body = null;
+      if (expectedBytes !== undefined && bytes !== expectedBytes) {
+        throw new DownloadError('Runtime download ended before the expected archive size');
+      }
       fs.renameSync(partial, target);
       return target;
     }
   } catch (error) {
-    if (!resume) fs.rmSync(partial, { force: true });
+    if (discardPartial) fs.rmSync(partial, { force: true });
     if (controller.signal.aborted) throw controller.signal.reason;
     if (error instanceof DownloadError) throw error;
     // Proxy and TLS libraries may include credential-bearing URLs in errors.
