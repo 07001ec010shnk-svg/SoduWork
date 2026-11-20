@@ -2,9 +2,9 @@
 
 """
 from datetime import datetime, timezone
-from typing import Any, Literal, Optional
+from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from .models import Client, Task
 
@@ -254,9 +254,12 @@ class Envelope(BaseModel):
     reporter: Optional[str] = None        # Requester who receives the completion notification.
 
 
+AdminName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+
+
 class IntegrationCreate(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    name: str
+    name: AdminName
     type: str = "generic"
     config: dict = {}                    # GitLab configuration stores base_url and project; tokens remain in environment variables.
 
@@ -284,27 +287,27 @@ class AssignBody(BaseModel):
 
 class OrgCreate(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    name: str
+    name: AdminName
     parentId: Optional[str] = None
     sort: int = 0
 
 
 class OrgUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    name: Optional[str] = None
+    name: Optional[AdminName] = None
     parentId: Optional[str] = None
     sort: Optional[int] = None
 
 
 class RoleCreate(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    name: str
+    name: AdminName
     permissions: list[str] = []
 
 
 class RoleUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    name: Optional[str] = None
+    name: Optional[AdminName] = None
     permissions: Optional[list[str]] = None
 
 
