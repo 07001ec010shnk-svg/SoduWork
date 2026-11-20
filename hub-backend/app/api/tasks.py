@@ -1070,11 +1070,12 @@ async def put_milestones(
         m.agent_type = str(it.get("agentType") or "").strip()
         m.model = str(it.get("model") or "").strip()
         st = str(it.get("status") or "").strip()
-        # #664: skipped里程碑不可验收
-        # #665: skipped里程碑不可重新规划为doing/done
-        if m.status == "done" and st == "skipped":
-            # 已验收的里程碑不能被降级为skipped
-            raise HTTPException(status_code=400, detail=f"「{m.title}」已经验收通过，不能标记为不做")
+        # #662/#664/#665: done/tested milestones cannot be downgraded or skipped
+        if m.status in ("done", "tested") and st in ("planned", "skipped"):
+            raise HTTPException(
+                status_code=409,
+                detail=f"里程碑「{m.title}」已验收（{m.status}），不可降级为 {st}"
+            )
         # Accept only user-editable states: skipped or planned.
         # Execution determines doing, done, and failed; clients cannot assign those results directly.
         # Preserve current state for other values instead of defaulting to planned.
@@ -1087,9 +1088,12 @@ async def put_milestones(
         keep.add(m.id)
     for mid, m in old.items():
         if mid not in keep:
-            # #662: 已验收(done)里程碑不可删除
-            if m.status == "done":
-                raise HTTPException(status_code=400, detail=f"「{m.title}」已经验收通过，不能删除")
+            # #662: Block deletion of milestones that have been accepted
+            if m.status in ("done", "tested"):
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"里程碑「{m.title}」已验收（{m.status}），不可删除"
+                )
             await session.delete(m)
     rows = await _load_milestones(session, tid)
     me = await _actor_user(session, client)
@@ -1295,8 +1299,7 @@ async def milestone_verdict(
     # False acceptance can also close unresolved source issues in a batch.
     # Use rounds to establish that an execution result exists for review.
     # Use skipped to omit a milestone; acceptance is not a substitute for skipping.
-    # #664: skipped milestones must not be accepted and back-close the source requirement.
-    # #664: 未执行的skipped里程碑不可验收（已执行的skipped可以验收）
+    # #664: skipped milestones must not be accepted and back-close the source requirement. d3eb5f15c (fix: remaining Lucas issues - state machine, security, validation (14 issues))
     if (m.rounds or 0) <= 0:
         if m.status == "skipped":
             raise HTTPException(

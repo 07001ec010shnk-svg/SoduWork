@@ -110,6 +110,18 @@ async def login(body: AdminLogin, request: Request, session: AsyncSession = Depe
     if not authenticated:
         await session.commit()
         raise HTTPException(status_code=401, detail="账号或密码不正确")
+    # Reset fail counter on successful login
+    if request:
+        try:
+            import redis.asyncio as aioredis
+            r = aioredis.from_url("redis://localhost:6379")
+            client_ip = request.client.host if request.client else "unknown"
+            fail_key = f"admin_login_fail:{client_ip}"
+            await r.delete(fail_key)
+            await r.close()
+        except Exception:
+            pass
+
     user.last_login_at = datetime.now(timezone.utc)
     await session.commit()
     return {"token": sign_token(user.id, user.auth_version),
