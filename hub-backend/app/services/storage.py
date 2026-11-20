@@ -48,13 +48,18 @@ _WINDOWS_RESERVED = re.compile(r"^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)"
 _SAFE_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,16}")
 
 
+def _utf16_units(value: str) -> int:
+    return len(value.encode("utf-16-le", errors="surrogatepass")) // 2
+
+
+def _windows_component_ok(name: str) -> bool:
+    return (_utf16_units(name) <= _NAME_LIMIT and not _WINDOWS_INVALID.search(name)
+            and not name.endswith((" ", ".")) and not _WINDOWS_RESERVED.match(name))
+
+
 def _native_name_ok(name: str, path: str) -> bool:
     if os.name == "nt":
-        return (len(name.encode("utf-16-le")) // 2 <= _NAME_LIMIT
-                and len(path) <= _WINDOWS_PATH_LIMIT
-                and not _WINDOWS_INVALID.search(name)
-                and not name.endswith((" ", "."))
-                and not _WINDOWS_RESERVED.match(name))
+        return _windows_component_ok(name) and _utf16_units(os.path.abspath(path)) <= _WINDOWS_PATH_LIMIT
     return len(os.fsencode(name)) <= _NAME_LIMIT
 
 
@@ -73,23 +78,27 @@ def _hashed_names(key: str, safe: str) -> tuple[str, str]:
     return (head + "__" + compact if head else compact), compact
 
 
-def _extended(path: str) -> str:
-    # Last resort when even the compact name exceeds MAX_PATH: the
-    # extended-length form is not subject to the 260-character limit.
-    if os.name != "nt" or len(path) <= _WINDOWS_PATH_LIMIT or path.startswith("\\\\?\\"):
+def _extended(path: str, *, directory: bool = False) -> str:
+    if os.name != "nt":
         return path
     path = os.path.abspath(path)
+    # Windows directory creation can hit its legacy limit before a complete file path does.
+    if path.startswith("\\\\?\\") or (not directory and _utf16_units(path) <= _WINDOWS_PATH_LIMIT):
+        return path
     return "\\\\?\\UNC\\" + path[2:] if path.startswith("\\\\") else "\\\\?\\" + path
 
 
 def _local_path(key: str) -> str:
-    os.makedirs(_LOCAL_DIR, exist_ok=True)
+    os.makedirs(_extended(_LOCAL_DIR, directory=True), exist_ok=True)
     safe = key.replace("/", "__").replace("\\", "__")
     legacy = os.path.join(_LOCAL_DIR, safe)
     readable, compact = (os.path.join(_LOCAL_DIR, name) for name in _hashed_names(key, safe))
     # An object that already exists keeps the name it was written under, even
     # if the uploads directory has since moved to a shorter or longer path.
-    for path in (legacy, readable, _extended(compact)):
+    for path in (legacy, readable, compact):
+        if os.name == "nt" and not _windows_component_ok(os.path.basename(path)):
+            continue
+        path = _extended(path)
         if os.path.exists(path):
             return path
     # New objects: the original mapping when the filesystem can store it,

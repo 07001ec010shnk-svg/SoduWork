@@ -53,6 +53,28 @@ class AdminTaskAttachmentTests(unittest.IsolatedAsyncioTestCase):
     async def test_equal_size_uploads_do_not_silently_change_the_first_file(self):
         await self.assert_independent_uploads(b"version A", b"version B")
 
+    async def test_desktop_upload_keeps_long_filename_and_content(self):
+        task_id = "attachment-verification-332"
+        async with self.sessions() as session:
+            session.add(models.Task(id=task_id, title="Attachment verification",
+                                    owner_client_id="owner", created_by="owner"))
+            await session.commit()
+        filename = "需求验收资料汇总" * 24 + "复核记录.txt"
+        content = b"Local attachment verification.\n"
+        endpoint = f"tasks/{task_id}/attachments"
+        device_call = unified.UnifiedRequirementTests.call
+        uploaded = await device_call(self, "POST", endpoint,
+                                     files={"file": (filename, content, "text/plain")})
+        self.assertEqual(uploaded.status_code, 200, uploaded.text)
+        listing = await device_call(self, "GET", endpoint)
+        self.assertEqual(listing.status_code, 200, listing.text)
+        [row] = listing.json()
+        self.assertEqual(row["id"], uploaded.json()["id"])
+        self.assertEqual(row["filename"], filename)
+        download = await self.http.get(row["url"])
+        self.assertEqual(download.status_code, 200, download.text)
+        self.assertEqual(download.content, content)
+
     async def assert_independent_uploads(self, first_content, second_content):
         first = await self.upload(first_content)
         second = await self.upload(second_content)

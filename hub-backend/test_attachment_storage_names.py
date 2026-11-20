@@ -64,11 +64,55 @@ class LocalAttachmentNameTests(unittest.TestCase):
             self.assertEqual(Path(storage._local_path(key)), legacy)
             self.assertEqual(storage.get(key, "local"), b"written before this change")
 
+    @unittest.skipUnless(os.name == "nt", "Windows path limits")
+    def test_complete_path_counts_utf16_units_in_the_directory(self):
+        directory = os.path.join(self.folder.name, "项目📅" * 12)
+        prefix = "att/task-1/attachment-1/"
+        base = os.path.join(directory, prefix.replace("/", "__"))
+        key = prefix + "表" * (250 - len(base) - len(".txt")) + ".txt"
+        legacy = os.path.join(directory, key.replace("/", "__"))
+        self.assertEqual(len(legacy), 250)
+        self.assertGreater(len(legacy.encode("utf-16-le")) // 2, 259)
+        with patch.object(storage, "_LOCAL_DIR", directory):
+            storage.put(key, b"report", "text/plain")
+            self.assertNotEqual(storage._local_path(key), legacy)
+            self.assertEqual(storage.get(key, "local"), b"report")
+
+    @unittest.skipUnless(os.name == "nt", "Windows path limits")
+    def test_restored_legacy_and_readable_files_past_max_path(self):
+        keys = ["att/task-1/attachment-1/会议记录.txt",
+                "att/project-1234567890/attachment-1234567890/" + "报告📅" * 60 + ".txt"]
+        source = os.path.join(self.folder.name, "source")
+        with patch.object(storage, "_LOCAL_DIR", source):
+            for key in keys:
+                storage.put(key, b"original", "text/plain")
+            self.assertEqual(os.path.basename(storage._local_path(keys[0])), keys[0].replace("/", "__"))
+            self.assertIn("__h-", os.path.basename(storage._local_path(keys[1])))
+
+        deep = os.path.join(self.folder.name, "d" * (238 - len(self.folder.name)))
+        os.rename(source, deep)
+        real_exists = os.path.exists
+
+        def exists_without_system_long_paths(path):
+            if not path.startswith("\\\\?\\") and len(path.encode("utf-16-le")) // 2 > 259:
+                return False
+            return real_exists(path)
+
+        with patch.object(storage, "_LOCAL_DIR", deep), patch.object(
+                os.path, "exists", side_effect=exists_without_system_long_paths):
+            for key in keys:
+                with self.subTest(key=key):
+                    self.assertEqual(storage.get(key, "local"), b"original")
+                    self.assertEqual(b"".join(storage.iter_stream(storage.open_stream(key, "local"))), b"original")
+                    storage.delete(key, "local")
+        self.assertEqual(os.listdir(deep), [])
+
 
 
 def _windows_rules(name, path):
     """Emulate the Windows name and MAX_PATH checks on every platform."""
-    return len(name.encode("utf-16-le")) // 2 <= 255 and len(path) <= 259 and ":" not in name
+    return (len(name.encode("utf-16-le")) // 2 <= 255
+            and len(os.path.abspath(path).encode("utf-16-le")) // 2 <= 259 and ":" not in name)
 
 
 class UploadDirectoryLocationTests(unittest.TestCase):
