@@ -10,12 +10,22 @@ from ..models import User
 from ..services import (approval_policies as policy_svc, audit, deployments,
                         environment_service as svc, project_setup, rbac,
                         release_control, runner_hub)
+from .input_validation import parse_integer
 
 router = APIRouter(prefix="/api/v1/admin", tags=["environments"])
 
 
 def _bad(error: ValueError) -> HTTPException:
     return HTTPException(status_code=409, detail=str(error))
+
+
+def _approval_policy_input(body: dict) -> dict:
+    safe = dict(body)
+    rules = safe.get("rules")
+    if isinstance(rules, dict) and "required" in rules:
+        safe["rules"] = {**rules, "required": parse_integer(
+            rules["required"], field="rules.required", default=1)}
+    return safe
 
 
 async def _scope(session: AsyncSession, user: User) -> set[str] | None:
@@ -255,7 +265,7 @@ async def create_approval_policy(
     user: User = Depends(require_perm("flow.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    safe = dict(body)
+    safe = _approval_policy_input(body)
     safe["orgId"] = body.get("orgId") if user.is_super else user.org_id
     try:
         row = await policy_svc.save(session, safe)
@@ -282,7 +292,7 @@ async def update_approval_policy(
     if scope is not None and row.org_id is not None and row.org_id not in scope:
         raise HTTPException(status_code=403, detail="这项审批职责不在你的组织范围内")
     try:
-        row = await policy_svc.save(session, body, row)
+        row = await policy_svc.save(session, _approval_policy_input(body), row)
     except ValueError as e:
         raise _bad(e) from e
     await audit.log(session, user, "approval_policy.update", "approval_policy",
