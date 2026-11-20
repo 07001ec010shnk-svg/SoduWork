@@ -451,7 +451,7 @@ async def delete_domain(
 ):
     r = await rbac.delete_domain(session, did)
     if not r.get("ok"):
-        msg = {"not_found": "领域不存在", "system": "内置领域不可删除"}.get(r.get("reason"), "删除失败")
+        msg = {"not_found": "领域不存在", "system": "内置领域不可删除", "users_remain": "仍有用户属于该领域，先移除用户关联"}.get(r.get("reason"), "删除失败")
         raise HTTPException(status_code=404 if r.get("reason") == "not_found" else 400, detail=msg)
     await audit.log(session, user, "domain.delete", "domain", did, did, {})
     return r

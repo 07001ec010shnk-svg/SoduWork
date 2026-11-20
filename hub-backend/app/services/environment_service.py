@@ -367,7 +367,13 @@ async def save_environment(session: AsyncSession, body: dict, row: am.Environmen
     if "enabled" in body:
         row.enabled = bool(body.get("enabled"))
     if "sort" in body:
-        row.sort = int(body.get("sort") or 0)
+        raw_sort = body.get("sort")
+        if isinstance(raw_sort, (list, dict)):
+            raise ValueError("排序必须是数字")
+        try:
+            row.sort = int(raw_sort or 0)
+        except (TypeError, ValueError):
+            raise ValueError("排序必须是数字")
     await session.flush()
     await _assert_promotion_graph(session, row)
     await session.commit()
