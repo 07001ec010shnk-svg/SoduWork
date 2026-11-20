@@ -82,12 +82,21 @@ class RemoteRunner(runner_hub._Runner):
     async def call(self, op, data, timeout=60, *, _rerouted=False):
         from .session_read_budget import deadline_active, remaining
         try:
-            result = await bus.request(self.node, "runner.call", {
+            packet_timeout = remaining(timeout + 5)
+            wait_timeout = packet_timeout
+            if deadline_active() and op == "content.read":
+                wait_timeout = max(wait_timeout, 0.2)
+            request_data = {
                 "runner": self.id, "token": self.cluster_token,
                 "op": op, "data": data, "timeout": timeout,
                 "client": self.client_id, "org": self.org_id,
                 "owner": self.owner_user_id,
-            }, remaining(timeout + 5))
+            }
+            if op == "content.read":
+                result = await bus.request(self.node, "runner.call", request_data,
+                                           packet_timeout, wait_timeout=wait_timeout)
+            else:
+                result = await bus.request(self.node, "runner.call", request_data, packet_timeout)
             # A rejected old owner has NOT forwarded bytes. Refresh once so a
             # just-reconnected Runner does not require a second user click.
             if (not _rerouted and result.get("code") == "RUNNER_OWNER_CHANGED"
