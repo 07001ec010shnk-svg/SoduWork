@@ -1097,8 +1097,12 @@ def fetch_attachment_sync(cfg: dict, att_id: str) -> bytes | None:
     with _LOCK:
         runs = list(_RUNS.values())
     for run in runs:
-        p = os.path.join(run["ws"], att_id)
-        if os.path.isfile(p) and os.path.abspath(p).startswith(os.path.abspath(run["ws"])):
+        # Reuse the execution-scoped resolver so the legacy fallback has the
+        # same realpath/commonpath boundary as ref-scoped reads.  A string
+        # prefix check lets ``/workspace/run2`` pass for ``/workspace/run``
+        # and follows symlinks outside the workspace.
+        p = _safe_work_file(run, att_id)
+        if p:
             try:
                 if os.path.getsize(p) > 20 * 1024 * 1024:
                     return None

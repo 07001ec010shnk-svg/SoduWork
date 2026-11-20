@@ -14,6 +14,13 @@ from sqlalchemy.orm import Mapped, mapped_column
 from .db import Base
 
 
+# Execution event/session sequence values are persisted in SQL INTEGER columns.
+# Keep the wire contract within the signed 32-bit range so a forged Runner
+# cannot make an ACK transaction fail while SQLAlchemy flushes an out-of-range
+# value. Transport delivery receipts use ``BigInteger`` separately.
+MAX_EVENT_SEQ = (1 << 31) - 1
+
+
 def _uuid() -> str:
     return str(uuid.uuid4())
 

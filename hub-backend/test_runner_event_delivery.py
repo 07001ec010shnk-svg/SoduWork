@@ -356,6 +356,52 @@ class DurableDeliveryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((page["last"], page["hasMore"]), (2, True))
         self.assertIsNone(page["historyGap"])
 
+    async def test_event_sequence_upper_bound_is_enforced_before_flush(self):
+        await self.seed()
+        maximum = (1 << 31) - 1
+        accepted = self.message(seqs=(maximum,))
+        ack, _ = await self.accept(accepted)
+        # A packet containing only the upper-bound event is accepted, but it
+        # cannot advance the contiguous replay watermark past the missing
+        # sequence 1.
+        self.assertEqual(ack["persistedThrough"], 0)
+        row, events = await self.stored()
+        self.assertEqual((row.seq, row.persisted_seq, [event.seq for event in events]),
+                         (maximum, 0, [maximum]))
+
+        overflow = self.message(2, seqs=(maximum + 1,))
+        with self.assertRaisesRegex(runner_event_delivery.DeliveryRejected,
+                                    "DELIVERY_INVALID"):
+            await self.accept(overflow)
+        row, events = await self.stored()
+        self.assertEqual((row.delivery_seq, row.seq, len(events)), (1, maximum, 1))
+
+    async def test_heartbeat_sequence_upper_bound_is_rejected_before_flush(self):
+        await self.seed()
+        snapshot = self.message()["snapshot"]
+        snapshot["seq"] = (1 << 31)
+        snapshot["items"] = []
+        async with db.SessionLocal() as session:
+            with self.assertRaisesRegex(ValueError, "snapshot sequence is out of range"):
+                await execution_sessions.ingest_runner_snapshots(session, self.runner, [snapshot])
+        row, events = await self.stored()
+        self.assertEqual((row.seq, row.persisted_seq, len(events)), (0, 0, 0))
+
+    async def test_heartbeat_batch_validates_all_sequences_before_mutating_rows(self):
+        await self.seed()
+        first = self.message()["snapshot"]
+        second = snapshot(ref=self.ref + "-later", task_id=self.tid,
+                          seqs=((1 << 31),))
+        async with db.SessionLocal() as session:
+            with self.assertRaisesRegex(ValueError, "snapshot sequence is out of range"):
+                await execution_sessions.ingest_runner_snapshots(
+                    session, self.runner, [first, second])
+            row = (await session.scalars(select(ExecutionSession).where(
+                ExecutionSession.ref == self.ref))).one()
+            self.assertEqual(row.seq, 0)
+            self.assertEqual((await session.scalars(select(ExecutionEvent).where(
+                ExecutionEvent.session_id == row.id))).all(), [])
+
     async def test_migrated_gapped_history_preserves_suffix_without_inventing_cursor(self):
         await self.seed()
         async with db.SessionLocal() as session:

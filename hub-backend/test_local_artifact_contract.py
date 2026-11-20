@@ -125,6 +125,14 @@ class LocalArtifactContractTests(unittest.TestCase):
             store.assert_not_called()
         self.assertFalse((self.root / "archive").exists())
 
+    def test_legacy_attachment_lookup_rejects_sibling_workspace_prefix_collision(self):
+        sibling = self.root / "workspace2"
+        sibling.mkdir()
+        secret = sibling / "secret.txt"
+        secret.write_bytes(b"private")
+        with patch.dict(ai_local._RUNS, {self.run["ref"]: self.run}, clear=True):
+            self.assertIsNone(ai_local.fetch_attachment_sync({}, "../workspace2/secret.txt"))
+
 
     def test_single_file_has_no_bundle_and_verification_is_not_added_to_a_bundle(self):
         self.write('result.md', b'result', 1000)

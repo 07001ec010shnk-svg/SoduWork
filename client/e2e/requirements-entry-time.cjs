@@ -55,8 +55,7 @@ app.whenReady().then(async () => {
     const times = await js(`['intake-0','clarifying-0','ready-0'].map(id=>{const n=document.querySelector('[data-hbid="'+id+'"] .rq-updated');return{text:n.textContent,datetime:n.querySelector('time')?.dateTime,title:n.querySelector('time')?.title}})`);
     assert.equal(times[0].datetime, '2026-10-23T02:03:04.000Z');
     assert.match(times[0].title, /最近更新：.*UTC/);
-    // The card timestamp shares the assignee row and omits the Updated/Created prefix; verify the timestamp and tooltip.
-    assert.match(times[1].text, /^20\d\d\/\d\d\/\d\d \d\d:\d\d$/);
+    assert.match(times[1].text, /^创建20\d\d\/\d\d\/\d\d \d\d:\d\d$/);
     assert.match(times[1].title, /创建时间：.*UTC/);
     assert.equal(times[2].text, '时间未记录');
     report.checks.push('Every card uses real updated time, valid creation fallback, or explicit missing-time state');
