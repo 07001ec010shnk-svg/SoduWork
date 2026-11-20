@@ -10,6 +10,7 @@ from ..models import User
 from ..services import (approval_policies as policy_svc, audit, deployments,
                         environment_service as svc, project_setup, rbac,
                         release_control, runner_hub)
+from .input_validation import parse_integer
 
 router = APIRouter(prefix="/api/v1/admin", tags=["environments"])
 
@@ -329,6 +330,8 @@ async def create_environment(
     try:
         safe = dict(body)
         safe["orgId"] = body.get("orgId") if user.is_super else user.org_id
+        if "sort" in safe:
+            safe["sort"] = parse_integer(safe["sort"], field="sort", default=0)
         row = await svc.save_environment(session, safe)
     except ValueError as e:
         raise _bad(e) from e
@@ -353,7 +356,10 @@ async def update_environment(
     if scope is not None and row.org_id is not None and row.org_id not in scope:
         raise HTTPException(status_code=403, detail="这个环境不在你的组织范围内")
     try:
-        row = await svc.save_environment(session, body, row)
+        safe = dict(body)
+        if "sort" in safe:
+            safe["sort"] = parse_integer(safe["sort"], field="sort", default=0)
+        row = await svc.save_environment(session, safe, row)
     except ValueError as e:
         raise _bad(e) from e
     await audit.log(session, user, "environment.update", "environment", row.id, row.name, {})

@@ -94,6 +94,7 @@ RELEASE_SMOKES = tuple(sorted((
     "test_api_integer_validation.py",
     "test_api_timestamps.py",
     "test_domain_sort_validation.py",
+    "test_environment_sort_validation.py",
     "test_domain_sort_migration.py",
     "test_schedule_update_input_validation.py",
     "test_repository_path_boundary.py",
