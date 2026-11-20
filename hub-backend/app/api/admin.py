@@ -146,6 +146,8 @@ def _org_mutation_error(exc: rbac.OrgMutationError) -> HTTPException:
         "out_of_scope": (403, "只能在自己管辖的部门内操作"),
         "parent_not_found": (400, "上级部门不存在"),
         "cycle": (400, "部门不能移动到自身或下级部门"),
+        "invalid_name": (400, "部门名称须为 1 至 64 个字符"),
+        "duplicate_name": (409, "同级部门已使用这个名称"),
     }.get(exc.reason, (400, "组织架构操作无效"))
     return HTTPException(status_code=status, detail=message)
 

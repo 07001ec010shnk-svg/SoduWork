@@ -335,6 +335,59 @@ class ProbeTests(unittest.IsolatedAsyncioTestCase):
                     if value.strip() != "123456":
                         self.assertEqual(actual.get("detailCode"), "expected_output_mismatch")
 
+    async def test_reasoning_model_truncated_probe_retries_with_larger_budget(self):
+        # A reasoning model can spend the small fixed probe budget on its thinking
+        # trail and get cut off before the short deterministic answer. The image
+        # challenge must still be verifiable with one bounded higher-budget retry.
+        with patch.object(probe, "image_challenge", return_value=("582941", "data:image/png;base64,fixture")):
+            calls = []
+            def handler(body):
+                calls.append(body)
+                if len(calls) == 1:
+                    # First probe exhausts the small budget on reasoning; no final answer.
+                    return Response({"choices": [{"finish_reason": "length", "message": {
+                        "content": "", "reasoning_content": "thinking " * 200}}]})
+                # Retry with a larger budget returns the expected six digits.
+                return message("582941")
+            result = await self.run_probe(["imageInput"], handler)
+        actual = result["checks"]["imageInput"]
+        self.assertEqual(actual["status"], "passed", result)
+        self.assertEqual(len(self.requests), 2)
+        first = self.requests[0].get("max_tokens", self.requests[0].get("max_completion_tokens"))
+        second = self.requests[1].get("max_tokens", self.requests[1].get("max_completion_tokens"))
+        self.assertGreater(second, first)
+
+    async def test_reasoning_retry_respects_both_saved_limits_and_retries_only_once(self):
+        for finish, output, context, budgets in (
+            ("length", 1024, 4096, [512, 1024]),
+            ("max_tokens", 4096, 768, [512, 768]),
+            ("max_output_tokens", 4096, 8192, [512, 4096]),
+            ("length", 512, 4096, [512]),
+        ):
+            with self.subTest(finish=finish, output=output, context=context):
+                conf = {**CONF, "config": {"maxOutputTokens": output, "contextWindow": context},
+                        "compatibility": {"maxTokensField": "max_completion_tokens"}}
+                choice = {"finish_reason": finish, "message": {"reasoning": "still working"}}
+                result = await self.run_probe(["connection"], lambda _: Response({"choices": [choice]}), conf)
+                self.assertEqual(result["checks"]["connection"]["code"], "response_truncated")
+                self.assertEqual([body["max_completion_tokens"] for body in self.requests], budgets)
+
+    async def test_only_complete_valid_reasoning_responses_trigger_a_retry(self):
+        choice = {"finish_reason": "length", "message": {"reasoning_content": "still working"}}
+        for data, outcome, expected in (
+            ({"choices": [choice]}, "timeout", "timeout"),
+            ({"choices": [choice]}, "interrupted", "transport_interrupted"),
+            ({"choices": [choice, choice]}, "completed", "invalid_response"),
+            ({"choices": [{**choice, "message": {"role": "user", "thinking": "text"}}]}, "completed", "invalid_response"),
+            ({"choices": [{**choice, "message": {"content": "partial"}}]}, "completed", "response_truncated"),
+        ):
+            with self.subTest(outcome=outcome, expected=expected):
+                response = Response(data)
+                response.outcome = outcome
+                result = await self.run_probe(["connection"], lambda _: response)
+                self.assertEqual(result["checks"]["connection"]["code"], expected)
+                self.assertEqual(len(self.requests), 1)
+
     async def test_nonstream_malformed_bodies_cannot_verify_connection(self):
         malformed = [{"choices": [{"message": {"content": "OK"}}, {"message": {"content": "ignored"}}]},
                      {"choices": [{"index": False, "message": {"content": "OK"}}]},

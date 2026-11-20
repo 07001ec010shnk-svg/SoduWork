@@ -307,6 +307,71 @@ class NotesTests(unittest.TestCase):
         self.assertTrue(all(c['title'] == 'Fixture title' for c in evidence['commits']))
         self.assertNotIn('Long body', sent['messages'][1]['content'])
         self.assertNotIn('client/example.js', sent['messages'][1]['content'])
+        opener.open.assert_called_once()
+        self.assertNotIn('release_notes_usage', self.logged.getvalue())
+
+    def test_optional_usage_logs_only_valid_counters_without_changing_notes(self):
+        result = {key: copy.deepcopy(self.record[key]) for key in ['locales', 'sources']}
+        result['sources'][0]['commits'] = ['c1']
+        changes = [{'commit': sha, 'message': 'Fixture title'} for sha in self.record['commits']]
+        private = 'do-not-log-provider-details'
+        cases = [
+            (None, {}), ([], {}), (private, {}), ({}, {}),
+            ({'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150,
+              'completion_tokens_details': {'reasoning_tokens': 20, 'debug': private},
+              'provider_metadata': private},
+             {'prompt_tokens': 100, 'completion_tokens': 50, 'total_tokens': 150,
+              'reasoning_tokens': 20}),
+            ({'prompt_tokens': 0, 'completion_tokens_details': {'reasoning_tokens': 0}},
+             {'prompt_tokens': 0, 'reasoning_tokens': 0}),
+            ({'prompt_tokens': True, 'completion_tokens': -1, 'total_tokens': private,
+              'completion_tokens_details': {'reasoning_tokens': 1.5}}, {}),
+            ({'prompt_tokens': '100', 'completion_tokens': None, 'total_tokens': {},
+              'completion_tokens_details': {'reasoning_tokens': False}}, {}),
+            ({'completion_tokens': 50, 'completion_tokens_details': [private]},
+             {'completion_tokens': 50}),
+            ({'completion_tokens_details': private}, {}),
+            ({'completion_tokens_details': None}, {}),
+        ]
+        for usage, expected in cases:
+            with self.subTest(usage=usage):
+                self.logged.seek(0); self.logged.truncate()
+                response = {'choices': [{'finish_reason': 'stop', 'message': {
+                    'content': json.dumps(result)}}], 'usage': usage}
+                opener = unittest.mock.Mock()
+                opener.open.return_value = io.BytesIO(json.dumps(response).encode())
+                with patch.dict(os.environ, {'RELEASE_NOTES_API_KEY': 'fixture-model-key',
+                                             'RELEASE_NOTES_MODEL': 'fixture-model'}, clear=True), \
+                        patch.object(notes.urllib.request, 'build_opener', return_value=opener):
+                    generated = notes.model_notes(self.ctx, 'v1.2.2', changes)
+                self.assertEqual(generated['locales'], self.record['locales'])
+                self.assertEqual(generated['sources'], self.record['sources'])
+                opener.open.assert_called_once()
+                events = [json.loads(line) for line in self.logged.getvalue().splitlines()]
+                usage_events = [e for e in events if e['event'] == 'release_notes_usage']
+                self.assertEqual(usage_events, [{
+                    'event': 'release_notes_usage', 'model': 'fixture-model', **expected
+                }] if expected else [])
+                self.assertNotIn(private, self.logged.getvalue())
+
+    def test_usage_remains_visible_when_model_output_is_truncated(self):
+        response = {'choices': [{'finish_reason': 'length', 'message': {
+            'content': 'incomplete provider output'}}],
+            'usage': {'completion_tokens': 100, 'completion_tokens_details': {'reasoning_tokens': 90}}}
+        opener = unittest.mock.Mock()
+        opener.open.return_value = io.BytesIO(json.dumps(response).encode())
+        with patch.dict(os.environ, {'RELEASE_NOTES_API_KEY': 'fixture-model-key',
+                                     'RELEASE_NOTES_MODEL': 'fixture-model'}), \
+                patch.object(notes.urllib.request, 'build_opener', return_value=opener):
+            record = self.generate_with_fixture_evidence(wraps=notes.model_notes)
+        self.assert_blank_record(record)
+        events = [json.loads(line) for line in self.logged.getvalue().splitlines() if line.startswith('{')]
+        self.assertEqual([e for e in events if e['event'] == 'release_notes_usage'], [{
+            'event': 'release_notes_usage', 'model': 'fixture-model',
+            'completion_tokens': 100, 'reasoning_tokens': 90}])
+        self.assertIn('"reason": "invalid_output"', self.logged.getvalue())
+        self.assertNotIn('incomplete provider output', self.logged.getvalue())
+        opener.open.assert_called_once()
 
     def test_model_request_uses_configured_limits_and_empty_defaults(self):
         result = {key: copy.deepcopy(self.record[key]) for key in ['locales', 'sources']}
