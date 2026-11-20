@@ -21,7 +21,9 @@ def _new_ingest_token() -> str:
 def _validate_integration_config(type_: str, config: dict | None) -> tuple[str, dict]:
     from ..connectors import REGISTRY
     normalized_type = str(type_ or "generic").strip().lower()
-    supported = set(REGISTRY) | {"generic"}
+    # Keep retired provider names parseable so scm_support can return the
+    # terminal retired-provider error for legacy records and new attempts.
+    supported = set(REGISTRY) | {"generic", "gerrit"}
     if normalized_type not in supported:
         raise ValueError("集成类型不受支持")
     normalized = dict(config or {})
