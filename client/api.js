@@ -402,6 +402,57 @@
   var _deviceAuthState = 'legacy';
   var _clientUser = null;
   var _clientQuota = null;
+  var _requestLifetime = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  function authRequired() {
+    var error = new Error('请先登录');
+    error.code = 'CLIENT_AUTH_REQUIRED'; error.connectivityHandled = true;
+    return error;
+  }
+  function requestsAllowed() {
+    // Older browser clients still use their legacy device credential. Electron
+    // must restore its secure account session before accessing business APIs.
+    return _deviceAuthState === 'active' || (_deviceAuthState === 'legacy' &&
+      !window.soduWorkAPI?.deviceAuthBootstrap);
+  }
+  function publicRequest(path) {
+    return path === '/clients/register' || path === '/client-auth/policy' ||
+      /^\/client-auth\/legal-documents(?:\/|$)/.test(path);
+  }
+  function admitRequest(path, startedAt) {
+    if (publicRequest(path)) return;
+    if (['pending', 'quota'].includes(_deviceAuthState)) throw authRequired();
+    if (!hasValidDeviceSession() && window.soduWorkAPI?.deviceAuthBootstrap) {
+      return refreshDeviceSession('', startedAt).then(function (restored) {
+        if (!restored || !requestsAllowed()) throw authRequired();
+      });
+    }
+    if (!requestsAllowed()) throw authRequired();
+  }
+  async function hubFetch(url, options) {
+    var requestHub = base(), path = String(url).slice((requestHub + '/api/v1').length).split('?')[0];
+    if (publicRequest(path)) return fetch(url, options);
+    var epoch = _registrationEpoch;
+    var admission = admitRequest(path); if (admission) await admission;
+    if (epoch !== _registrationEpoch || requestHub !== base()) throw staleTaskScope();
+    var lifetime = _requestLifetime?.signal;
+    var signal = options?.signal && lifetime?.constructor?.any
+      ? lifetime.constructor.any([options.signal, lifetime]) : options?.signal || lifetime;
+    var headers = Object.assign({}, options?.headers);
+    // Admission can restore/renew a session after the caller built its headers.
+    for (var key of Object.keys(headers)) if (/^(authorization|x-soduwork-secret|x-soduwork-device)$/i.test(key)) delete headers[key];
+    Object.assign(headers, authHeaders(false));
+    try {
+      var response = await fetch(url, Object.assign({}, options, { headers: headers, signal: signal }));
+      if (lifetime?.aborted) {
+        await response.body?.cancel?.().catch(function () {});
+        throw staleTaskScope();
+      }
+      return response;
+    } catch (error) {
+      if (lifetime?.aborted) throw staleTaskScope();
+      throw error;
+    }
+  }
   function hasValidDeviceSession() {
     if (_deviceSession && _deviceSessionHub === base() && Date.now() < _deviceSessionUntil) return true;
     if (_deviceSession) { _deviceSession = ''; _deviceSessionUntil = 0; }
@@ -426,6 +477,8 @@
       _deviceSession = ''; _deviceSessionUntil = 0; _deviceAuthState = 'pending';
     }
     if (previousScope && previousScope !== taskStorageKey('ops')) {
+      _requestLifetime?.abort();
+      _requestLifetime = typeof AbortController !== 'undefined' ? new AbortController() : null;
       try { window.dispatchEvent(new CustomEvent('soduwork-data-scope-changed')); } catch (_) {}
     }
     try { window.dispatchEvent(new CustomEvent('soduwork-device-auth', { detail: {
@@ -557,6 +610,8 @@
   }
   function invalidateRegistrations() {
     _registrationEpoch += 1;
+    _requestLifetime?.abort();
+    _requestLifetime = typeof AbortController !== 'undefined' ? new AbortController() : null;
     _sessionRefresh = null;
     _registrations.forEach(function (job) { job.cancel(); });
   }
@@ -600,6 +655,7 @@
     return job;
   }
   async function refreshDeviceSession(staleSession, startedAt) {
+    if (['pending', 'quota'].includes(_deviceAuthState)) throw authRequired();
     if (!SoduWorkAPI || typeof SoduWorkAPI.registerClient !== 'function') return false;
     if (startedAt == null) startedAt = Date.now();
     var restoration = restoreSavedHub(); if (restoration) await restoration;
@@ -614,6 +670,12 @@
     }
     var row = await _sessionRefresh;
     checkRefresh();
+    if (!row || row.ok === false) {
+      var failure = new Error(row?.error || '登录状态暂时无法恢复，请重试');
+      failure.code = row?.code || 'DEVICE_AUTH_UNAVAILABLE'; failure.status = row?.status || 0;
+      if (row?.activationRequired) failure.connectivityHandled = true;
+      throw failure;
+    }
     return !!(row && row.ok && row.session);
   }
 
@@ -641,20 +703,7 @@
   async function jfetchCurrent(path, opts, retried, trace) {
     var startedAt = Date.now();
     var restoration = restoreSavedHub(); if (restoration) await restoration;
-    /*
-     * Each Electron window has separate renderer memory. Before its first request, obtain a
-     * short-lived session through main-process secure storage; cached task data does not imply
-     * initData ran here. Share _sessionRefresh across concurrent requests to avoid duplicate
-     * issuance and transient 401 flashes. Pending activation still fails with the actual
-     * authorization error.
-     */
-    if (!retried && path !== '/clients/register' && !hasValidDeviceSession() &&
-        _deviceAuthState !== 'pending' && window.soduWorkAPI && window.soduWorkAPI.deviceAuthBootstrap) {
-      try { await refreshDeviceSession('', startedAt); } catch (e) {
-        if (registrationBoundaryError(e)) throw e;
-        /* Subsequent requests report the actual connectivity or authorization error. */
-      }
-    }
+    var admission = admitRequest(path.split('?')[0], startedAt); if (admission) await admission;
     var requestScope = taskStorageKey('ops');
     if (opts && opts.taskScope && opts.taskScope !== requestScope) throw staleTaskScope();
     var o = Object.assign({ headers: {} }, opts || {});
@@ -664,8 +713,9 @@
     if (trace?.requestId && !Object.keys(o.headers).some(key => key.toLowerCase() === 'x-request-id')) o.headers['X-Request-ID'] = trace.requestId;
     if (!o.signal) o.signal = _abortSignal(DEFAULT_TIMEOUT);
     var res;
-    try { res = await fetch(apiUrl(path), o); }
+    try { res = await hubFetch(apiUrl(path), o); }
     catch (error) {
+      if (error?.connectivityHandled || error?.code === 'STALE_TASK_SCOPE') throw error;
       global.RequirementDiagnostics?.http(global.RequirementDiagnostics.emit,path,o.body,{},0);
       if (!opts?.signal?.aborted || error?.name !== 'AbortError') mark(false); throw error;
     }
@@ -684,7 +734,7 @@
      * Refresh through secure storage and replay once; pending or disabled devices must still
      * report their actual errors.
      */
-    if (res.status === 401 && !retried && path !== '/clients/register') {
+    if (res.status === 401 && !retried && auth.session && requestsAllowed() && path !== '/clients/register') {
       try {
         if (await refreshDeviceSession(auth.session)) return jfetch(path, Object.assign({}, opts, { taskScope: requestScope }), true, trace);
       } catch (e) { if (registrationBoundaryError(e)) throw e; /* Preserve the original 401 error details. */ }
@@ -718,10 +768,7 @@
   async function uploadFile(path, file, retried, metadata, requestScope) {
     var startedAt = Date.now();
     var restoration = restoreSavedHub(); if (restoration) await restoration;
-    if (!retried && !hasValidDeviceSession() && _deviceAuthState !== 'pending' &&
-        window.soduWorkAPI && window.soduWorkAPI.deviceAuthBootstrap) {
-      try { await refreshDeviceSession('', startedAt); } catch (e) { if (registrationBoundaryError(e)) throw e; }
-    }
+    var admission = admitRequest(path, startedAt); if (admission) await admission;
     if (requestScope && requestScope !== taskStorageKey('ops')) throw staleTaskScope();
     var form = new FormData();
     form.append('file', file);
@@ -733,11 +780,11 @@
     }
     var res, auth = requestAuth();
     try {
-      res = await fetch(apiUrl(path), {
+      res = await hubFetch(apiUrl(path), {
         method: 'POST', headers: authHeaders(false), body: form,
         signal: _abortSignal(60000)
       });
-    } catch (error) { mark(false); throw error; }
+    } catch (error) { markFromError(error); throw error; }
     mark(true);
     var txt = await res.text();
     if (requestScope && requestScope !== taskStorageKey('ops')) throw staleTaskScope();
@@ -760,7 +807,7 @@
     var restoration = restoreSavedHub(); if (restoration) await restoration;
     var o = Object.assign({ headers: authHeaders(true) }, opts || {});
     if (!o.signal) o.signal = _abortSignal(timeout || DEFAULT_TIMEOUT);
-    return fetch(apiUrl(path), o);
+    return hubFetch(apiUrl(path), o);
   }
 
   function lsCfg() { try { return JSON.parse(localStorage.getItem(LS_CFG) || '{}'); } catch (e) { return {}; } }
@@ -1314,7 +1361,7 @@
     },
     /* Let a team manager update a member's task status, including acceptance; propagate backend rejection details. */
     async setTeamTaskStatus(tid, status) {
-      var res = await fetch(apiUrl('/team/tasks/' + encodeURIComponent(tid) + '/status'),
+      var res = await hubFetch(apiUrl('/team/tasks/' + encodeURIComponent(tid) + '/status'),
         { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ status: status }) });
       var txt = await res.text();
       var data = parseJSON(txt);
@@ -1323,7 +1370,7 @@
     },
     /* Reassign a task to another team member's SoduWork; propagate backend rejection details. */
     async reassignTeamTask(tid, assigneeUserId) {
-      var res = await fetch(apiUrl('/team/tasks/' + encodeURIComponent(tid) + '/reassign'),
+      var res = await hubFetch(apiUrl('/team/tasks/' + encodeURIComponent(tid) + '/reassign'),
         { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ assigneeUserId: assigneeUserId }), signal: _abortSignal(DEFAULT_TIMEOUT) });
       var txt = await res.text();
       var data = parseJSON(txt);
@@ -1332,7 +1379,7 @@
     },
     /* Send a manager's reminder from the desktop pet; the recipient sees a bubble and attention animation. */
     async nudgeTeamTask(tid, note) {
-      var res = await fetch(apiUrl('/team/tasks/' + encodeURIComponent(tid) + '/nudge'),
+      var res = await hubFetch(apiUrl('/team/tasks/' + encodeURIComponent(tid) + '/nudge'),
         { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ note: note || '' }), signal: _abortSignal(DEFAULT_TIMEOUT) });
       var txt = await res.text(); var data = parseJSON(txt);
       if (!res.ok) { markFromError(new Error('HTTP ' + res.status)); throw new Error((data && data.detail) || ('HTTP ' + res.status)); }
@@ -1340,7 +1387,7 @@
     },
     /* Assign tasks using title, assigneeUserIds/assigneeUserId, priority, due, tags, and note; propagate backend error details. */
     async createTeamTask(body) {
-      var res = await fetch(apiUrl('/team/tasks'),
+      var res = await hubFetch(apiUrl('/team/tasks'),
         { method: 'POST', headers: authHeaders(true), body: JSON.stringify(body || {}), signal: _abortSignal(DEFAULT_TIMEOUT) });
       var txt = await res.text();
       var data = parseJSON(txt);
@@ -1403,7 +1450,7 @@
       return await jfetch('/tasks/' + encodeURIComponent(tid) + '/comments');
     },
     async addTaskComment(tid, body, mentions) {
-      var res = await fetch(apiUrl('/tasks/' + encodeURIComponent(tid) + '/comments'),
+      var res = await hubFetch(apiUrl('/tasks/' + encodeURIComponent(tid) + '/comments'),
         { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ body: body, mentions: mentions || [] }), signal: _abortSignal(DEFAULT_TIMEOUT) });
       var txt = await res.text(); var data = parseJSON(txt);
       if (!res.ok) { markFromError(new Error('HTTP ' + res.status)); throw new Error((data && data.detail) || ('HTTP ' + res.status)); }
@@ -1417,7 +1464,7 @@
       var timeoutMs = options?.kind === 'automation' ? 90000 : 130000;
       try {
         signal = _abortSignal(timeoutMs);
-        var res = await fetch(apiUrl('/tasks/parse'),
+        var res = await hubFetch(apiUrl('/tasks/parse'),
           { method: 'POST', headers: { ...authHeaders(true), Accept: 'application/json; keepalive=1' },
             /* Use the model selected for this request, or the personal default when empty. */
             body: JSON.stringify({ text: text || '', model: model || '', keepalive: true,
@@ -1461,7 +1508,7 @@
     },
     /* Claim a task for this SoduWork instance; HTTP 409 means another member already claimed it. */
     async claimInboxTask(tid) {
-      var res = await fetch(apiUrl('/team/inbox/' + encodeURIComponent(tid) + '/claim'),
+      var res = await hubFetch(apiUrl('/team/inbox/' + encodeURIComponent(tid) + '/claim'),
         { method: 'POST', headers: authHeaders(true), body: '{}', signal: _abortSignal(DEFAULT_TIMEOUT) });
       var txt = await res.text();
       var data = parseJSON(txt);
@@ -1474,7 +1521,7 @@
     },
     /* Let a manager assign an inbox task directly; 403 means unauthorized and 409 means already claimed. */
     async assignInboxTask(tid, userId) {
-      var res = await fetch(apiUrl('/team/inbox/' + encodeURIComponent(tid) + '/assign'),
+      var res = await hubFetch(apiUrl('/team/inbox/' + encodeURIComponent(tid) + '/assign'),
         { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ userId: userId }), signal: _abortSignal(DEFAULT_TIMEOUT) });
       var txt = await res.text();
       var data = parseJSON(txt);
@@ -1483,7 +1530,7 @@
     },
     /* Return an owned task to the team inbox; the backend rejects workflow tasks and non-owners. */
     async releaseTask(tid, note) {
-      var res = await fetch(apiUrl('/tasks/' + encodeURIComponent(tid) + '/release'),
+      var res = await hubFetch(apiUrl('/tasks/' + encodeURIComponent(tid) + '/release'),
         { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ note: note || '' }), signal: _abortSignal(DEFAULT_TIMEOUT) });
       var txt = await res.text();
       var data = parseJSON(txt);
@@ -2080,7 +2127,7 @@
     async uploadApprovalEvidence(requestId, file) {
       var fd = new FormData();
       fd.append('file', file);
-      var res = await fetch(apiUrl('/approvals/' + encodeURIComponent(requestId) + '/evidence'),
+      var res = await hubFetch(apiUrl('/approvals/' + encodeURIComponent(requestId) + '/evidence'),
         { method: 'POST', headers: authHeaders(false), body: fd, signal: _abortSignal(30000) });
       if (!res.ok) {
         var detail = '';
@@ -2808,7 +2855,7 @@
       for (var i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i);
       var form = new FormData(); form.append('manifest', JSON.stringify(payload.manifest));
       form.append('file', new Blob([bytes], { type: payload.contentType }), payload.filename);
-      var res = await fetch(apiUrl('/deliveries'), { method: 'POST', headers: authHeaders(false), body: form, signal: _abortSignal(120000) });
+      var res = await hubFetch(apiUrl('/deliveries'), { method: 'POST', headers: authHeaders(false), body: form, signal: _abortSignal(120000) });
       assertLibraryScope(requestScope);
       var text = await res.text(); assertLibraryScope(requestScope);
       if (!res.ok) { var error = httpError(res, text); handleAuthError(error, auth); throw error; }
@@ -2834,7 +2881,7 @@
     },
     async readDeliveryFile(id, path) {
       var requestScope = taskStorageKey('ops');
-      var res = await fetch(apiUrl('/deliveries/' + encodeURIComponent(id) + '/files/' + String(path).split('/').map(encodeURIComponent).join('/')), {
+      var res = await hubFetch(apiUrl('/deliveries/' + encodeURIComponent(id) + '/files/' + String(path).split('/').map(encodeURIComponent).join('/')), {
         headers: authHeaders(false), signal: _abortSignal(120000), redirect: 'error'
       });
       assertLibraryScope(requestScope);
@@ -2932,7 +2979,7 @@
       if (meta.conversationTitle) form.append('conversationTitle', String(meta.conversationTitle));
       if (meta.rejectDuplicateName === true) form.append('rejectDuplicateName', 'true');
       try {
-        var res = await fetch(apiUrl('/library/items/upload'), {
+        var res = await hubFetch(apiUrl('/library/items/upload'), {
           method: 'POST', headers: authHeaders(false), body: form, signal: _abortSignal(120000)
         });
         assertLibraryScope(requestScope);
@@ -2951,7 +2998,7 @@
       const timer = setTimeout(abort, 30000);
       let reader;
       try {
-        const res = await fetch(apiUrl('/library/items/' + encodeURIComponent(id) + '/thumbnail'), {
+        const res = await hubFetch(apiUrl('/library/items/' + encodeURIComponent(id) + '/thumbnail'), {
           headers: authHeaders(false), signal: controller.signal, cache: 'no-store'
         });
         assertLibraryScope(requestScope);
@@ -2978,7 +3025,7 @@
     async readLibraryBinary(id) {
       var requestScope = taskStorageKey('ops'), auth = requestAuth();
       try {
-        var res = await fetch(apiUrl('/library/items/' + encodeURIComponent(id) + '/download'), {
+        var res = await hubFetch(apiUrl('/library/items/' + encodeURIComponent(id) + '/download'), {
           method: 'GET', headers: authHeaders(false), signal: _abortSignal(120000)
         });
         if (requestScope !== taskStorageKey('ops')) {
@@ -3031,7 +3078,7 @@
           });
           mark(true); return preview;
         }
-        var res = await fetch(apiUrl(route), {
+        var res = await hubFetch(apiUrl(route), {
           method: 'GET', headers: authHeaders(false), signal: _abortSignal(120000), redirect: 'error', cache: 'no-store'
         });
         if (requestScope !== taskStorageKey('ops')) {
@@ -3168,7 +3215,7 @@
       var requestScope = taskStorageKey('ops'), auth = requestAuth();
       try {
         var memberBlob = member?.path ? await (member.archive === true ? this.readLibraryArchiveFile(id, member.path) : this.readDeliveryFile(id, member.path)) : null;
-        var res = memberBlob ? new Response(memberBlob) : await fetch(apiUrl('/library/items/' + encodeURIComponent(id) + '/download'), {
+        var res = memberBlob ? new Response(memberBlob) : await hubFetch(apiUrl('/library/items/' + encodeURIComponent(id) + '/download'), {
           method: 'GET', headers: authHeaders(false), signal: _abortSignal(120000)
         });
         if (requestScope !== taskStorageKey('ops')) {
@@ -3193,6 +3240,8 @@
      * user-supplied name, otherwise system username and hostname.
      */
     async registerClient(options) {
+      if (!options?.recheckAuth && ['pending', 'quota'].includes(_deviceAuthState)) return { ok: true, stored: true,
+        authState: _deviceAuthState, activationRequired: true, clientId: device() };
       var startedAt = options && options.startedAt != null ? options.startedAt : Date.now();
       var restoration = restoreSavedHub(); if (restoration) await restoration;
       var registration = registrationContext(startedAt);
@@ -3226,6 +3275,7 @@
           var secure = await registration.step(function () { return window.soduWorkAPI.deviceAuthBootstrap({
             hub: base(), clientId: device(), legacySecret: secret(),
             staleSession: options && options.staleSession || '',
+            recheckAuth: options?.recheckAuth === true,
             name: body.name, platform: body.platform, version: body.version,
             workRoot: body.workRoot || ''
           }); });
@@ -3283,6 +3333,7 @@
         return { ok: false, error: '\u5f53\u524d\u5ba2\u6237\u7aef\u7248\u672c\u4e0d\u652f\u6301\u5b89\u5168\u767b\u5f55' };
       }
       invalidateRegistrations();
+      rememberSession({ activationRequired: true });
       var loginEpoch = _registrationEpoch, loginHub = base();
       function checkLogin() { if (loginEpoch !== _registrationEpoch || loginHub !== base()) throw staleTaskScope(); }
       var version = '1.2.0', sysInfo = null, root = '';
@@ -3321,7 +3372,7 @@
         return { ok: false, error: '请更新客户端后使用邮箱账号功能' };
       var signsIn = ['password', 'emailCode', 'register'].includes(action);
       var changesIdentity = signsIn || action === 'resetPassword';
-      if (changesIdentity) invalidateRegistrations();
+      if (changesIdentity) { invalidateRegistrations(); rememberSession({ activationRequired: true }); }
       var epoch = _registrationEpoch, hub = base();
       var version = '', info = null, root = '';
       if (signsIn) {
@@ -3381,7 +3432,7 @@
       var epoch = _registrationEpoch, hub = base();
       await SoduWorkAPI.clientAuthMe();
       if (epoch !== _registrationEpoch || hub !== base()) throw staleTaskScope();
-      var response = await fetch(apiUrl('/client-auth/me/exports/' + encodeURIComponent(String(id)) + '/download'),
+      var response = await hubFetch(apiUrl('/client-auth/me/exports/' + encodeURIComponent(String(id)) + '/download'),
         { headers: authHeaders(true), signal: _abortSignal(DEFAULT_TIMEOUT) });
       if (!response.ok) throw httpError(response, await response.text());
       var blob = await response.blob();
@@ -3404,6 +3455,7 @@
         return { ok: false, error: '\u5f53\u524d\u5ba2\u6237\u7aef\u7248\u672c\u4e0d\u652f\u6301\u9000\u51fa' };
       }
       invalidateRegistrations();
+      rememberSession({ activationRequired: true });
       var logoutEpoch = _registrationEpoch, logoutHub = base();
       var result = await window.soduWorkAPI.deviceAuthLogout({ hub: logoutHub, clientId: device() });
       if (logoutEpoch !== _registrationEpoch || logoutHub !== base()) throw staleTaskScope();
@@ -3459,7 +3511,7 @@
 
     async clientAuthPolicy() {
       var restoration = restoreSavedHub(); if (restoration) await restoration;
-      var res = await fetch(apiUrl('/client-auth/policy'), { signal: _abortSignal(DEFAULT_TIMEOUT) });
+      var res = await hubFetch(apiUrl('/client-auth/policy'), { signal: _abortSignal(DEFAULT_TIMEOUT) });
       var text = await res.text();
       if (!res.ok) throw httpError(res, text);
       return text ? parseJSON(text) : {};
@@ -3467,7 +3519,7 @@
 
     clientAuthSnapshot() {
       return { state: _deviceAuthState, user: _clientUser, quota: _clientQuota,
-        clientId: device(), online: _online };
+        clientId: device(), online: _online, requestsAllowed: requestsAllowed() };
     },
     rememberedLoginAccount() {
       return loginAccount(readLocal(loginAccountKey()));
@@ -3559,12 +3611,12 @@
         return base().replace(/^http/, 'ws') + '/api/v1/ws?device=' + encodeURIComponent(device());
       }
       function open() {
-        if (!currentSource()) return;
+        if (!currentSource() || !requestsAllowed()) return;
         /*
          * Wait locally for registration and a valid session before connecting; an unauthenticated
          * first frame would produce 4401.
          */
-        if (!_deviceSession && !secret()) { timer = setTimeout(open, 800); return; }
+        if (!_deviceSession && !secret()) return;
         try {
           ws = new WebSocket(wsUrl());
           ws.onopen = function () {
@@ -3585,7 +3637,7 @@
         } catch (e) { retry(); }
       }
       /* Reconnect with exponential backoff from three seconds, capped at thirty seconds. */
-      function retry() { if (closed) return; clearTimeout(timer); timer = setTimeout(open, delay); delay = Math.min(delay * 2, 30000); }
+      function retry() { if (closed || !requestsAllowed()) return; clearTimeout(timer); timer = setTimeout(open, delay); delay = Math.min(delay * 2, 30000); }
       open();
       return function () { closed = true; clearTimeout(timer); try { ws && ws.close(); } catch (e) {} };
     }
