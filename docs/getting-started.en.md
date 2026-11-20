@@ -201,6 +201,8 @@ When `HTTP_PROXY` or `HTTPS_PROXY` is present, the launcher automatically enable
 
 #### Windows PortableGit mirrors and offline archives
 
+A slow first download can take more than five minutes. Each additional 64 KiB of the expected archive renews the five-minute timeout. If the server sends no data for 60 seconds, the transfer times out. You can check the byte count in `startup.log`.
+
 PortableGit downloads from the official Git for Windows release by default. To use a mirror, set `SODUWORK_PORTABLE_GIT_MIRROR` to its root URL. It must serve `<mirrorRoot>/v2.55.0.windows.4/<original-official-filename>`. The x64 filename is `PortableGit-2.55.0.4-64-bit.7z.exe`; arm64 uses `PortableGit-2.55.0.4-arm64.7z.exe`. Confirm that your mirror provides the pinned version and target architecture; no default PortableGit mirror is configured.
 
 Replace the example URL below with a mirror you can access:

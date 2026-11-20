@@ -202,6 +202,8 @@ sh start.sh --desktop
 
 #### Windows PortableGit 镜像与离线归档
 
+首次下载较慢时可以超过五分钟。安装包每新增 64 KiB，启动器就会重新计算五分钟时限。如果服务器连续 60 秒没有发送数据，下载会超时。可在 `startup.log` 查看已接收的字节数。
+
 PortableGit 默认从官方 Git for Windows 发布地址下载。需要镜像时，设置 `SODUWORK_PORTABLE_GIT_MIRROR` 为镜像根地址，文件按 `<mirrorRoot>/v2.55.0.windows.4/<官方原文件名>` 提供。x64 文件名为 `PortableGit-2.55.0.4-64-bit.7z.exe`，arm64 为 `PortableGit-2.55.0.4-arm64.7z.exe`。请先确认镜像提供固定版本和当前架构的文件；项目不预设 PortableGit 镜像。
 
 将下面的示例地址替换成自己可用的镜像地址：
