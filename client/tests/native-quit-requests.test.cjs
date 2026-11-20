@@ -41,7 +41,7 @@ async function setup(t,{ready=true,platform='darwin',quitInitialized=true}={}){
   const list=()=>handlers.get('file-open-list')({sender,senderFrame:mainFrame});
   let prevented=0;
   const open=file=>app.emit('open-file',{preventDefault:()=>prevented++},file);
-  return {root,app,get state(){return production.state||context._quitRelaunch;},broker:production.broker,calls,relaunches,list,open,
+  return {root,app,hostWindow,handlers,context,get state(){return production.state||context._quitRelaunch;},broker:production.broker,calls,relaunches,list,open,
     prevented:()=>prevented,ready:()=>{
       if(!production.state&&!context._quitRelaunch)context._quitRelaunch=createState();
       activation._quitRelaunch=production.state||context._quitRelaunch;
@@ -56,6 +56,79 @@ test('a cold native file request remains queued until the desktop is ready',asyn
   assert.deepEqual((await h.list()).items.map(row=>row.name),['cold.txt']);
   h.ready(); h.broker.signal(); assert.deepEqual(h.calls,['workspace']);
   h.app.emit('will-quit'); assert.deepEqual(h.relaunches,[]);
+});
+
+function quitMenu(h) {
+  let respond, notifyShown, attempts=0;
+  const shown=new Promise(resolve=>{notifyShown=resolve;});
+  h.app.getAppPath=()=>path.resolve(__dirname,'..');
+  const sender=h.hostWindow.webContents;
+  sender.mainFrame.url=sender.getURL();
+  h.app.quit=()=>attempts++;
+  const source=main.match(/function _quitSoduWork\(reason\) \{[\s\S]*?\n\}/)?.[0];
+  assert.ok(source,'production quit entry remains available');
+  const context={app:h.app,_quitRelaunch:h.state,tray:null,
+    BrowserWindow:{getAllWindows:()=>[]},_lifecycleDiagnostics:{setExitReason(){}}};
+  const quit=vm.runInNewContext(source+'\n_quitSoduWork',context);
+  require('../main/app-menu-info.cjs').install({app:h.app,
+    ipcMain:{handle:(name,handler)=>h.handlers.set(name,handler)},
+    BrowserWindow:{fromWebContents:contents=>contents===sender?h.hostWindow:null},
+    dialog:{showMessageBox:()=>new Promise(resolve=>{respond=resolve;notifyShown();})},quit});
+  return {request:()=>h.handlers.get('app-request-quit')({sender,senderFrame:sender.mainFrame}),
+    respond:value=>respond({response:value}),attempts:()=>attempts,
+    ready:()=>shown};
+}
+
+test('declining the production exit confirmation keeps native files and macOS activation in the running desktop',async t=>{
+  const h=await setup(t),menu=quitMenu(h),a=path.join(h.root,'while-confirming.txt'),b=path.join(h.root,'after-cancel.txt');
+  const pending=menu.request();await menu.ready();
+  h.open(a);
+  assert.equal(h.state.quitting,false);
+  assert.equal(menu.attempts(),0);
+  menu.respond(0);
+  assert.deepEqual(await pending,{ok:true,canceled:true});
+  h.open(b);h.app.emit('activate');
+  assert.equal(h.state.quitting,false);
+  assert.equal(menu.attempts(),0);
+  assert.deepEqual((await h.list()).items.map(row=>row.name),['while-confirming.txt','after-cancel.txt']);
+  assert.deepEqual(h.calls,['workspace','workspace','overlay','workspace']);
+  h.app.emit('will-quit');assert.deepEqual(h.relaunches,[]);
+});
+
+test('confirming the production exit routes later native files and activation into one deferred fresh process',async t=>{
+  const h=await setup(t),menu=quitMenu(h),file=path.join(h.root,'after-confirmation.txt');
+  const pending=menu.request();await menu.ready();
+  menu.respond(1);
+  assert.deepEqual(await pending,{ok:true,canceled:false});
+  assert.equal(menu.attempts(),1);
+  assert.equal(h.state.quitting,true);
+  h.app.emit('before-quit');h.open(file);h.app.emit('activate');h.open(file);
+  h.app.emit('before-quit');
+  assert.deepEqual(h.calls,[]);
+  assert.deepEqual((await h.list()).items,[]);
+  assert.deepEqual(h.relaunches,[]);
+  h.app.emit('will-quit');h.app.emit('will-quit');
+  assert.equal(h.relaunches.length,1);
+  assert.deepEqual(fileOpen.commandFiles(['electron',...h.relaunches[0].args],h.root,false),[file]);
+});
+
+test('mixed native, command-line and activation requests retain twenty unique files without replaying the startup file',async t=>{
+  const h=await setup(t),paths=Array.from({length:25},(_,index)=>path.join(h.root,'mixed-'+index+'.txt'));
+  const start=main.indexOf("  app.on('second-instance'"),end=main.indexOf('  _fileOpen.fromCommand',start);
+  assert.ok(start>=0&&end>start,'production second-instance handler remains available');
+  vm.runInNewContext(main.slice(start,end),{app:h.app,_quitRelaunch:h.state,_fileOpenModule:fileOpen,_fileOpen:h.broker,
+    _linuxStartup:{focusRecovery:()=>false},openDeskWindow:()=>h.calls.push('workspace'),console});
+  h.state.markQuitting();
+  for(const file of paths.slice(0,10))h.open(file);
+  h.app.emit('second-instance',{},['electron','--unused-launch-switch'],h.root,
+    {soduworkOpenFiles:{version:1,files:paths.slice(5)}});
+  h.app.emit('activate');h.open(paths[0]);h.open(paths[24]);
+  assert.deepEqual(h.calls,[]);
+  assert.deepEqual((await h.list()).items,[]);
+  h.app.emit('will-quit');
+  assert.equal(h.relaunches.length,1);
+  assert.deepEqual(fileOpen.commandFiles(['electron',...h.relaunches[0].args],h.root,false),paths.slice(0,20));
+  assert.ok(!h.relaunches[0].args.includes('--unused-launch-switch'));
 });
 
 test('a native file request while running still queues normally and never schedules a restart',async t=>{
