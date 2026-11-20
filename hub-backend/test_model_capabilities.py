@@ -253,6 +253,19 @@ class CapabilityTests(IsolatedDatabase):
             self.assertEqual(events[0].target_id, "p:model")
             self.assertEqual(events[0].detail, {"checks": {"connection": "passed"}})
 
+    async def test_single_check_reports_its_own_success_and_retains_other_evidence(self):
+        self.mode = "wrong-image"
+        first = (await self.check(checks=["connection", "imageInput"])).json()
+        self.assertFalse(first["ok"])
+        self.assertEqual(first["checks"]["imageInput"]["status"], "inconclusive")
+
+        response = await self.check(checks=["connection"])
+        self.assertEqual(response.status_code, 200, response.text)
+        result = response.json()
+        self.assertEqual(result["checks"]["connection"]["status"], "passed")
+        self.assertEqual(result["checks"]["imageInput"], first["checks"]["imageInput"])
+        self.assertTrue(result["ok"])
+
     async def test_admin_recheck_repairs_and_persists_cached_named_tool_choice(self):
         first = await self.check("admin", ["connection"])
         self.assertEqual(first.status_code, 200, first.text)

@@ -13,7 +13,7 @@ import zlib
 from . import model_transport
 from .model_capabilities import compatibility
 from .model_capability_wire import (
-    ProbeIssue, StreamEvidence, failure, meaningful, optional_parameter, parse_json, response_choice,
+    TRUNCATED_REASONS, ProbeIssue, StreamEvidence, failure, meaningful, optional_parameter, parse_json, response_choice,
 )
 from .model_errors import UpstreamError
 from .runtime_defaults import DEFAULT_OUTPUT
@@ -58,6 +58,11 @@ def _settings(conf: dict) -> dict:
     return {**config, **{key: value for key, value in conf.items() if key != "config"}}
 
 
+def _output_limit(settings: dict) -> int:
+    return max(1, min(int(settings.get("maxOutputTokens") or DEFAULT_OUTPUT),
+                      int(settings.get("contextWindow") or 128000)))
+
+
 def _thinking(conf: dict) -> dict:
     from .model_thinking import thinking_options
     settings = _settings(conf)
@@ -99,9 +104,8 @@ def _payload(conf: dict, check: str) -> tuple[dict, str]:
     compat = compatibility(conf.get("compatibility"))
     output = compat.get("maxTokensField") or ("max_completion_tokens" if settings.get("reasoning") is True
         and settings.get("thinkingFormat") == "openai" else "max_tokens")
-    limit = settings.get("maxOutputTokens") or DEFAULT_OUTPUT
     headroom = 2048 if settings.get("thinkingMode") == "always" or settings.get("thinkingAlwaysOn") else 512
-    budget = min(headroom, max(1, int(limit)), max(1, int(settings.get("contextWindow") or 128000)))
+    budget = min(headroom, _output_limit(settings))
     stream = check in ("streaming", "toolCalling")
     body = {"model": conf["model"], output: budget, "stream": stream}
     body.update(_thinking(conf))
@@ -188,7 +192,8 @@ class _Budget:
         return True
 
 
-async def _exchange(conf, body, budget, working, *, stream=False, tools=False):
+async def _exchange(conf, body, budget, working, *, stream=False, tools=False,
+                    retry_reasoning_budget=False):
     while True:
         response = None
         try:
@@ -207,7 +212,7 @@ async def _exchange(conf, body, budget, working, *, stream=False, tools=False):
                             raise ProbeIssue("response_limit")
                         raw.extend(chunk)
                     data = parse_json(raw)
-                    response_choice(data)
+                    choice = response_choice(data, allow_truncated=retry_reasoning_budget)
                 # A transport may translate cancellation/socket closure into
                 # EOF. Terminal text does not make an expired request succeed.
                 if deadline.expired() or time.monotonic() >= request_deadline:
@@ -217,6 +222,11 @@ async def _exchange(conf, body, budget, working, *, stream=False, tools=False):
                 outcome = getattr(response, "outcome", "completed")
                 if outcome != "completed":
                     raise ProbeIssue("timeout" if outcome == "timeout" else "transport_interrupted")
+                if not stream and choice.get("finish_reason") in TRUNCATED_REASONS:
+                    if budget.calls >= MAX_CALLS or not _raise_reasoning_budget(conf, body, choice["message"]):
+                        raise ProbeIssue("response_truncated")
+                    retry_reasoning_budget = False
+                    continue
                 working["maxTokensField"] = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
                 if stream:
                     working["streamOptions"] = "stream_options" in body
@@ -229,9 +239,23 @@ async def _exchange(conf, body, budget, working, *, stream=False, tools=False):
                 await response.aclose()
 
 
+def _raise_reasoning_budget(conf: dict, body: dict, message: dict) -> bool:
+    """Allow room for a final answer after a truncated reasoning trace."""
+    if not any(meaningful(message.get(key)) for key in ("reasoning_content", "reasoning", "thinking")):
+        return False
+    field = "max_completion_tokens" if "max_completion_tokens" in body else "max_tokens"
+    current = body[field]
+    larger = min(_output_limit(_settings(conf)), max(current * 4, 4096))
+    if larger <= current:
+        return False
+    body[field] = larger
+    return True
+
+
 async def _check(conf, check, budget, working, phase):
     body, expected = _payload({**conf, "compatibility": {**working, **budget.candidate}}, check)
-    data = await _exchange(conf, body, budget, working, stream=body["stream"], tools=check == "toolCalling")
+    data = await _exchange(conf, body, budget, working, stream=body["stream"], tools=check == "toolCalling",
+                           retry_reasoning_budget=check in ("connection", "imageInput"))
     if (check == "toolCalling" and isinstance(body.get("tool_choice"), dict)
             and data["choices"][0].get("finish_reason") == "stop"
             and meaningful(data["choices"][0]["message"].get("content"))
