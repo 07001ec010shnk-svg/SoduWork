@@ -80,7 +80,7 @@ class RemoteRunner(runner_hub._Runner):
         return bus.healthy and self.node in bus.peers and super().alive()
 
     async def call(self, op, data, timeout=60, *, _rerouted=False):
-        from .session_read_budget import remaining
+        from .session_read_budget import deadline_active, remaining
         try:
             result = await bus.request(self.node, "runner.call", {
                 "runner": self.id, "token": self.cluster_token,
@@ -108,6 +108,14 @@ class RemoteRunner(runner_hub._Runner):
                         current.term_subs.pop(task, None)
                     return retried
             return result
+        except TimeoutError:
+            # A bounded session read must preserve timeout semantics so its
+            # middleware can return a retryable 504 instead of a 503.
+            if deadline_active():
+                raise
+            return {"ok": False, "code": "CLUSTER_RUNNER_UNAVAILABLE",
+                    "error": "执行机连接正在恢复，请稍后重试",
+                    "uncertain": op in {"job.dispatch", "job.comment"}}
         except Exception:
             return {"ok": False, "code": "CLUSTER_RUNNER_UNAVAILABLE",
                     "error": "执行机连接正在恢复，请稍后重试",

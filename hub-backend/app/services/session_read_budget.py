@@ -23,6 +23,11 @@ def remaining(default):
     return min(default, left)
 
 
+def deadline_active() -> bool:
+    """Return whether the current task belongs to a bounded session read."""
+    return _deadline.get() is not None
+
+
 class SessionReadBudgetMiddleware:
     def __init__(self, app):
         self.app = app
