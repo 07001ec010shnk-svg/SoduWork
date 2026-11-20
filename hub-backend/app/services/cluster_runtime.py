@@ -198,6 +198,8 @@ async def before_refresh():
     seen = set()
     for runner, owns in zip(runners, renewed):
         if not runner.alive() or not owns:
+            runner.close_reason = "heartbeat_expired" if not runner.alive() else "owner_changed"
+            runner_hub.log_connection(runner, "close_requested", close_code=1012)
             runner_hub.drop(runner.id, runner.ws)
             await runner_hub._close_quietly(runner.ws, 1012)
             continue
