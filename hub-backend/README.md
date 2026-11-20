@@ -149,6 +149,42 @@ limit persists, the turn is reported as incomplete with retained progress instea
 of a protocol error. Successful continuation clears the earlier truncation;
 protocol and host-cleanup failures retain priority.
 
+For managed model routes, SoduWork explicitly enables and budgets DeepSeek's
+native automatic compaction. It runs between tool steps within the current turn.
+Its threshold is the smaller of 80% of the
+model context window and the space left after reserving the current output and
+summary budgets. Summary output stays within the model's configured output cap;
+it no longer inherits the native 65,536-token reservation. Ordinary output caps
+are preserved; a cap that would consume almost the whole window is reduced to
+leave input space. Native compaction keeps the existing session, tool results,
+permissions and cancellation ownership, without requiring a new user message.
+This does not turn a provider's individual output limit into a context overflow
+or remove the bounded output recovery described above.
+
+Run `python3 -m unittest test_dsh_gateway test_context_recovery
+test_acp_error_messages test_local_turn_outcome` for model budgets and recovery
+regressions. Configured or inferred context sizes still need to match the actual
+provider; a window too small for the native instructions and tools cannot be made
+usable by compression alone.
+
+For a real native-process check, run `python3 e2e_dsh_auto_compaction.py` with
+the same explicit `--adapter-entry`, `--runtime-root`, `--node` and `--output`
+paths as the lifecycle check above. A synthetic loopback provider drives a 64k
+window through repeated compression in one user prompt. The check compares the
+old provider-only bundle, verifies durable checkpoints and completed tools, and
+requires lower native usage receipts after compaction. This is not a production
+model or desktop UI acceptance test.
+
+Managed Kimi and Qwen also receive the selected model's context window instead
+of inheriting a larger native default. Kimi receives an explicitly configured
+output cap; Qwen retains the operator's sampling and output parameters. Both use
+their own between-step compression. Managed Codex Harness receives the model
+window and an 80% automatic-compaction threshold. Personal-account Codex keeps
+its native model settings, while OpenCode already receives context/output limits
+and retains native automatic compaction. Run `python3 -m unittest
+test_kimi_runtime test_qwen_runtime test_acp_permission_inputs
+test_codex_account_acp` for these configuration and isolation boundaries.
+
 ## Other harness terminal outcomes
 
 Managed installs and updates use reviewed versions: DeepSeek ACP 0.4.41,
