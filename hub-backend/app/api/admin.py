@@ -1303,6 +1303,7 @@ async def discover_model_provider(
         raise HTTPException(status_code=404, detail="这个模型服务不存在")
     if not p.enabled or not p.base_url or not p.api_key:
         return {"ok": False, "models": [], "known": [],
+                "code": "model.discovery.provider-incomplete",
                 "detail": "服务需要先启用，并填写地址与密钥后才能读取模型列表"}
     result = await model_discovery.discover(p.base_url, p.api_key, p.kind)
     existing = (await session.execute(
