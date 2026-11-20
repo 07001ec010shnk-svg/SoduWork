@@ -433,6 +433,11 @@ async def delete_project(pid: str, user: User = Depends(require_perm("task.dispa
     ts = (await session.execute(select(Task).where(Task.project_id == pid))).scalars().all()
     for t in ts:
         t.project_id = None
+    # Clear project reference on sub-repos to avoid dangling links.
+    from ..models import Repo
+    repos = (await session.execute(select(Repo).where(Repo.project_id == pid))).scalars().all()
+    for r in repos:
+        r.project_id = None
     name = p.name
     await session.delete(p); await session.commit()
     await audit.log(session, user, "project.delete", "project", pid, name, {})
