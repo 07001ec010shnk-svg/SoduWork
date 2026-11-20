@@ -49,7 +49,7 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
     for (const timer of _pendingTimeouts) clearTimeout(timer);
     _pendingTimeouts.clear();
     if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
-    if (_readyTimer) { clearTimeout(_readyTimer); _readyTimer = null; }
+    clearReadyWatchdog();
     if (_unresponsiveTimer) { clearTimeout(_unresponsiveTimer); _unresponsiveTimer = null; }
     if (_overlayInputGuardTimer) { clearInterval(_overlayInputGuardTimer); _overlayInputGuardTimer = null; }
   }
@@ -494,17 +494,17 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
     }, HEARTBEAT_CHECK_INTERVAL);
   }
 
-  /*
-   * Require renderer-ready within the startup timeout; otherwise enable emergency
-   * passthrough.
-   */
-  function startReadyWatchdog() {
+  function clearReadyWatchdog() {
     if (_readyTimer) clearTimeout(_readyTimer);
-    _rendererReady = false;
+    _readyTimer = null;
+  }
+
+  // Give each startup signal a bounded wait. The overlay stays parked until both arrive.
+  function startReadyWatchdog(reason) {
+    clearReadyWatchdog();
     _readyTimer = setTimeout(() => {
-      if (!_rendererReady) {
-        emergencyPassthrough('启动就绪超时（渲染进程可能启动失败）');
-      }
+      _readyTimer = null;
+      emergencyPassthrough(reason);
     }, READY_TIMEOUT_MS);
   }
 
@@ -646,7 +646,8 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
          * Arm the readiness watchdog when navigation starts so a fast renderer-ready event cannot
          * be reset afterward.
          */
-        startReadyWatchdog();
+        _rendererReady = false;
+        startReadyWatchdog('启动就绪超时（渲染进程可能启动失败）');
         parkOverlayShape(navigationStarted);
         _overlayAwaitingShape = true;
         _initialRevealPending = true;
@@ -871,6 +872,7 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
     if (revision !== _overlayShapeRevision) return;
     if (applyOverlayShape(rects, true)) {
       _overlayShapeReported = true;
+      if (_rendererReady) clearReadyWatchdog();
       if (revision === _overlayShapeRevision) _overlayAwaitingShape = false;
       _syncOverlayInputNow();
       revealInitialOverlay();
@@ -906,23 +908,15 @@ function create({ app, BrowserWindow, ipcMain, screen, globalShortcut, Notificat
     resetRendererHealth();
   });
 
-  /*
-   * Cancel startup timeout after renderer-ready.
-   */
   onIpc('renderer-ready', (event) => {
     if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return;
+    if (_rendererReady || _emergencyMode) return;
     _rendererReady = true;
-    revealInitialOverlay();
+    if (_overlayShapeReported) clearReadyWatchdog();
+    else startReadyWatchdog('桌面组件区域未完成初始化');
     resetRendererHealth();
     revealInitialOverlay();
-    if (_readyTimer) { clearTimeout(_readyTimer); _readyTimer = null; }
     console.log('[SAFETY] 渲染进程已就绪');
-    /* Keep the overlay parked when no interactive geometry has been reported. */
-    const navigation = _navigationId;
-    later(() => {
-      if (navigation !== _navigationId || _overlayShapeReported) return;
-      emergencyPassthrough('桌面组件区域未完成初始化');
-    }, 600);
   });
 
   /* Read emergency-mode status. */
