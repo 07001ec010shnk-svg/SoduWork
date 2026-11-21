@@ -43,6 +43,8 @@ AUDIT_EXEMPT = {
     ("POST", "/api/v1/admin/mcp-servers/probe"): "non-persistent probe",
     ("POST", "/api/v1/admin/plugins/preflight"): "preflight only",
     ("POST", "/api/v1/admin/plugins/versions/{version_id}/simulate"): "simulation only",
+    ("POST", "/api/v1/admin/quotas/members/{uid}/preview"): "preview only",
+    ("POST", "/api/v1/admin/quotas/plans/preview"): "preview only",
     ("POST", "/api/v1/admin/runners/{runner_id}/probe"): "non-persistent probe",
     ("POST", "/api/v1/admin/secret-references/{ref_id}/probe"): "non-persistent probe",
 }

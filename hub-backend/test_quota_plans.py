@@ -129,6 +129,27 @@ class QuotaPlanTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((partial["remaining"], partial["pausedMembers"], partial["modelLimitedMembers"]),
                          (None, 0, 1))
 
+    async def test_preview_does_not_persist_settings_or_audit_events(self):
+        catalog = await self.configure(200)
+        await self.assign()
+        plan = {**catalog["plans"][1], "totalLimit": 100}
+        previews = (
+            ("plans/preview", {"revision": catalog["revision"], "plan": plan}),
+            ("members/owner/preview", {"revision": 1, "mode": "custom", "custom": {"totalLimit": 50}}),
+        )
+
+        async def persisted_state():
+            async with self.sessions() as session:
+                settings = dict((await session.execute(select(models.AppSetting.key, models.AppSetting.value))).all())
+                audit_count = await session.scalar(select(func.count()).select_from(models.AuditLog))
+                return settings, audit_count
+
+        before = await persisted_state()
+        for path, body in previews:
+            response = await self.http.post("/api/v1/admin/quotas/" + path, headers=self.headers, json=body)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(await persisted_state(), before)
+
     async def test_preview_uses_original_trial_grant_and_target_usage_window(self):
         async with self.sessions() as session:
             await qp.register_trial(session, "owner")
