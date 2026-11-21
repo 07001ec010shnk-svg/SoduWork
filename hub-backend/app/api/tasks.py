@@ -312,9 +312,11 @@ async def get_daily_report(
     from datetime import date as _date
     day = (date or "").strip() or dr.today_str()
     try:
-        _date.fromisoformat(day)
+        parsed_date = _date.fromisoformat(day)
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="非法日期，请使用 YYYY-MM-DD 格式")
+    if parsed_date > _date.today():
+        raise HTTPException(status_code=400, detail="日报只能查询今天或之前的日期")
     from sqlalchemy import select as _sel
     from ..models import DailyReport
     rep = (await session.execute(
@@ -340,9 +342,11 @@ async def gen_daily_report(
     from datetime import date as _date
     day = (body.get("date") or "").strip() or dr.today_str()
     try:
-        _date.fromisoformat(day)
+        parsed_date = _date.fromisoformat(day)
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="非法日期，请使用 YYYY-MM-DD 格式")
+    if parsed_date > _date.today():
+        raise HTTPException(status_code=400, detail="不允许为未来日期生成日报")
     rep = await dr.generate_for(session, u, day, notify=False)
     if rep is None:
         raise HTTPException(status_code=400, detail="今天还没有进展记录，先在需求里写一条再生成")
@@ -1437,8 +1441,6 @@ async def ai_session_task(
     limit: int = Query(default=400, ge=1, le=1000),
 ):
     """Behavior and constraints for this operation."""
-    import asyncio as _aio
-
     from ..services import ai_exec, execution_sessions
     if not isinstance(limit, int):
         limit = 400
@@ -1477,8 +1479,16 @@ async def ai_session_task(
             return {"ok": False, "items": [], "error": "这条需求还没交给 AI"}
         d = ev_row.detail or {}
         ref = d.get("ref") or d.get("issueId", "")
+        if not d.get("runnerId"):
+            from ..automation_models import ExecutionSession
+            from sqlalchemy import select
+            owner = await session.scalar(select(ExecutionSession).where(
+                ExecutionSession.task_id == tid, ExecutionSession.ref == ref))
+            if owner and owner.runner_id:
+                d = {**d, "runnerId": owner.runner_id}
     ctx = await ai_exec.load(session)
-    live = await _aio.to_thread(ai_exec.session_sync, ctx, ref, int(since or 0))
+    live = await ai_exec.read_session(ctx, ref, int(since or 0),
+        runner_id=str(d.get("runnerId") or ""), limit=limit)
     if live.get("ok"):
         # New Runners push events; older Runners and backend-local execution use read-through persistence during upgrades.
         await execution_sessions.ingest_live_snapshot(session, t, ref, live, d)

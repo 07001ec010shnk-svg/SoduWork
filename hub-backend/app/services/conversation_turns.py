@@ -3,14 +3,10 @@
 This is not a second job scheduler. The task row lock prevents duplicate work,
 and the native conversation queue owns the order of sends.
 """
-import asyncio
 import hashlib
-import logging
 from fastapi import HTTPException
 from . import task_status, task_events
 from .task_access import publish_owner
-
-log = logging.getLogger("uvicorn.error")
 
 ACTIVE = {"queued", "running", "waiting"}
 SUBMISSION_MODES = {"manual", "auto"}
@@ -164,7 +160,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
 
     from sqlalchemy import select
     from ..models import Attachment, TaskEvent
-    from . import delivery_collections, delivery_manifest, storage
+    from . import delivery_manifest, storage
     from .ai_exec import EV_ARTIFACTS
 
     if not files:
@@ -214,13 +210,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
         except (TypeError, ValueError):
             pass
 
-    # Validate every supplied name before writing any object.  The old path
-    # normalizer removed ``..`` and empty segments, which made malformed input
-    # look valid until a later storage call (and allowed earlier files in a
-    # multi-file delivery to become orphaned when a later name failed).
-    for name, _data, _ctype in files:
-        delivery_collections.safe_path(str(name or "").replace("\\", "/"))
-
+    from . import delivery_manifest
     who = "agent:" + (provider or "conversation")
     got: list[str] = []
     valid: set[str] = set()
@@ -229,74 +219,8 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
     evidence: set[str] = set()
     ignored: set[str] = set()
     invalid: list[dict] = []
-    stored_objects: list[tuple[str, str]] = []
-
-    async def delete_stored_object(stored_key: str, stored_backend: str, *, phase: str):
-        try:
-            deleted = await asyncio.to_thread(storage.delete, stored_key, stored_backend)
-        except Exception as error:
-            log.warning("artifact compensation delete failed task=%s phase=%s key=%s backend=%s error=%s",
-                        task.id, phase, stored_key, stored_backend, type(error).__name__)
-            return
-        if deleted is False:
-            log.warning("artifact compensation delete reported failure task=%s phase=%s key=%s backend=%s",
-                        task.id, phase, stored_key, stored_backend)
-
-    async def compensate_delivery():
-        try:
-            await session.rollback()
-        except Exception as error:
-            log.warning("artifact compensation rollback failed task=%s error=%s",
-                        task.id, type(error).__name__)
-        persisted = None
-        if stored_objects:
-            try:
-                persisted = set((await session.scalars(select(Attachment.storage_key).where(
-                    Attachment.storage_key.in_([key for key, _backend in stored_objects])))).all())
-            except Exception as error:
-                log.warning("artifact compensation attachment lookup failed task=%s error=%s",
-                            task.id, type(error).__name__)
-        if persisted is not None:
-            for stored_key, stored_backend in stored_objects:
-                if stored_key not in persisted:
-                    await delete_stored_object(stored_key, stored_backend, phase="commit")
-
-    async def commit_delivery():
-        """Commit metadata and compensate objects when the commit is rejected.
-
-        A lost commit acknowledgement may still have persisted an Attachment,
-        so only objects absent from a post-rollback lookup are safe to delete.
-        """
-        try:
-            await session.commit()
-        except (Exception, asyncio.CancelledError):
-            # A cancellation during commit is another lost-ACK form. Complete
-            # compensation before propagating it so objects cannot be orphaned.
-            cleanup = asyncio.create_task(compensate_delivery())
-            try:
-                await asyncio.shield(cleanup)
-            except asyncio.CancelledError:
-                await cleanup
-            raise
-
-    async def cleanup_partial_delivery():
-        try:
-            await session.rollback()
-        except Exception as error:
-            log.warning("artifact compensation rollback failed task=%s phase=storage error=%s",
-                        task.id, type(error).__name__)
-        for stored_key, stored_backend in stored_objects:
-            await delete_stored_object(stored_key, stored_backend, phase="storage")
-
-    async def finish_storage_failure():
-        cleanup = asyncio.create_task(cleanup_partial_delivery())
-        try:
-            await asyncio.shield(cleanup)
-        except asyncio.CancelledError:
-            await cleanup
-
     for name, data, ctype in files:
-        fn = delivery_manifest.normalize_name(str(name or "").replace("\\", "/"))
+        fn = delivery_manifest.normalize_name(name)
         if not fn or fn in received:
             continue
         declared = (categories or {}).get(name)
@@ -333,33 +257,9 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
             ignored.add(fn)
             valid.add(fn)
         key = f"ai/{task.id}/{_uuid.uuid4().hex[:8]}-{fn}"
-        put_task = asyncio.create_task(asyncio.to_thread(storage.put, key, data, ctype))
-        try:
-            # Keep the worker alive until a cancelled thread finishes so a
-            # successful write is always added to the compensation list.
-            backend = await asyncio.shield(put_task)
-        except asyncio.CancelledError:
-            try:
-                backend = await put_task
-            except asyncio.CancelledError:
-                await finish_storage_failure()
-                raise
-            except Exception:
-                await finish_storage_failure()
-                raise
-            stored_objects.append((key, backend))
-            await finish_storage_failure()
-            raise
-        except Exception:
-            # Storage writes are outside the database transaction. Remove
-            # objects already created by this collection before propagating a
-            # later write failure, otherwise partial delivery leaves orphans.
-            await finish_storage_failure()
-            raise
-        stored_objects.append((key, backend))
         session.add(Attachment(
             task_id=task.id, filename=fn, content_type=ctype, size=len(data),
-            storage_key=key, backend=backend, uploaded_by=who,
+            storage_key=key, backend=storage.put(key, data, ctype), uploaded_by=who,
             role=role, source_ref=ref,
             evidence_meta={"provider": provider or "conversation",
                            "sha256": hashlib.sha256(data).hexdigest(),
@@ -390,7 +290,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
                             "files": sorted(got),
                             "reason": "轮次未完成，本轮产出仅留证，待轮次完成后再交付"},
                            actor=who)
-        await commit_delivery()
+        await session.commit()
         return {"ok": True, "files": got, "round": round_no,
                 "deferred": True, "invalid": invalid[-100:],
                 "submissionMode": submission_mode,
@@ -403,7 +303,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
             _delivery_issue(task, "invalid_delivery", reason)
             task_events.record(session, task.id, "artifact.delivery_rejected",
                                {"ref": ref, "identifier": turn_id, "files": sorted(got), "reason": reason}, actor=who)
-            await commit_delivery()
+            await session.commit()
             from . import task_access, tasks as tasks_svc
             await task_access.publish_task(session, task, "task.updated", await tasks_svc.task_to_api_live(session, task))
             return {"ok": True, "files": got, "round": round_no, "invalid": invalid[-100:],
@@ -422,7 +322,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
                            {"ref": ref, "identifier": turn_id, "round": round_no,
                             "files": sorted(got), "submissionMode": submission_mode},
                            actor=who)
-        await commit_delivery()
+        await session.commit()
         from . import task_access, tasks as tasks_svc
         await task_access.publish_task(session, task, "task.updated",
                                        await tasks_svc.task_to_api_live(session, task))
@@ -458,7 +358,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
                 review_request_id = request.id
         except OutputAwaitingRework:
             # A late delivery receipt cannot undo a reviewer's rejection.
-            await commit_delivery()
+            await session.commit()
             return {"ok": True, "files": got, "round": round_no, "deferred": True,
                     "pendingRework": True, "submissionMode": submission_mode}
         except ValueError as error:
@@ -493,7 +393,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
     # hostage to a slow device transport. The existing outbox owns retries.
     from . import task_notifications
     task_notifications.enqueue(session, task, "task.updated", review_request_id=review_request_id)
-    await commit_delivery()
+    await session.commit()
     return {"ok": True, "files": got, "round": round_no,
             "invalid": invalid[-100:], "submissionMode": submission_mode,
             **({"deliveryBlocked": True, "reason": task.work_routing["conversationTurn"]["deliveryIssue"]["reason"]}

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import os
 import tempfile
 import threading
@@ -46,95 +45,6 @@ class RunnerInputCleanupTests(unittest.IsolatedAsyncioTestCase):
         return {"op": "job.dispatch", "dispatchId": "d" * 32,
                 "_admitted": admitted, "task": {"id": "fixture-task"},
                 "files": {"transfer": transfer}, "skills": {"transfer": transfer}}
-
-    async def input_chunk(self, transfer, data=b"fixture", *, index=0, offset=0):
-        return await self.machine._input({
-            "op": "input.chunk", "transfer": transfer, "index": index,
-            "offset": offset, "b64": base64.b64encode(data).decode("ascii"),
-        })
-
-    async def test_input_chunk_enforces_size_and_idempotent_drop(self):
-        transfer = "c" * 32
-        result = await self.input_chunk(
-            transfer, b"x" * (runner_main._INPUT_MAX_CHUNK_BYTES + 1))
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["code"], "RUNNER_INPUT_CHUNK_TOO_LARGE")
-        self.assertFalse(Path(runner_main._input_root(transfer)).exists())
-        self.assertTrue((await self.machine._input({
-            "op": "input.drop", "transfer": transfer}))['ok'])
-        self.assertTrue((await self.machine._input({
-            "op": "input.drop", "transfer": transfer}))['ok'])
-
-    async def test_input_chunk_requires_exact_offsets_and_keeps_retryable_upload(self):
-        transfer = "d" * 32
-        self.assertTrue((await self.input_chunk(transfer, b"abc"))["ok"])
-        retry = await self.input_chunk(transfer, b"wrong", offset=0)
-        self.assertFalse(retry["ok"])
-        self.assertEqual(retry["code"], "RUNNER_INPUT_OFFSET_MISMATCH")
-        path = Path(runner_main._input_root(transfer)) / "00.bin"
-        self.assertEqual(path.read_bytes(), b"abc")
-        self.assertTrue((await self.input_chunk(transfer, b"d", offset=3))["ok"])
-        self.assertEqual(path.read_bytes(), b"abcd")
-
-    async def test_input_chunk_enforces_transfer_file_and_global_quotas(self):
-        transfer = "e" * 32
-        with patch.object(runner_main, "_INPUT_MAX_TRANSFER_BYTES", 4):
-            self.assertTrue((await self.input_chunk(transfer, b"1234"))["ok"])
-            result = await self.input_chunk(transfer, b"5", offset=4)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["code"], "RUNNER_INPUT_TRANSFER_TOO_LARGE")
-        self.assertFalse(Path(runner_main._input_root(transfer)).exists())
-
-        first, second = "f" * 32, "0" * 32
-        with patch.object(runner_main, "_INPUT_GLOBAL_MAX_BYTES", 3), \
-             patch.object(runner_main, "_INPUT_MIN_FREE_BYTES", 0):
-            self.assertTrue((await self.input_chunk(first, b"123"))["ok"])
-            result = await self.input_chunk(second, b"4")
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["code"], "RUNNER_INPUT_GLOBAL_QUOTA")
-        self.assertFalse(Path(runner_main._input_root(second)).exists())
-
-    async def test_input_chunk_limits_active_transfers_and_file_count(self):
-        first, second = "1" * 32, "2" * 32
-        with patch.object(runner_main, "_INPUT_MAX_TRANSFERS", 1), \
-             patch.object(runner_main, "_INPUT_MIN_FREE_BYTES", 0):
-            self.assertTrue((await self.input_chunk(first, b"1"))["ok"])
-            result = await self.input_chunk(second, b"2")
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["code"], "RUNNER_INPUT_TRANSFER_LIMIT")
-        self.assertFalse(Path(runner_main._input_root(second)).exists())
-
-        transfer = "3" * 32
-        root = Path(runner_main._input_root(transfer))
-        root.mkdir(parents=True)
-        for index in range(19):
-            (root / (f"{index:02d}.bin")).write_bytes(b"x")
-        (root / "unexpected.bin").write_bytes(b"x")
-        result = await self.input_chunk(transfer, b"x", index=19)
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["code"], "RUNNER_INPUT_FILE_LIMIT")
-        self.assertFalse(root.exists())
-
-    async def test_input_chunk_serializes_concurrent_global_quota(self):
-        transfers = ("4" * 32, "5" * 32)
-        with patch.object(runner_main, "_INPUT_GLOBAL_MAX_BYTES", 4), \
-             patch.object(runner_main, "_INPUT_MIN_FREE_BYTES", 0):
-            results = await asyncio.gather(*(self.input_chunk(t, b"data") for t in transfers))
-        self.assertEqual(sum(bool(result["ok"]) for result in results), 1)
-        self.assertEqual(sorted(result.get("code") for result in results if not result["ok"]),
-                         ["RUNNER_INPUT_GLOBAL_QUOTA"])
-        self.assertEqual(sum(path.stat().st_size for path in
-                             Path(self.root / "runner-inputs").glob("*/00.bin")), 4)
-
-    async def test_input_chunk_rejects_when_disk_space_is_low(self):
-        transfer = "6" * 32
-        usage = type("Usage", (), {"free": 0})()
-        with patch.object(runner_main.shutil, "disk_usage", return_value=usage), \
-             patch.object(runner_main, "_INPUT_MIN_FREE_BYTES", 0):
-            result = await self.input_chunk(transfer, b"x")
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["code"], "RUNNER_INPUT_DISK_QUOTA")
-        self.assertFalse(Path(runner_main._input_root(transfer)).exists())
 
     async def test_message_keep_filter_preserves_original_upload_and_local_files(self):
         original = self.upload("a" * 32)

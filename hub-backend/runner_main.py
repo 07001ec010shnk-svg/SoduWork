@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from contextlib import contextmanager
 import contextvars
 import json
 import hashlib
@@ -69,151 +68,6 @@ _TERMS: dict[str, object] = {}
 _TERM_SUBS: dict[str, object] = {}
 
 
-_INPUT_MAX_CHUNK_BYTES = 512 * 1024
-_INPUT_MAX_FILE_BYTES = 64 * 1024 * 1024
-_INPUT_MAX_TRANSFER_BYTES = 128 * 1024 * 1024
-_INPUT_MAX_TRANSFERS = 32
-_INPUT_GLOBAL_MAX_BYTES = 512 * 1024 * 1024
-_INPUT_MIN_FREE_BYTES = 1 * 1024 * 1024
-_INPUT_MAX_B64_CHARS = ((_INPUT_MAX_CHUNK_BYTES + 2) // 3) * 4
-_INPUT_QUOTA_LOCK = threading.Lock()
-_INPUT_ABORTED_TRANSFERS: set[str] = set()
-
-
-class _InputChunkRejected(ValueError):
-    """A validated input chunk must be rejected before it is written."""
-
-    def __init__(self, code: str, message: str, *, cleanup: bool):
-        super().__init__(message)
-        self.code = code
-        self.cleanup = cleanup
-
-
-@contextmanager
-def _input_quota_guard(transfer: str, root: str):
-    """Serialize one transfer and atomically mark/remove rejected uploads."""
-    with _INPUT_QUOTA_LOCK:
-        if transfer in _INPUT_ABORTED_TRANSFERS:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_TRANSFER_ABORTED", "input transfer is no longer writable", cleanup=False)
-        try:
-            yield
-        except _InputChunkRejected as exc:
-            if exc.cleanup:
-                _INPUT_ABORTED_TRANSFERS.add(transfer)
-                shutil.rmtree(root, True)
-            raise
-
-
-def _input_directory_bytes(root: str) -> tuple[int, int]:
-    """Return regular-file count and bytes without following symlinks."""
-    count = total = 0
-    try:
-        entries = os.scandir(root)
-    except FileNotFoundError:
-        return 0, 0
-    try:
-        for entry in entries:
-            if not entry.is_file(follow_symlinks=False):
-                continue
-            try:
-                total += entry.stat(follow_symlinks=False).st_size
-            except OSError as exc:
-                raise _InputChunkRejected(
-                    "RUNNER_INPUT_USAGE_UNAVAILABLE", "input usage could not be read", cleanup=True
-                ) from exc
-            count += 1
-    finally:
-        entries.close()
-    return count, total
-
-
-def _input_usage(base: str) -> tuple[int, int]:
-    """Return transfer-directory count and total bytes, ignoring unrelated files."""
-    count = total = 0
-    try:
-        entries = os.scandir(base)
-    except FileNotFoundError:
-        return 0, 0
-    try:
-        for entry in entries:
-            if not entry.is_dir(follow_symlinks=False) or not re.fullmatch(
-                    r"[0-9a-f]{32}", entry.name):
-                continue
-            count += 1
-            _, size = _input_directory_bytes(entry.path)
-            total += size
-    finally:
-        entries.close()
-    return count, total
-
-
-def _append_input_chunk(transfer: str, index: int, offset: int, chunk: bytes) -> int:
-    """Validate quotas and append one chunk while serializing competing uploads."""
-    root = _input_root(transfer)
-    base = os.path.dirname(root)
-    os.makedirs(base, exist_ok=True)
-    with _input_quota_guard(transfer, root):
-        if len(chunk) > _INPUT_MAX_CHUNK_BYTES:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_CHUNK_TOO_LARGE", "input chunk exceeds the 512 KiB limit", cleanup=True)
-        if os.path.islink(root):
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_TRANSFER_INVALID", "input transfer directory is a symlink", cleanup=True)
-        path = os.path.join(root, "%02d.bin" % index)
-        if os.path.islink(path):
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_FILE_INVALID", "input file is a symlink", cleanup=True)
-        try:
-            size = os.path.getsize(path) if os.path.isfile(path) else 0
-        except OSError as exc:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_USAGE_UNAVAILABLE", "input file size could not be read", cleanup=True
-            ) from exc
-        if offset != size:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_OFFSET_MISMATCH",
-                "input chunk offset does not match the current file size", cleanup=False)
-
-        file_count, transfer_bytes = _input_directory_bytes(root) if os.path.isdir(root) else (0, 0)
-        transfer_count, global_bytes = _input_usage(base)
-        transfer_exists = os.path.isdir(root)
-        if not transfer_exists and transfer_count >= _INPUT_MAX_TRANSFERS:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_TRANSFER_LIMIT", "too many active input transfers", cleanup=True)
-        if file_count >= 20 and not os.path.isfile(path):
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_FILE_LIMIT", "too many files in one input transfer", cleanup=True)
-        if size + len(chunk) > _INPUT_MAX_FILE_BYTES:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_FILE_TOO_LARGE", "input file exceeds the 64 MiB limit", cleanup=True)
-        if transfer_bytes + len(chunk) > _INPUT_MAX_TRANSFER_BYTES:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_TRANSFER_TOO_LARGE", "input transfer exceeds the 128 MiB limit", cleanup=True)
-        if global_bytes + len(chunk) > _INPUT_GLOBAL_MAX_BYTES:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_GLOBAL_QUOTA", "Runner input storage quota is exhausted", cleanup=True)
-        try:
-            free = int(shutil.disk_usage(base).free)
-        except OSError as exc:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_DISK_UNAVAILABLE", "Runner disk space could not be checked", cleanup=True
-            ) from exc
-        if free < len(chunk) + _INPUT_MIN_FREE_BYTES:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_DISK_QUOTA", "not enough free disk space for input chunk", cleanup=True)
-
-        os.makedirs(root, exist_ok=True)
-        try:
-            with open(path, "ab") as handle:
-                handle.write(chunk)
-        except OSError as exc:
-            raise _InputChunkRejected(
-                "RUNNER_INPUT_WRITE_FAILED", "input chunk could not be written", cleanup=True
-            ) from exc
-    return size + len(chunk)
-
-
 def _input_root(transfer: str) -> str:
     """Resolve one attachment-transfer directory; transfer IDs must be server-issued 32-character
     hexadecimal strings.
@@ -233,27 +87,7 @@ async def _drop_input_transfer(transfer: str) -> None:
         root = _input_root(transfer)
     except ValueError:
         return
-    def remove() -> None:
-        with _INPUT_QUOTA_LOCK:
-            shutil.rmtree(root, True)
-            _INPUT_ABORTED_TRANSFERS.discard(transfer)
-    await asyncio.to_thread(remove)
-
-
-async def _cleanup_input_transfer(transfer: str) -> None:
-    """Abort an upload while fencing chunks already waiting on the quota lock."""
-    try:
-        root = _input_root(transfer)
-    except ValueError:
-        return
-
-    def abort() -> None:
-        with _INPUT_QUOTA_LOCK:
-            _INPUT_ABORTED_TRANSFERS.add(transfer)
-            shutil.rmtree(root, True)
-
-    await asyncio.to_thread(abort)
-    await _drop_input_transfer(transfer)
+    await asyncio.to_thread(shutil.rmtree, root, True)
 
 
 def _input_path(transfer: str, index: int) -> str:
@@ -770,7 +604,13 @@ class Runner:
             self._telemetry_task = asyncio.create_task(self._capture_loop())
         # Admission reclaims native archives before launching any durable queue
         # item, so a surviving child process cannot race a replacement launch.
+        reconnect = runner_connection_status.ReconnectPolicy(base=RETRY_S)
+        self._retry_event = asyncio.Event()
         while not self._shutdown_event.is_set():
+            online_at = None
+            failure_code = "CONNECTION_FAILED"
+            closed_code = None
+            error_type = "ConnectionClosed"
             try:
                 runner_connection_status.report(self, "connecting")
                 headers = {}
@@ -788,6 +628,8 @@ class Runner:
                                               **websocket_options(self.url)) as ws:
                     self.ws = ws
                     prefetched = await self._hello()
+                    self._retry_event.clear()
+                    online_at = time.monotonic()
                     # Open the control channel before scanning local CLIs/Skills. A large
                     # or temporarily locked skill root must not make this Runner look offline.
                     initial = asyncio.create_task(self._report_beat())
@@ -796,11 +638,13 @@ class Runner:
                     push = asyncio.create_task(self._push_loop())
                     try:
                         await self._pump(prefetched)
+                        closed_code = getattr(ws, "close_code", None)
                     finally:
                         for job in (initial, beat, push):
                             job.cancel()
                         await asyncio.gather(initial, beat, push, return_exceptions=True)
             except RunnerIdentityConflict:
+                failure_code = "IDENTITY_CONFLICT"
                 runner_connection_status.report(self, "error", "IDENTITY_CONFLICT")
                 scope = getattr(self, "desktop_identity_scope", None)
                 if scope:
@@ -818,17 +662,21 @@ class Runner:
                     return
                 log.warning("执行机身份冲突，请检查独立执行机的登记配置")
             except Exception as e:  # noqa: BLE001
-                runner_connection_status.report(self, "error", runner_connection_status.error_code(e))
-                log.warning("连不上后台（%s: %s），%d 秒后重试",
-                            type(e).__name__, str(e)[:100], RETRY_S)
+                error_type = type(e).__name__
+                failure_code = runner_connection_status.error_code(e)
+                closed_code = runner_connection_status.close_code(e)
             self.ws = None
             if self._shutdown_event.is_set():
                 break
+            online_seconds = time.monotonic() - online_at if online_at is not None else 0
+            retry_seconds = reconnect.delay(failure_code, online_seconds)
+            runner_connection_status.report(self, "error", failure_code)
+            log.warning("Runner reconnect code=%s errorClass=%s closeCode=%s onlineSeconds=%.1f retrySeconds=%.1f",
+                        failure_code, error_type, closed_code, online_seconds, retry_seconds)
             # Keep terminals alive across connection loss for later reattachment.
-            try:
-                await asyncio.wait_for(self._shutdown_event.wait(), RETRY_S)
-            except asyncio.TimeoutError:
-                pass
+            if await runner_connection_status.wait_to_retry(
+                    self._shutdown_event, self._retry_event, retry_seconds):
+                reconnect.failures = 0
 
     async def _local_rpc_loop(self) -> None:
         """Serve one-line JSON RPC from the parent Electron process only."""
@@ -904,6 +752,13 @@ class Runner:
             # refresh performs discovery later and reports it to the Hub.
             self._agent_inventory_at = 0
             return {"ok": True, "data": result}
+        if op == "runtime.reconnect":
+            # Trusted desktop pipe only. This never interrupts live work or a
+            # healthy socket; it wakes a disconnected Runner after login.
+            retry = getattr(self, "_retry_event", None)
+            if self.ws is None and retry is not None:
+                retry.set()
+            return {"ok": True}
         if op == "runtime.ping":
             return {"ok": True, "data": {"version": RUNNER_VERSION, "pid": os.getpid()}}
         if op == "runtime.detect":
@@ -1681,45 +1536,31 @@ class Runner:
     # RPC execution handlers.
     # Task execution handlers.
     async def _input(self, m: dict) -> dict:
-        """Receive bounded input-attachment chunks at exact offsets."""
+        """Receive input-attachment chunks at exact offsets so retries cannot silently corrupt file
+        assembly.
+        """
         op = str(m.get("op") or "")
         transfer = str(m.get("transfer") or "")
+        root = _input_root(transfer)
         if op == "input.drop":
-            await _drop_input_transfer(transfer)
+            await asyncio.to_thread(shutil.rmtree, root, True)
             return {"ok": True}
         if op != "input.chunk":
-            return {"ok": False, "error": "unknown input operation"}
+            return {"ok": False, "error": "不认识的附件操作"}
         import base64
+        idx, offset = int(m.get("index") or 0), int(m.get("offset") or 0)
+        path = _input_path(transfer, idx)
+        os.makedirs(root, exist_ok=True)
+        size = os.path.getsize(path) if os.path.isfile(path) else 0
+        if offset != size:
+            return {"ok": False, "error": "附件分片顺序不对（期望 %d，收到 %d）" % (size, offset)}
         try:
-            idx, offset = int(m.get("index") or 0), int(m.get("offset") or 0)
-            if idx < 0 or idx >= 20 or offset < 0:
-                raise ValueError
-            _input_root(transfer)
-        except (TypeError, ValueError):
-            await _cleanup_input_transfer(transfer)
-            return {"ok": False, "code": "RUNNER_INPUT_ARGUMENT_INVALID",
-                    "error": "invalid input transfer, index, or offset"}
-        encoded = str(m.get("b64") or "")
-        if len(encoded) > _INPUT_MAX_B64_CHARS:
-            await _cleanup_input_transfer(transfer)
-            return {"ok": False, "code": "RUNNER_INPUT_CHUNK_TOO_LARGE",
-                    "error": "input chunk exceeds the 512 KiB limit"}
-        try:
-            chunk = base64.b64decode(encoded, validate=True)
+            chunk = base64.b64decode(str(m.get("b64") or ""), validate=True)
         except Exception:
-            return {"ok": False, "code": "RUNNER_INPUT_BASE64_INVALID",
-                    "error": "input chunk is not valid base64"}
-        try:
-            size = await asyncio.to_thread(_append_input_chunk, transfer, idx, offset, chunk)
-        except _InputChunkRejected as exc:
-            if exc.cleanup:
-                await _cleanup_input_transfer(transfer)
-            return {"ok": False, "code": exc.code, "error": str(exc)}
-        except Exception as exc:  # noqa: BLE001 - input failures must not kill the control loop
-            await _cleanup_input_transfer(transfer)
-            return {"ok": False, "code": "RUNNER_INPUT_WRITE_FAILED",
-                    "error": str(exc)[:200] or type(exc).__name__}
-        return {"ok": True, "data": {"size": size}}
+            return {"ok": False, "error": "附件分片不是有效的 base64"}
+        with open(path, "ab") as f:
+            f.write(chunk)
+        return {"ok": True, "data": {"size": size + len(chunk)}}
 
     async def _job(self, m: dict) -> dict:
         """Translate dispatch, status, and artifact RPCs into the shared ai_local implementation,

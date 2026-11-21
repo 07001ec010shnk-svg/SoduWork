@@ -699,21 +699,7 @@ async def reconcile_lost_dispatches(session: AsyncSession, days: int = 30) -> in
 
 async def ingest_event_page(session: AsyncSession, row, items: list, round_no=None) -> set[int]:
     """Retain an authorized page without changing execution state, identity or billing."""
-    events = []
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        raw_seq = item.get("seq")
-        if raw_seq is None:
-            seq = 0
-        elif type(raw_seq) is not int:
-            raise ValueError("execution event sequence is invalid")
-        else:
-            seq = raw_seq
-        if seq < 0 or seq > am.MAX_EVENT_SEQ:
-            raise ValueError("execution event sequence is out of range")
-        if seq > 0:
-            events.append(item)
+    events = [x for x in items if isinstance(x, dict) and int(x.get("seq") or 0) > 0]
     seqs = {int(x["seq"]) for x in events}
     have = set((await session.scalars(select(am.ExecutionEvent.seq).where(
         am.ExecutionEvent.session_id == row.id, am.ExecutionEvent.seq.in_(seqs)))).all()) if seqs else set()
@@ -798,21 +784,6 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
     clean = [x for x in snapshots if isinstance(x, dict) and x.get("ref") and x.get("taskId")]
     if not clean:
         return []
-    snapshot_seqs: list[int] = []
-    # Validate the complete heartbeat batch before loading or mutating any
-    # session rows.  A later invalid snapshot must not leave an earlier valid
-    # snapshot dirty in a caller-owned transaction.
-    for snap in clean:
-        raw_seq = snap.get("seq")
-        if raw_seq is None:
-            snapshot_seq = 0
-        elif type(raw_seq) is not int:
-            raise ValueError("execution snapshot sequence is invalid")
-        else:
-            snapshot_seq = raw_seq
-        if not 0 <= snapshot_seq <= am.MAX_EVENT_SEQ:
-            raise ValueError("execution snapshot sequence is out of range")
-        snapshot_seqs.append(snapshot_seq)
     task_ids = {str(x["taskId"]) for x in clean}
     tasks = {x.id: x for x in list((await session.execute(
         select(models.Task).where(models.Task.id.in_(task_ids)))).scalars().all())}
@@ -835,7 +806,7 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         select(am.ExecutionSession).where(am.ExecutionSession.ref.in_(refs))
         .with_for_update())).scalars().all())}
     changed: list[dict] = []
-    for snap, snapshot_seq in zip(clean, snapshot_seqs):
+    for snap in clean:
         task = tasks.get(str(snap.get("taskId") or ""))
         if task is None or not await _allowed(session, runner, task, ref=str(snap.get("ref") or "")):
             continue
@@ -852,12 +823,9 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         previous_round = int(previous_meta.get("round") or 1)
         incoming_round = int(snap.get("round") or previous_round)
         incoming_state = canonical_state(snap.get("status") or snap.get("state"))
-        next_round = int(snap.get("round") or previous_round)
-        new_turn = next_round > previous_round or (
-            old_state in _TERMINAL and incoming_state not in _TERMINAL)
         if (incoming_round < previous_round or
                 (incoming_round == previous_round and (
-                    snapshot_seq < int(row.seq or 0) or
+                    int(snap.get("seq") or 0) < int(row.seq or 0) or
                     (old_state in _TERMINAL and incoming_state not in _TERMINAL)))):
             # Delayed transport may repair historical gaps but cannot rewind a
             # newer round, its billing identity, approvals or terminal settlement.
@@ -870,16 +838,8 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         row.runner_client_id = str(getattr(runner, "client_id", "") or "")[:64]
         row.host = str(getattr(runner, "host", "") or "")[:100]
         row.engine = str(snap.get("cli") or snap.get("engine") or row.engine or "")[:60]
-        # The model is part of the execution identity.  A heartbeat may arrive
-        # late (or from a compromised/stale Runner), so it must never replace a
-        # model that was already frozen at dispatch or by an earlier snapshot.
-        # A new turn is an explicit execution-selection change and may choose a
-        # different model, even though the same session row is reused.
-        incoming_model = str(snap.get("model") or "")[:160]
-        frozen_model = str((previous_meta.get("executionIdentity") or {}).get("model")
-                           or row.model or "")[:160]
-        if incoming_model and (new_turn or not frozen_model):
-            row.model = incoming_model
+        if "model" in snap:
+            row.model = str(snap.get("model") or "")[:160]
         row.state = canonical_state(
             snap.get("status") or snap.get("state") or row.state, "running")[:32]
         state_changed = old_state != row.state
@@ -897,6 +857,9 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
             row.finished_at = _no_future(_dt(snap.get("ended")), now) \
                 or row.finished_at or now
         meta = dict(row.metadata_ or {})
+        next_round = int(snap.get("round") or previous_round)
+        new_turn = next_round > previous_round or (
+            old_state in _TERMINAL and row.state not in _TERMINAL)
         if new_turn:
             # Keep the transcript and task audit events; retire only the current
             # turn's status/settlement so a resumed ref can deliver again.
@@ -929,22 +892,10 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
             meta.pop("admissionKey", None)
             meta.pop("admissionStartSeq", None)
             meta.pop("turnCorrelationVersion", None)
-        identity = dict(meta.get("executionIdentity") or {})
-        # Legacy rows may have a denormalized model but no model field in the
-        # identity object yet.  Seed the identity from that frozen value before
-        # accepting any snapshot fields, so a late heartbeat cannot backfill a
-        # different model into the identity.
-        if new_turn and incoming_model:
-            identity.pop("model", None)
-        if row.model and not identity.get("model"):
-            identity["model"] = row.model
         meta["executionIdentity"] = execution_identity.from_snapshot(
-            identity, snap, runner)
-        identity_model = str(meta["executionIdentity"].get("model") or "")[:160]
-        if identity_model and not row.model:
-            # Keep the read model aligned with the frozen identity, including
-            # legacy rows whose denormalized model column was empty.
-            row.model = identity_model
+            meta.get("executionIdentity"), snap, runner)
+        if not row.model and "model" not in snap:
+            row.model = str(meta["executionIdentity"].get("model") or "")[:160]
         row.metadata_ = meta
         settlement = dict(meta.get("terminalSettlement") or {})
         settlement_state = str(settlement.get("state") or "")
@@ -955,7 +906,7 @@ async def ingest_runner_snapshots(session: AsyncSession, runner, snapshots: list
         )
 
         seqs = await ingest_event_page(session, row, snap.get("items") or [], snap.get("round"))
-        row.seq = max(int(row.seq or 0), snapshot_seq,
+        row.seq = max(int(row.seq or 0), int(snap.get("seq") or 0),
                       max(seqs) if seqs else 0)
         from . import usage_ledger
         owner = owners.get(str(task.owner_client_id or ""))

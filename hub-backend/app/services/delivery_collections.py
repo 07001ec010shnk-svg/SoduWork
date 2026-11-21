@@ -183,10 +183,7 @@ def _check_bytes(row, data):
 
 def validate_payload(manifest, data, *, limits=None):
     limits = limits or validation_limits()
-    # A zero-byte supporting file is a valid manifest entry. Distinguish an
-    # absent upload from empty bytes so the manifest size/hash check can make
-    # the final decision for a single file or an archive member.
-    if data is None or len(data) > limits.max_bytes:
+    if not data or len(data) > limits.max_bytes:
         raise HTTPException(413, "成果文件为空或超过大小限制")
     if manifest["kind"] == "file":
         _check_bytes(manifest["files"][0], data)

@@ -13,6 +13,7 @@
     "用时": "Time",
     "展开过程": "Show process",
     "收起过程": "Hide process",
+    "本轮没有可显示的过程记录。": "No process details are available for this turn.",
     "包含深度思考与回复；历史用时按消息记录计算，缺失用量显示为 —。": "Includes reasoning and reply. Historical time uses message timestamps; missing usage is shown as —.",
     "从已完成的日常对话自动积累，后续工作会自动参考；仅保存在当前账号的本机": "Automatically accumulated from completed conversations and used in later work. Stored locally for this account.",
     "自动保留近期工作摘要，也可以补充或修正内容": "Recent work summaries are saved automatically. You can add notes or correct them.",

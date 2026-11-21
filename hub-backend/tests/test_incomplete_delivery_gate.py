@@ -4,19 +4,15 @@ A failed receipt revokes same-turn automatic pending reviews, and collection det
 structurally truncated code without rejecting dialect or version differences.
 """
 
-import asyncio
 import json
-import threading
 import unittest
-from unittest import mock
 
-from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app import automation_models as am, models
 from app.db import Base
-from app.services import conversation_turns, delivery_manifest, storage
+from app.services import conversation_turns, delivery_manifest
 from tests.sqlite_schema import create_fresh_sqlite_schema
 
 
@@ -83,135 +79,6 @@ class IncompleteTurnDeliveryTests(_Base):
                 models.Attachment.task_id == "scene-task"))).scalar_one()
             self.assertEqual(attachment.role, "process")
         finally:
-            await self._dispose(engine, session)
-
-    async def test_invalid_path_is_rejected_before_any_storage_write(self):
-        engine, session, task = await self._prepared()
-        try:
-            with mock.patch.object(storage, "put") as put:
-                with self.assertRaises(HTTPException) as raised:
-                    await conversation_turns.deliver_artifacts(
-                        session, task, conversation_id="conv-9", turn_id="turn-9",
-                        provider="conversation", outcome="incomplete",
-                        files=[("../outside.txt", b"not safe", "text/plain")])
-            self.assertEqual(raised.exception.status_code, 400)
-            put.assert_not_called()
-        finally:
-            await self._dispose(engine, session)
-
-    async def test_storage_failure_removes_objects_written_by_this_delivery(self):
-        engine, session, task = await self._prepared()
-        written = []
-        deleted = []
-
-        def put(key, _data, _content_type):
-            written.append(key)
-            if len(written) == 2:
-                raise ValueError("storage unavailable")
-            return "local"
-
-        def delete(key, backend):
-            deleted.append((key, backend))
-
-        try:
-            with mock.patch.object(storage, "put", side_effect=put), \
-                 mock.patch.object(storage, "delete", side_effect=delete):
-                with self.assertRaises(ValueError):
-                    await conversation_turns.deliver_artifacts(
-                        session, task, conversation_id="conv-9", turn_id="turn-9",
-                        provider="conversation", outcome="incomplete",
-                        files=[("one.md", b"# one", "text/markdown"),
-                               ("two.md", b"# two", "text/markdown")])
-            self.assertEqual(deleted, [(written[0], "local")])
-        finally:
-            await self._dispose(engine, session)
-
-    async def test_commit_failure_removes_unpersisted_storage_objects(self):
-        engine, session, task = await self._prepared()
-        written = []
-        deleted = []
-
-        def put(key, _data, _content_type):
-            written.append(key)
-            return "local"
-
-        def delete(key, backend):
-            deleted.append((key, backend))
-
-        try:
-            with mock.patch.object(storage, "put", side_effect=put), \
-                 mock.patch.object(storage, "delete", side_effect=delete), \
-                 mock.patch.object(session, "commit", side_effect=RuntimeError("db unavailable")):
-                with self.assertRaises(RuntimeError):
-                    await conversation_turns.deliver_artifacts(
-                        session, task, conversation_id="conv-9", turn_id="turn-9",
-                        provider="conversation", outcome="incomplete",
-                        files=[("one.md", b"# one", "text/markdown")])
-            self.assertEqual(deleted, [(written[0], "local")])
-        finally:
-            await self._dispose(engine, session)
-
-    async def test_commit_cancellation_compensates_before_propagating(self):
-        engine, session, task = await self._prepared()
-        written = []
-        deleted = []
-
-        def put(key, _data, _content_type):
-            written.append(key)
-            return "local"
-
-        def delete(key, backend):
-            deleted.append((key, backend))
-            return True
-
-        async def cancelled_commit():
-            raise asyncio.CancelledError()
-
-        try:
-            with mock.patch.object(storage, "put", side_effect=put), \
-                 mock.patch.object(storage, "delete", side_effect=delete), \
-                 mock.patch.object(session, "commit", side_effect=cancelled_commit):
-                with self.assertRaises(asyncio.CancelledError):
-                    await conversation_turns.deliver_artifacts(
-                        session, task, conversation_id="conv-9", turn_id="turn-9",
-                        provider="conversation", outcome="incomplete",
-                        files=[("one.md", b"# one", "text/markdown")])
-            self.assertEqual(deleted, [(written[0], "local")])
-        finally:
-            await self._dispose(engine, session)
-
-    async def test_storage_write_cancellation_compensates_before_propagating(self):
-        engine, session, task = await self._prepared()
-        written = []
-        deleted = []
-        started = threading.Event()
-        release = threading.Event()
-
-        def put(key, _data, _content_type):
-            written.append(key)
-            started.set()
-            release.wait(5)
-            return "local"
-
-        def delete(key, backend):
-            deleted.append((key, backend))
-            return True
-
-        try:
-            with mock.patch.object(storage, "put", side_effect=put), \
-                 mock.patch.object(storage, "delete", side_effect=delete):
-                delivery = asyncio.create_task(conversation_turns.deliver_artifacts(
-                    session, task, conversation_id="conv-9", turn_id="turn-9",
-                    provider="conversation", outcome="incomplete",
-                    files=[("one.md", b"# one", "text/markdown")]))
-                self.assertTrue(await asyncio.to_thread(started.wait, 2))
-                delivery.cancel()
-                release.set()
-                with self.assertRaises(asyncio.CancelledError):
-                    await delivery
-            self.assertEqual(deleted, [(written[0], "local")])
-        finally:
-            release.set()
             await self._dispose(engine, session)
 
     async def test_completed_delivery_still_submits(self):

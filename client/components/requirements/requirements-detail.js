@@ -92,10 +92,7 @@
     const label = R.lanes.find(row => row[0] === phase)?.[1] || '';
     const creatorName = String(task.createdByName || '').trim();
     const title = root?.querySelector('#rqDetailTitle'), meta = root?.querySelector('[data-rq-header-meta]');
-    if (title) {
-      title.textContent = content.title || '需求详情';
-      title.title = title.textContent;
-    }
+    if (title) title.textContent = content.title || '需求详情';
     if (meta) {
       const ownerLabel = owner.kind === 'agent' ? '执行智能体' : owner.kind === 'person' ? '负责人' : '待安排';
       meta.textContent = [label, owner.name ? ownerLabel + ' · ' + owner.name : ownerLabel,
@@ -565,7 +562,7 @@
       '<div><dt>最近更新</dt><dd>' + timeProperty(changed) + '</dd></div></dl>' +
       (global.RequirementFields?.visibilityHint?.(task.visibility, 'rqVisibilityReadHint', fixedVisibility) || '') +
       '<section class="rq-detail-block rq-detail-tag-block"><h4>' + sectionIcon('tags') + '标签</h4><div class="rq-detail-tags" data-rq-detail-tags>' +
-      (tags.length ? tags.map(tag => '<span data-user-content title="' + esc(tag) + '">' + esc(tag) + '</span>').join('') : '<p class="rq-field-hint">暂无标签</p>') + '</div></section>' +
+      (tags.length ? tags.map(tag => '<span data-user-content>' + esc(tag) + '</span>').join('') : '<p class="rq-field-hint">暂无标签</p>') + '</div></section>' +
       '<section class="rq-detail-block"><h4>' + sectionIcon('content') + '背景与说明</h4><div class="rq-description"' + (content.note ? ' data-user-content' : '') + '>' + esc(R.displayNote(task) || '暂无补充说明') + '</div></section>' +
       '<section class="rq-detail-block"><h4>' + sectionIcon('criteria') + '完成标准</h4>' + (criteria.length ? '<ul class="rq-detail-criteria" data-user-content>' + criteria.map(value => '<li>' + esc(value) + '</li>').join('') + '</ul>' :
         '<p class="rq-field-hint">尚未填写完成标准</p>') + '</section></section>';
