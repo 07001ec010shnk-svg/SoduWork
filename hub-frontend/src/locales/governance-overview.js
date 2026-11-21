@@ -1,5 +1,10 @@
 // Authored governance and shared-shell copy. Business names remain unchanged.
 export default {
+  "需求风险": "Issue risks",
+  "需求风险 {0}": "Issue risks: {0}",
+  "等待人审": "Awaiting human review",
+  "运行监控中处于待审状态的审批请求": "Pending approval requests in the operations monitor",
+  "查看运行监控": "View operations monitor",
   "你的账号暂无运营数据权限": "Your account cannot view operational data",
   "当前角色未开通「查看需求 / 查看 SoduWork」等权限，因此看不到运营看板。": "Your role does not have permission to view issues or SoduWork devices, so the operations dashboard is unavailable.",
   "如需查看，请联系管理员为你的角色分配相应权限点。": "Ask an administrator to grant the relevant permissions to your role.",
@@ -90,6 +95,11 @@ export default {
 }
 
 export const ja = {
+  "需求风险": "課題のリスク",
+  "需求风险 {0}": "課題のリスク {0} 件",
+  "等待人审": "人による審査待ち",
+  "运行监控中处于待审状态的审批请求": "稼働監視で承認待ちのリクエスト",
+  "查看运行监控": "稼働監視を表示",
   "你的账号暂无运营数据权限": "このアカウントには運用データの閲覧権限がありません",
   "当前角色未开通「查看需求 / 查看 SoduWork」等权限，因此看不到运营看板。": "現在のロールには課題や SoduWork 端末の閲覧権限がないため、運用ダッシュボードを表示できません。",
   "如需查看，请联系管理员为你的角色分配相应权限点。": "閲覧するには、管理者にロールへの権限付与を依頼してください。",
@@ -180,6 +190,11 @@ export const ja = {
 }
 
 export const ko = {
+  "需求风险": "이슈 위험",
+  "需求风险 {0}": "이슈 위험 {0}건",
+  "等待人审": "사람의 검토 대기",
+  "运行监控中处于待审状态的审批请求": "운영 모니터에서 승인 대기 중인 요청",
+  "查看运行监控": "운영 모니터 보기",
   "你的账号暂无运营数据权限": "이 계정에는 운영 데이터 조회 권한이 없습니다",
   "当前角色未开通「查看需求 / 查看 SoduWork」等权限，因此看不到运营看板。": "현재 역할에 이슈 또는 SoduWork 기기 조회 권한이 없어 운영 대시보드를 볼 수 없습니다.",
   "如需查看，请联系管理员为你的角色分配相应权限点。": "조회하려면 관리자에게 해당 역할의 권한 부여를 요청하세요.",
