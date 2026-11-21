@@ -6,7 +6,7 @@ const {identity} = require('./helpers/platform-session-fixture.cjs');
 const replica = require('../main/conversation/replica-store.cjs');
 const shared = require('../main/conversation/shared-history.cjs');
 async function fixture(t) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(),'soduwork-delete-storage-'));
+  const root = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'soduwork-delete-storage-')));
   const app={getPath:()=>root}, who=identity();
   const store=replica.createWorker(path.join(root,'history.sqlite'));
   const session={findBySessionId:()=>null,historyEntry:async()=>({ok:false,notFound:true}),archivedConversation:async()=>null};
@@ -84,12 +84,16 @@ test('renamed or unreadable native archives preserve deletion and SQLite visibil
       coverage:{complete:true}},{expectedRevision:0});
     assert.equal((await f.session.historyEntry(f.app,'native',{strict:true})).entry.path,file);
     fs.renameSync(file,renamed);
+    let deniedReads=0;
     if(unavailable) {
       const createReadStream=fs.createReadStream;
       t.mock.method(fs,'createReadStream',function(target,...args){
-        if(path.resolve(String(target))===renamed) return new (require('node:stream').Readable)({
-          read(){this.destroy(Object.assign(Error('Synthetic archive read denied'),{code:'EACCES'}));}
-        });
+        if(path.resolve(String(target))===renamed) {
+          deniedReads++;
+          return new (require('node:stream').Readable)({
+            read(){this.destroy(Object.assign(Error('Synthetic archive read denied'),{code:'EACCES'}));}
+          });
+        }
         return createReadStream.call(this,target,...args);
       });
     }
@@ -99,6 +103,7 @@ test('renamed or unreadable native archives preserve deletion and SQLite visibil
     assert.equal((await action('delete','native')).needsConfirm,true);
     if(unavailable) {
       await assert.rejects(action('delete','native',{confirmed:true}),/read denied/);
+      assert.ok(deniedReads>0,'The native reader must attempt to read the renamed archive');
       assert.deepEqual(trashed,[]);
       assert.equal(fs.readFileSync(renamed,'utf8'),bytes);
       const row=await f.store.get('native');assert.equal(row.deleted,false);assert.equal(row.archived,true);

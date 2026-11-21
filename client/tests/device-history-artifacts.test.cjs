@@ -85,8 +85,13 @@ test('explicit workspaces require a matching local change receipt or a retained 
     after: { path: name, exists: true, hash: digest, size: bytes.length } }] };
   const index = await project.capture({ ...f, journal });
   assert.deepEqual(index.items.map(item => item.metadata.relative), [name]);
+  const directorySpelling = await project.capture({ ...f, journal: { ...journal, cwd: f.cwd + path.sep } });
+  assert.deepEqual(directorySpelling.items, index.items);
   const kept = await project.capture({ ...f, retained: index });
   assert.equal(kept.items.length, 1);
+  const alias = path.join(f.workRoot, 'linked-temp');
+  fs.symlinkSync(path.dirname(f.cwd), alias, 'junction');
+  assert.equal(await project.capture({ ...f, journal: { ...journal, cwd: path.join(alias, f.taskId) } }), null);
   assert.equal(await project.capture({ ...f, journal: { ...journal, cwd: f.workRoot } }), null);
   assert.equal(await project.capture({ ...f, journal: { ...journal, truncated: true } }), null);
   f.write(name, 'different result');

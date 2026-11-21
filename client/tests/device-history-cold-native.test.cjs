@@ -52,7 +52,11 @@ test('cold processes restore original intent and completed tool results in real 
     assert.match(actual, /Saved ALPHA-DEVICE-731/);
     assert.match(actual, /TOOL-RECEIPT-BETA-482/);
     assert.match(actual, /Do not repeat completed operations/);
-    assert.ok(actual.includes(restored.cwd));
+    const text = request.messages.flatMap(({ content }) =>
+      typeof content === 'string' ? [content] : (content || []).map(block => block.text || '')).join('\n');
+    const workspace = /Conversation and task references; current workspace:\n([^\n]+)/.exec(text);
+    assert.ok(workspace, 'The model must receive the recovery workspace record');
+    assert.equal(fs.realpathSync.native(JSON.parse(workspace[1]).cwd), fs.realpathSync.native(restored.cwd));
     assert.doesNotMatch(actual, /user explicitly changed Agent|Continue in the SAME workspace/);
   }
 });

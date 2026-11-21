@@ -75,8 +75,20 @@ function classify(root, files, window) {
   });
 }
 
+function matchesJournalRoot(root, cwd) {
+  if (cwd === root) return true;
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd) || cwd.split(/[\\/]/).includes('..')) return false;
+  try {
+    // Older Windows receipts can use an 8.3 spelling for the same directory.
+    // Check the original path before resolving it so a junction cannot bind a receipt.
+    const supplied = path.resolve(cwd);
+    assertNoLinks(path.parse(supplied).root, supplied);
+    return realpath(supplied) === root;
+  } catch (_) { return false; }
+}
+
 async function journalFiles(root, journal) {
-  if (!journal?.turnId || journal.truncated || !Array.isArray(journal.files) || journal.cwd !== root) return [];
+  if (!journal?.turnId || journal.truncated || !Array.isArray(journal.files) || !matchesJournalRoot(root, journal.cwd)) return [];
   const files = [];
   for (const change of journal.files) {
     const receipt = change.after, relative = change.path;
