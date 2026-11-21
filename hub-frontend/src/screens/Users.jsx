@@ -130,9 +130,9 @@ function UserEditor({ user, orgs, roles, onClose, onDone }) {
   }
 
   return (
-    <Modal title={isNew ? tx("新建用户") : tx("编辑用户")} icon="users" onClose={onClose}
-      foot={<>
-        <button className="btn btn-ghost" onClick={onClose}>{tx("取消")}</button>
+    <Modal title={isNew ? tx("新建用户") : tx("编辑用户")} icon="users" draft={[username, displayName, password, orgId, roleId, isActive, [...posSel].sort(), [...domSel].sort()]} onClose={onClose}
+      foot={dismiss => <>
+        <button className="btn btn-ghost" onClick={dismiss}>{tx("取消")}</button>
         <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? tx("保存中…") : tx("保存")}</button>
       </>}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 2 }}>
@@ -217,8 +217,8 @@ function DomainManager({ domains, onClose, onChanged }) {
     catch (e) { toast(tx("删除失败：") + e.message) }
   }
   return (
-    <Modal title={tx("管理领域 / 模块")} icon="grid" onClose={onClose}
-      foot={<button className="btn btn-primary" onClick={onClose}>{tx("完成")}</button>}>
+    <Modal title={tx("管理领域 / 模块")} icon="grid" dirty={!!name || list.some(row => row._edit != null && row._edit !== row.name)} onClose={onClose}
+      foot={dismiss => <button className="btn btn-primary" onClick={dismiss}>{tx("完成")}</button>}>
       <p className="muted" style={{ fontSize: 14.5, marginTop: 0 }}>{tx("领域是负责的业务块（支付、订单、前端等）。给成员标记领域后，分配需求时会优先选择对应负责人。")}</p>
       <label className="f-lbl" htmlFor={`${formId}-new-domain`}>{tx("领域名称")}</label>
       <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
