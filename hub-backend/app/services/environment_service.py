@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import automation_models as am
 from .. import models
-from . import preflight_evidence, release_control
+from . import approval_policies, preflight_evidence, release_control
 from .environment_contracts import (
     _KEY,
     _SECRET_WORD,
@@ -378,16 +378,13 @@ async def save_environment(session: AsyncSession, body: dict, row: am.Environmen
         row.health_checks = _checks(body.get("healthChecks"))
     if "rollback" in body:
         row.rollback = _rollback(body.get("rollback"), command_required=False)
-    if "approvalPolicyId" in body:
-        policy_id = _text(body.get("approvalPolicyId"), 36)
-        if policy_id and await session.get(am.ApprovalPolicy, policy_id) is None:
-            raise ValueError("审批策略不存在")
-        row.approval_policy_id = policy_id
-    if "acceptancePolicyId" in body:
-        policy_id = _text(body.get("acceptancePolicyId"), 36)
-        if policy_id and await session.get(am.ApprovalPolicy, policy_id) is None:
-            raise ValueError("验收职责不存在")
-        row.acceptance_policy_id = policy_id
+    approval_id = _text(body.get("approvalPolicyId", row.approval_policy_id), 36)
+    acceptance_id = _text(body.get("acceptancePolicyId", row.acceptance_policy_id), 36)
+    for policy_id, label in ((approval_id, "审批策略"), (acceptance_id, "验收职责")):
+        if policy_id and await approval_policies.for_environment(session, policy_id, row.org_id) is None:
+            raise ValueError(f"{label}不存在或不属于这个环境的组织")
+    row.approval_policy_id = approval_id
+    row.acceptance_policy_id = acceptance_id
     if "promotionPolicy" in body or creating:
         row.promotion_policy = promotion_policy(body.get("promotionPolicy"))
     if "enabled" in body:

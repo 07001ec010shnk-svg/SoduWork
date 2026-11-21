@@ -101,6 +101,14 @@ async def list_visible(session: AsyncSession, org_ids: set[str] | None) -> list[
     return [api(x) for x in (await session.execute(q)).scalars().all()]
 
 
+async def for_environment(session: AsyncSession, policy_id: str,
+                          org_id: str | None) -> am.ApprovalPolicy | None:
+    policy = await session.get(am.ApprovalPolicy, policy_id)
+    if policy is None or (policy.org_id is not None and policy.org_id != org_id):
+        return None
+    return policy
+
+
 async def save(session: AsyncSession, body: dict, row: am.ApprovalPolicy | None = None
                ) -> am.ApprovalPolicy:
     creating = row is None

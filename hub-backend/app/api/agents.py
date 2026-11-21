@@ -303,40 +303,30 @@ async def get_my_git(
     """Return the client's Git identity, masked credential metadata, and configured repository URLs
     suitable for a connection probe.
     """
-    from sqlalchemy import select
-    from urllib.parse import urlsplit, urlunsplit
+    from sqlalchemy import or_, select
 
-    from .. import models as m
-    from ..models import Repo
+    from ..models import Project, Repo, User
     from ..services import code_creds, rbac
+    from ..services.repo_urls import git_probe_url
 
-    def _mask_git_url(url):
-        """Mask credentials in a Git URL for safe display."""
-        if not url:
-            return url
-        try:
-            parts = urlsplit(url)
-            if parts.username or parts.password:
-                masked = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, parts.fragment))
-                return masked
-        except (ValueError, AttributeError):
-            pass
-        return url
+    result = {"git": code_creds.api_view(client), "repos": []}
+    user = await session.get(User, client.user_ref) if client.user_ref else None
+    if not user or not user.is_active or user.account_deleted_at:
+        return result
 
-    # Scope to user's org
-    user = await session.get(m.User, client.user_ref) if client.user_ref else None
-    org_ids = await rbac.subtree_org_ids(session, user.org_id) if user and user.org_id else set()
-    if org_ids:
-        repos = (await session.execute(select(Repo).where(
-            (Repo.org_id.in_(org_ids)) | Repo.org_id.is_(None)
-        ))).scalars().all()
-    else:
-        repos = (await session.execute(select(Repo).where(Repo.org_id.is_(None)))).scalars().all()
-    return {
-        "git": code_creds.api_view(client),
-        "repos": [{"id": r.id, "name": r.name, "url": _mask_git_url(r.git_url)}
-                  for r in repos if (r.git_url or "").strip()],
-    }
+    scope = await rbac.scope_org_ids(session, user)
+    query = select(Repo.id, Repo.name, Repo.git_url).join(Project, Repo.project_id == Project.id)
+    if scope is not None:
+        # A legacy NULL repository org does not make its private parent project public.
+        query = query.where(
+            or_(Repo.org_id.is_(None), Repo.org_id.in_(scope)),
+            or_(Project.org_id.is_(None), Project.org_id.in_(scope)),
+        )
+    for repo in await session.execute(query):
+        url = git_probe_url(repo.git_url)
+        if url:
+            result["repos"].append({"id": repo.id, "name": repo.name, "url": url})
+    return result
 
 
 @router.put("/my-git")

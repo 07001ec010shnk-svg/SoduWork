@@ -7,7 +7,7 @@ from datetime import date as calendar_date, datetime, timedelta, timezone
 import logging
 import uuid
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
 from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -45,6 +45,7 @@ from ..services.task_access import publish_owner
 from ..services import inbox as inbox_svc
 from ..services import poller
 from ..services import rbac
+from ..services import email_auth
 from ..services import client_access
 from ..services import storage
 from ..services import tasks as svc
@@ -87,9 +88,26 @@ async def _me_payload(session: AsyncSession, user: User) -> dict:
 
 
 @router.post("/login")
-async def login(body: AdminLogin, session: AsyncSession = Depends(get_session)):
+async def login(body: AdminLogin, request: Request, session: AsyncSession = Depends(get_session)):
     user = await client_access.find_login_user(session, body.user, legacy_lookup=rbac.get_user_by_username)
-    if user is None or not user.is_active or user.account_deleted_at or not verify_password(body.pw, user.password_hash):
+    # Verified email and legacy username can identify the same account.
+    account = "id:" + user.id if user is not None else "name:" + body.user.strip().casefold()
+    peer = request.client.host if request.client else "unknown"
+    async with session.begin_nested() as reservation:
+        try:
+            await email_auth.reserve_admin_login(session, account, peer)
+        except client_access.ClientAccessError as exc:
+            raise HTTPException(status_code=exc.status, detail=str(exc),
+                                headers={"Retry-After": str(exc.meta["retryAfter"])}) from exc
+        authenticated = bool(user and user.is_active and not user.account_deleted_at
+                             and verify_password(body.pw, user.password_hash))
+        if authenticated:
+            # Only failed attempts consume the account and peer budgets.
+            await reservation.rollback()
+        else:
+            audit.add(session, None, "admin.login.failed", "user", user.id if user else None)
+    if not authenticated:
+        await session.commit()
         raise HTTPException(status_code=401, detail="账号或密码不正确")
     user.last_login_at = datetime.now(timezone.utc)
     await session.commit()
