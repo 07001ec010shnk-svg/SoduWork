@@ -71,6 +71,34 @@ class UserRoleUpdateTests(unittest.IsolatedAsyncioTestCase):
         headers = {"Authorization": "Bearer " + self.tokens[who]} if who else {}
         return await self.http.request(method, "/api/v1/admin" + path, headers=headers, **kwargs)
 
+    async def test_admin_password_policy_applies_to_create_and_reset(self):
+        for password in ("", "short", "x" * 129):
+            for method, path, fields in (("POST", "/users", {"username": "new", "orgId": "team"}),
+                                         ("PATCH", "/users/target", {})):
+                response = await self.request(method, path, json={**fields, "password": password})
+                self.assertEqual(response.status_code, 422, response.text)
+                if password:
+                    self.assertNotIn(password, response.text)
+        response = await self.request("POST", "/users", json={
+            "username": "new", "orgId": "team", "password": "fixture-password"})
+        self.assertEqual(response.status_code, 200, response.text)
+        from app.auth import hash_password, verify_password
+        self.assertFalse(verify_password("", hash_password("")))
+
+    async def test_builtin_role_is_read_only_and_catalog_explains_permissions(self):
+        async with self.sessions() as session:
+            session.add(models.Role(id="builtin", name="System role", is_system=True, permissions=["task.view"]))
+            await session.commit()
+        for patch in ({"name": "Other name"}, {"permissions": []}):
+            result = await self.request("PATCH", "/roles/builtin", who="super", json=patch)
+            self.assertEqual(result.status_code, 400, result.text)
+        catalog = await self.request("GET", "/permissions", who="super")
+        self.assertEqual(catalog.status_code, 200)
+        self.assertTrue(catalog.json())
+        for permission in catalog.json():
+            self.assertTrue(permission["description"])
+            self.assertIn(permission["risk"], ("low", "medium", "high"))
+
     async def assert_stored_role(self, uid, expected):
         async with self.sessions() as session:
             user = await session.get(models.User, uid)
