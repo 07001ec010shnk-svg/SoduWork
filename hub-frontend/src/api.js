@@ -29,6 +29,31 @@ async function fetchSafe(path, options = {}, timeout = REQUEST_TIMEOUT, consume 
   }
 }
 
+// XMLHttpRequest reports upload bytes; use the same authentication and
+// response handling as fetch once the transfer reaches the server.
+function uploadTransport(onProgress) {
+  return (url, options, timeout) => new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    const abort = () => xhr.abort()
+    xhr.open('POST', url)
+    xhr.timeout = timeout
+    for (const [name, value] of Object.entries(options.headers)) xhr.setRequestHeader(name, value)
+    xhr.upload.onprogress = event => onProgress(event.loaded, event.lengthComputable ? event.total : 0, false)
+    xhr.upload.onload = event => onProgress(event.loaded, event.total, true)
+    xhr.onload = () => {
+      const res = new Response(xhr.responseText || null, { status: xhr.status })
+      responseData(res).then(data => resolve({ res, data }), reject)
+    }
+    xhr.ontimeout = () => reject(new Error(tx("请求超时，请稍后重试")))
+    xhr.onerror = () => reject(new Error(tx("无法连接 SoduWork 服务，请检查后台地址或网络")))
+    xhr.onabort = () => reject(new DOMException('Aborted', 'AbortError'))
+    xhr.onloadend = () => options.signal?.removeEventListener('abort', abort)
+    if (options.signal?.aborted) { reject(new DOMException('Aborted', 'AbortError')); return }
+    options.signal?.addEventListener('abort', abort, { once: true })
+    xhr.send(options.body)
+  })
+}
+
 async function responseData(res) {
   const text = await res.text()
   if (!text) return null
@@ -85,13 +110,13 @@ function authenticationChanged() {
   return error
 }
 
-async function authenticatedData(path, options, timeout = REQUEST_TIMEOUT, consume = responseData) {
+async function authenticatedData(path, options, timeout = REQUEST_TIMEOUT, consume = responseData, transport = fetchSafe) {
   const generation = authGeneration
   const headers = { ...options.headers }
   if (token) headers['Authorization'] = 'Bearer ' + token
   let response
   try {
-    response = await fetchSafe('/api/v1' + path, { ...options, headers }, timeout, consume)
+    response = await transport('/api/v1' + path, { ...options, headers }, timeout, consume)
   } catch (error) {
     if (generation !== authGeneration) throw authenticationChanged()
     throw error
@@ -261,11 +286,12 @@ export const api = {
   },
   setClientReleaseEnabled: (id, enabled) => call(
     'PATCH', '/admin/client-releases/' + encodeURIComponent(id), { enabled }),
-  uploadClientRelease: (bundleFile, installerFile) => {
+  uploadClientRelease: (bundleFile, installerFile, { onProgress, signal } = {}) => {
     const form = new FormData()
     form.append('bundle', bundleFile)
     form.append('installer', installerFile)
-    return uploadForm('/admin/client-releases/upload', form, 900000)
+    return authenticatedData('/admin/client-releases/upload', { method: 'POST', body: form, signal }, 900000, responseData,
+      onProgress ? uploadTransport(onProgress) : fetchSafe)
   },
   assignClient: (id, userId) => call('POST', '/admin/clients/' + id + '/assign', { userId }),
   revokeClient: (id) => call('POST', '/admin/clients/' + id + '/revoke', {}),
