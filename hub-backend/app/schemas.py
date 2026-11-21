@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Optional
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
+from pydantic_core import PydanticCustomError
 
 from .models import Client, Task
 
@@ -102,7 +103,7 @@ def client_to_api(c: Client, offline_after: int = 30) -> dict[str, Any]:
 
 def _reject_boolean_timestamp(value):
     if isinstance(value, bool):
-        raise ValueError("A deadline must be a timestamp in milliseconds")
+        raise PydanticCustomError("hub.input.due", "A deadline must be a timestamp in milliseconds")
     return value
 
 

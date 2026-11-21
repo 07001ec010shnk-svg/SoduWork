@@ -511,14 +511,14 @@ class ClientListFilters:
 
 
 ClientFilters = Annotated[ClientListFilters, Depends()]
-ClientPageNumber = Annotated[int, Query(ge=1, le=2**31-1)]
-ClientPageSize = Annotated[int, Query(alias="pageSize", ge=1, le=100)]
+ClientPageNumber = Annotated[int | None, Query(ge=1, le=2**31-1)]
+ClientPageSize = Annotated[int | None, Query(alias="pageSize", ge=1, le=100)]
 
 
 @router.get("/clients")
 async def list_clients(
     filters: ClientFilters, paged: bool = Query(default=False),
-    page: ClientPageNumber = 1, page_size: ClientPageSize = 25, window: PageQuery = None,
+    page: ClientPageNumber = None, page_size: ClientPageSize = None, window: PageQuery = None,
     user: User = Depends(require_perm("client.view")),
     session: AsyncSession = Depends(get_session),
 ):
@@ -534,18 +534,21 @@ async def list_clients(
 
 @router.get("/client-inventory")
 async def paged_clients(
-    filters: ClientFilters, page: ClientPageNumber = 1, page_size: ClientPageSize = 25,
+    filters: ClientFilters, page: ClientPageNumber = None, page_size: ClientPageSize = None,
     window: PageQuery = None, user: User = Depends(require_perm("client.view")),
     session: AsyncSession = Depends(get_session),
 ):
     """Return items, total and counts for every request, including an empty page."""
     vis = await _visible_client_ids(session, user)
-    offset = (page - 1) * page_size
     if window:
-        if page != 1 or page_size != 25:
-            raise HTTPException(status_code=422, detail="Choose limit/offset or page/pageSize")
+        if page is not None or page_size is not None:
+            raise HTTPException(status_code=422, detail="请选择一种分页方式：limit/offset 或 page/pageSize",
+                                headers={"X-Error-Code": "hub.input.pages"})
         offset, page_size = window.offset, window.limit
         page = offset // page_size + 1
+    else:
+        page, page_size = page or 1, page_size or 25
+        offset = (page - 1) * page_size
     state, form, q = filters.state, filters.form, filters.q
 
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.offline_after_seconds)

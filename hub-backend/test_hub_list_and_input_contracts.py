@@ -14,7 +14,7 @@ from app import automation_models, models
 from app.db import Base, get_session
 from app.deps import current_client, current_user
 from app.library_models import LibraryFolder, LibraryItem
-from app.main import app as hub
+from app.api import admin, approvals, clients, deliveries, environments, library, runner_ws, tasks, usage, work_catalog
 from app.permissions import ALL_KEYS
 
 
@@ -45,7 +45,9 @@ class HubContractTests(unittest.IsolatedAsyncioTestCase):
             await session.commit()
         self.user._perms = set(ALL_KEYS)
         api = FastAPI()
-        api.include_router(hub.router)
+        for router in (admin.router, approvals.router, clients.router, deliveries.router, environments.router,
+                       library.router, runner_ws.router, tasks.router, usage.router, work_catalog.admin_router):
+            api.include_router(router)
 
         async def database():
             async with self.sessions() as session:
@@ -87,6 +89,10 @@ class HubContractTests(unittest.IsolatedAsyncioTestCase):
         for path in ("admin/client-inventory", "admin/clients?paged=1"):
             page = await self.request("GET", path + ("&" if "?" in path else "?") + "pageSize=1")
             self.assertEqual((page["pageSize"], len(page["items"]), page["total"]), (1, 1, 3))
+        for mix in ("limit=3&page=1", "offset=0&pageSize=25"):
+            response = await self.http.get("admin/client-inventory?" + mix)
+            self.assertEqual(response.status_code, 422)
+            self.assertEqual(response.headers.get("X-Error-Code"), "hub.input.pages")
         self.user.is_super = False
         limited = await self.request("GET", "admin/users?limit=1")
         self.assertEqual(([user["id"] for user in limited["items"]], limited["total"]), (["row-0"], 1))

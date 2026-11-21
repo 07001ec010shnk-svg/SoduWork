@@ -2041,7 +2041,8 @@ async def add_task_comment(
     t = await _view_task(session, client, tid)
     raw = body.get("body")
     if raw is not None and not isinstance(raw, str):
-        raise HTTPException(status_code=422, detail="body 必须是字符串")
+        raise HTTPException(status_code=422, detail="评论正文必须是文本",
+                            headers={"X-Error-Code": "hub.input.comment_type"})
     text = (raw or "").strip()
     mentions = body.get("mentions") or []
     if not text:

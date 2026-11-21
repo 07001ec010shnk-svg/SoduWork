@@ -208,7 +208,8 @@ async def create_team_task(
                "inbox_with_assignee": "团队收件箱任务不指定接收人；要交给个人，请使用成员指派",
                "no_assignee": "请选择指派成员", "out_of_scope": "该成员不在你的团队内",
                "no_box": "该成员还没有绑定 SoduWork，无法派需求", "inactive": "该成员已停用，无法派需求"}.get(r.get("reason"), "派需求失败")
-        raise HTTPException(status_code=400, detail=msg)
+        headers = {"X-Error-Code": "hub.input.inbox"} if r.get("reason") == "inbox_with_assignee" else None
+        raise HTTPException(status_code=400, detail=msg, headers=headers)
     return r
 
 
