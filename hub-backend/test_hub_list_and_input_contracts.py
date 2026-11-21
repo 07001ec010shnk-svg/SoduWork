@@ -65,6 +65,21 @@ class HubContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, expected, (method, path, response.status_code))
         return response.json()
 
+    async def test_delete_distinguishes_missing_resources_from_in_use(self):
+        for resource in ("orgs", "roles"):
+            path = "admin/" + resource + "/missing"
+            await self.request("PATCH", path, expected=404, json={"name": "Missing"})
+            await self.request("DELETE", path, expected=404)
+        await self.request("DELETE", "admin/orgs/row-0", expected=400)
+
+    async def test_create_deployment_target_reports_required_ids_before_lookup(self):
+        for body, field in (({}, "repoId"), ({"repoId": "  "}, "repoId"),
+                            ({"repoId": "missing"}, "environmentId"), ({"repoId": "missing", "environmentId": []}, "environmentId")):
+            result = await self.request("POST", "admin/deployment-targets", expected=400, json=body)
+            self.assertIn(field, result["detail"])
+        await self.request("POST", "admin/deployment-targets", expected=404,
+                           json={"repoId": "missing", "environmentId": "staging"})
+
     async def test_admin_and_device_list_windows(self):
         for i in range(2):
             await self.request("POST", "tasks", json={"title": f"task {i}"})

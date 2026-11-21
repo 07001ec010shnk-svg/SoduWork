@@ -344,6 +344,10 @@ async def create_environment(
         safe["orgId"] = body.get("orgId") if user.is_super else user.org_id
         if not user.is_super and not safe["orgId"]:
             raise ValueError("请先加入组织后再创建环境")
+        org_id = safe["orgId"]
+        if org_id is not None and org_id != "" and (
+                not isinstance(org_id, str) or await session.get(models.OrgUnit, org_id) is None):
+            raise HTTPException(status_code=400, detail="部门不存在")
         if "sort" in safe:
             safe["sort"] = parse_integer(safe["sort"], field="sort", default=0)
         row = await svc.save_environment(session, safe)
@@ -463,7 +467,10 @@ async def create_target(
     user: User = Depends(require_perm("environment.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    await _repo(session, user, str(body.get("repoId") or ""))
+    for key in ("repoId", "environmentId"):
+        if not isinstance(body.get(key), str) or not body[key].strip():
+            raise HTTPException(status_code=400, detail=f"{key} is required")
+    await _repo(session, user, body["repoId"].strip())
     try:
         row = await svc.save_target(session, body)
     except ValueError as e:

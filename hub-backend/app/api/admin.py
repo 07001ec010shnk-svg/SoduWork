@@ -229,7 +229,7 @@ async def delete_org(
     if not r["ok"]:
         msg = {"has_children": "该部门下还有子部门", "has_users": "该部门下还有用户", "not_found": "部门不存在"}
         reason = r["reason"]
-        raise HTTPException(status_code=400, detail=msg.get(reason, "无法删除"),
+        raise HTTPException(status_code=404 if reason == "not_found" else 400, detail=msg.get(reason, "无法删除"),
                             headers={"X-Error-Code": f"org.delete.{reason}"})
     await audit.log(session, user, "org.delete", "org", oid, r.get("name", ""), {})
     return r
@@ -281,7 +281,7 @@ async def delete_role(rid: str,
     if not r["ok"]:
         msg = {"system_role": "系统内置角色不可删", "in_use": "仍有用户在用该角色", "not_found": "角色不存在"}
         reason = r["reason"]
-        raise HTTPException(status_code=400, detail=msg.get(reason, "无法删除"),
+        raise HTTPException(status_code=404 if reason == "not_found" else 400, detail=msg.get(reason, "无法删除"),
                             headers={"X-Error-Code": f"role.delete.{reason}"})
     await audit.log(session, user, "role.delete", "role", rid, label, {})
     return r
@@ -323,10 +323,13 @@ async def create_user(
         await rbac.validate_user_domains(session, body.domains)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    created = await rbac.create_user(
-        session, body.username, body.password, body.displayName,
-        body.orgId, body.roleId, position_ids, body.domains,
-        token_quota=body.tokenQuota.model_dump() if body.tokenQuota is not None else None)
+    try:
+        created = await rbac.create_user(
+            session, body.username, body.password, body.displayName,
+            body.orgId, body.roleId, position_ids, body.domains,
+            token_quota=body.tokenQuota.model_dump() if body.tokenQuota is not None else None)
+    except client_access.ClientAccessError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     await audit.log(session, user, "user.create", "user", created.get("id"), created.get("displayName") or body.username,
                     {"orgId": body.orgId, "roleId": body.roleId})
     return created
@@ -381,7 +384,10 @@ async def update_user(
         ).values(auth_state="pending", auth_version=Client.auth_version + 1,
                  activated_at=None, revoked_at=None).returning(Client.id)
             .execution_options(synchronize_session=False))).all())
-    updated = await rbac.update_user(session, uid, patch)
+    try:
+        updated = await rbac.update_user(session, uid, patch)
+    except client_access.ClientAccessError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     if client_ids:
         await device_connections.disconnect_many(client_ids)
     await audit.log(session, user, "user.update", "user", uid, target.display_name or target.username,
