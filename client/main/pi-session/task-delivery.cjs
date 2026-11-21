@@ -32,7 +32,7 @@ async function capture(handle, outcome, diagnosticScope = {}, {requiresFiles = f
     item?.path && !item.processEvidence && item.primary !== false &&
     (!item.pluginDraft || item.skillPackage && /\.skill$/i.test(item.name || item.relative || item.path)));
   if (outcome === 'completed' && (paths?.required.size || paths?.named.size)) {
-    const extra = require('./task-output-paths.cjs').extraRoots(snapshot, items, paths, handle.cwd, diagnosticScope.turnId);
+    const extra = await require('./task-output-paths.cjs').extraRoots(snapshot, items, paths, handle.cwd, diagnosticScope.turnId);
     if (extra.length) {
       snapshot = {...snapshot, items: [...extra, ...snapshot.items]};
       items = [...items, ...extra];

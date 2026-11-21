@@ -3,6 +3,7 @@
 const contract = require('../conversation/delivery-contract');
 const {safeRelative} = require('../conversation/delivery-package');
 const path = require('node:path');
+const {realpath} = require('node:fs/promises');
 const {withJournal} = require('./outputs');
 
 function pathKey(name) {
@@ -56,7 +57,7 @@ function outputPaths(outputContract, texts) {
   return {required, named};
 }
 
-function extraRoots(snapshot, selected, {required, named}, cwd, turnId) {
+async function extraRoots(snapshot, selected, {required, named}, cwd, turnId) {
   if (!['inferred', 'manifest'].includes(snapshot?.delivery?.source)) return [];
   if (selected.some(file => !file.artifactId)) return [];
   const chosen = new Set(selected.map(file => filePath(file.relative)));
@@ -75,8 +76,13 @@ function extraRoots(snapshot, selected, {required, named}, cwd, turnId) {
   // Only the completed journal for this exact turn and workspace can then
   // establish which scanned files changed. Packaging rechecks their hashes.
   const scan = snapshot.got, journal = scan?.fileChanges;
-  const files = turnId && journal?.turnId === turnId && journal.cwd && cwd &&
-    path.relative(cwd, journal.cwd) === '' ? withJournal(scan, journal).files : scan?.files;
+  // The journal records the filesystem's canonical root, while the session
+  // may have been opened through a directory alias (e.g. a Windows junction).
+  let files = scan?.files;
+  if (turnId && journal?.turnId === turnId && !journal.truncated && journal.cwd && cwd) {
+    const root = await realpath(cwd).catch(() => null);
+    if (root && path.relative(root, journal.cwd) === '') files = withJournal(scan, journal).files;
+  }
   return (files || []).filter(file => {
     if (!file.changedInTurn || !file.relative || file.processEvidence || excluded.has(file.path)) return false;
     const key = pathKey(file.relative);
