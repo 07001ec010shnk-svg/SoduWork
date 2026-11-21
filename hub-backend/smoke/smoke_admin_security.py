@@ -41,6 +41,7 @@ AUDIT_EXEMPT = {
     ("POST", "/api/v1/admin/environment-preflight"): "preflight only",
     ("POST", "/api/v1/admin/integrations/{integration_id}/pull-account/test"): "non-persistent probe",
     ("POST", "/api/v1/admin/mcp-servers/probe"): "non-persistent probe",
+    ("POST", "/api/v1/admin/model-providers/test-connection"): "read-only model list probe using draft settings",
     ("POST", "/api/v1/admin/plugins/preflight"): "preflight only",
     ("POST", "/api/v1/admin/plugins/versions/{version_id}/simulate"): "simulation only",
     ("POST", "/api/v1/admin/runners/{runner_id}/probe"): "non-persistent probe",
