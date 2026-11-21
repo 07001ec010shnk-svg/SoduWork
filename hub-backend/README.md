@@ -6,6 +6,16 @@ Command examples use `sh start.sh` on macOS/Linux. On Windows, use `.\start.cmd`
 
 Hub provides identity, authorization, execution governance, plugins, shared materials, and desktop connectivity. It uses FastAPI and asynchronous SQLAlchemy with PostgreSQL; local development can use SQLite.
 
+## Direct device identity
+
+During authenticated sign-in or enrollment, `POST /api/v1/client-auth/peer-identity` registers a P-256 public key and issues a 30-minute mutual TLS certificate. The desktop encrypts the private key using system-protected storage. Hub binds the account, device and registered application role. Schema revision `0093_device_peer_identity` preserves this binding across changes to editable platform metadata and refuses a downgrade that would discard enrolled keys.
+
+HKDF derives a separate certificate authority for peer credentials using the configured `HUB_PUBLIC_URL`. Clients acquire its public certificate during authenticated HTTPS sign-in. Isolated source development also supports loopback HTTP. Rotating `AUTH_SECRET` or changing the public Hub URL changes this authority. A registration or secure-storage failure preserves the existing private key.
+
+The receiving desktop explicitly enables a listener and accepts a short-lived pairing request. Both devices validate their certificates and peer public keys locally. Desktop peers may exchange a user-approved transfer. A paired mobile client may read and continue conversations on its selected desktop. Pairing information, addresses, conversation history and execution grants travel directly between peers. The repository supplies the desktop service for this protocol.
+
+Local sign-out or an account change invalidates current direct requests. Offline peers can continue to accept previously issued certificates until expiry. Renewal requires authenticated sign-in or enrollment. Run `python3 -m unittest test_device_peer_identity test_integrated_migration_history` for certificate and database migration checks. The desktop transport tests use real loopback TLS with synthetic identities.
+
 ## Start locally
 
 For a first session, use `sh start.sh` from the repository root; it creates an isolated database, environment, and administrator.
