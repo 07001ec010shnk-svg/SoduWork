@@ -16,11 +16,9 @@
 
 Works with Pi · OpenCode · DeepSeek Harness · Qwen Code · Kimi Code · Codex Harness · Codex
 
-**[Download SoduWork for Windows](https://github.com/mdiri-ai/SoduWork/releases/latest)**
+**[Windows desktop app](https://github.com/mdiri-ai/SoduWork/releases/latest)** | [Website](https://soduwork.ai) | [Live demo](https://soduwork.ai) | [Documentation](docs/README.md) | [Docs website](https://dev.soduwork.ai) | [Releases](https://github.com/mdiri-ai/SoduWork/releases) | [Discord](https://discord.gg/AXYNrAYHy)
 
-Under **Assets**, download and run `SoduWork-<version>-Setup.exe`. You can install the desktop app without Git, Python or Node.js.
-
-**Run from source** (requires Git, Python 3.12+ and Node.js 22.19+)
+**Run from source** with [Python 3.12+](https://www.python.org/downloads/) and [Node.js 22.19+](https://nodejs.org/). The clone command below also requires [Git](https://git-scm.com/downloads).
 
 ```sh
 git clone https://github.com/mdiri-ai/SoduWork
@@ -32,8 +30,6 @@ cd SoduWork
 | macOS / Linux | `sh start.sh --desktop` |
 | Windows PowerShell | `.\start.cmd --desktop` |
 | Windows Command Prompt | `start.cmd --desktop` |
-
-[Website](https://soduwork.ai) | [Live demo](https://soduwork.ai) | [Documentation](docs/README.md) | [Docs website](https://dev.soduwork.ai) | [Releases](https://github.com/mdiri-ai/SoduWork/releases) | [Discord](https://discord.gg/AXYNrAYHy)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/mdiri-ai/SoduWork)](https://github.com/mdiri-ai/SoduWork/releases)
@@ -96,9 +92,11 @@ cd SoduWork
 
 > SoduWork is in public beta. Try it and tell us what you think, and evaluate it before using it in production.
 
-You need Python 3.12+, Node.js 22.19+ and Git.
+To run from source, install Python 3.12+ and Node.js 22.19+. Use Git to clone the repository or extract a source archive.
 
-From the cloned repository, run `sh start.sh --desktop` on macOS/Linux, `.\start.cmd --desktop` in Windows PowerShell, or `start.cmd --desktop` in Command Prompt.
+From the repository root, run `sh start.sh --desktop` on macOS/Linux, `.\start.cmd --desktop` in Windows PowerShell, or `start.cmd --desktop` in Command Prompt.
+
+If Windows says a command “is not recognized”, check which command it names. For `git`, `python` or `node`, check that the corresponding tool is installed and on `PATH`, then reopen Command Prompt. See the [source setup guide](docs/getting-started.en.md).
 
 The first run installs dependencies, then starts the Hub, the admin console and the desktop client on this computer. Set a password for the `admin` account (12–128 characters) when asked. Then add a model provider under **Model catalog** in the admin console, start a chat in the client and try a small task. Pi is built in.
 
