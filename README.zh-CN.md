@@ -16,6 +16,12 @@
 
 支持 Pi · OpenCode · DeepSeek Harness · Qwen Code · Kimi Code · Codex Harness · Codex
 
+**[下载 Windows 桌面版](https://github.com/mdiri-ai/SoduWork/releases/latest)**
+
+在发布页的 **Assets** 中下载并运行 `SoduWork-<版本号>-Setup.exe`。安装桌面版无需另装 Git、Python 或 Node.js。
+
+**从源码运行**（需要 Git、Python 3.12+ 和 Node.js 22.19+）
+
 ```sh
 git clone https://github.com/mdiri-ai/SoduWork
 cd SoduWork

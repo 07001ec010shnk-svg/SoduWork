@@ -16,6 +16,12 @@
 
 Works with Pi · OpenCode · DeepSeek Harness · Qwen Code · Kimi Code · Codex Harness · Codex
 
+**[Download SoduWork for Windows](https://github.com/mdiri-ai/SoduWork/releases/latest)**
+
+Under **Assets**, download and run `SoduWork-<version>-Setup.exe`. You can install the desktop app without Git, Python or Node.js.
+
+**Run from source** (requires Git, Python 3.12+ and Node.js 22.19+)
+
 ```sh
 git clone https://github.com/mdiri-ai/SoduWork
 cd SoduWork
