@@ -10,11 +10,14 @@ const runtime = require('../main/conversation/artifact-runtime');
 const native = require('../main/conversation/device-history-native.cjs');
 const { setTimeout: delay } = require('node:timers/promises');
 
-function fixture(t) {
+function fixture(t, close) {
   const workRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'history-artifacts-')));
   const taskId = 'chat-abcdef-1234', cwd = path.join(workRoot, 'temp', taskId);
   fs.mkdirSync(cwd, { recursive: true });
-  t.after(() => fs.rmSync(workRoot, { recursive: true, force: true }));
+  t.after(async () => {
+    await close?.();
+    fs.rmSync(workRoot, { recursive: true, force: true });
+  });
   const row = { id: 'runner-native-ref', adapterId: 'opencode', cwd };
   const write = (name, bytes) => {
     const target = path.join(cwd, name);
@@ -105,7 +108,8 @@ test('explicit workspaces require a matching local change receipt or a retained 
 });
 
 test('SQLite history opened by a second local account keeps verified outputs after native cleanup', async t => {
-  const f = fixture(t), app = { getPath: () => f.workRoot }, { identity } = require('./helpers/platform-session-fixture.cjs');
+  let history;
+  const f = fixture(t, () => history?.close()), app = { getPath: () => f.workRoot }, { identity } = require('./helpers/platform-session-fixture.cjs');
   const a = identity(), b = identity('two'); let current = a;
   const archive = path.join(f.workRoot, 'pi-agent', 'sessions', 'one.jsonl');
   fs.mkdirSync(path.dirname(archive), { recursive: true });
@@ -119,8 +123,7 @@ test('SQLite history opened by a second local account keeps verified outputs aft
   const session = { historyEntry: async () => fs.existsSync(archive) ? { ok: true, entry: row } : { ok: false, notFound: true },
     archivedConversation: async () => null, findBySessionId: () => null };
   const store = require('../main/conversation/replica-store.cjs').create(path.join(f.workRoot, 'history.sqlite'));
-  const history = require('../main/conversation/shared-history.cjs').create({ app, session, store, identityOf: () => current });
-  t.after(() => history.close());
+  history = require('../main/conversation/shared-history.cjs').create({ app, session, store, identityOf: () => current });
   await history.register([row]);
   const target = f.write('report.md', 'result'), name = path.basename(target), bytes = fs.readFileSync(target);
   const digest = crypto.createHash('sha256').update(bytes).digest('hex');
