@@ -16,9 +16,7 @@
 
 支持 Pi · OpenCode · DeepSeek Harness · Qwen Code · Kimi Code · Codex Harness · Codex
 
-**[Windows 桌面版](https://github.com/mdiri-ai/SoduWork/releases/latest)** | [官网](https://soduwork.ai) | [在线体验](https://soduwork.ai) | [中文文档](docs/README.zh-CN.md) | [在线文档](https://dev.soduwork.ai/zh-CN/) | [Releases](https://github.com/mdiri-ai/SoduWork/releases) | [Discord](https://discord.gg/AXYNrAYHy)
-
-**从源码运行**需要 [Python 3.12+](https://www.python.org/downloads/) 和 [Node.js 22.19+](https://nodejs.org/)。下面的克隆命令还需要 [Git](https://git-scm.com/downloads)。
+**从源码运行**
 
 ```sh
 git clone https://github.com/mdiri-ai/SoduWork
@@ -30,6 +28,10 @@ cd SoduWork
 | macOS / Linux | `sh start.sh --desktop` |
 | Windows PowerShell | `.\start.cmd --desktop` |
 | Windows 命令提示符 | `start.cmd --desktop` |
+
+源码启动推荐使用 [Python 3.12.x](https://www.python.org/downloads/) 和 [Node.js 22.x](https://nodejs.org/)（22.19.0 及以上的 22 系列版本）。克隆命令需要 [Git](https://git-scm.com/downloads)。
+
+**[Windows 桌面版](https://github.com/mdiri-ai/SoduWork/releases/latest)** | [官网](https://soduwork.ai) | [在线体验](https://soduwork.ai) | [中文文档](docs/README.zh-CN.md) | [在线文档](https://dev.soduwork.ai/zh-CN/) | [Releases](https://github.com/mdiri-ai/SoduWork/releases) | [Discord](https://discord.gg/AXYNrAYHy)
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/mdiri-ai/SoduWork)](https://github.com/mdiri-ai/SoduWork/releases)
@@ -92,7 +94,7 @@ cd SoduWork
 
 > SoduWork 处于公开测试阶段，欢迎试用并反馈；用于生产环境前请先充分评估。
 
-从源码运行需要 Python 3.12+ 和 Node.js 22.19+。可以用 Git 克隆仓库，也可以解压源码包。
+可以用 Git 克隆仓库，也可以解压源码包。环境要求见[源码启动指南](docs/getting-started.md)。
 
 在源码根目录下，macOS/Linux 运行 `sh start.sh --desktop`，Windows PowerShell 运行 `.\start.cmd --desktop`，命令提示符运行 `start.cmd --desktop`。
 
