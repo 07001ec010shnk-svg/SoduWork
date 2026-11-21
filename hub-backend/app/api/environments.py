@@ -463,7 +463,10 @@ async def create_target(
     user: User = Depends(require_perm("environment.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    await _repo(session, user, str(body.get("repoId") or ""))
+    for key in ("repoId", "environmentId"):
+        if not isinstance(body.get(key), str) or not body[key].strip():
+            raise HTTPException(status_code=400, detail=f"{key} is required")
+    await _repo(session, user, body["repoId"].strip())
     try:
         row = await svc.save_target(session, body)
     except ValueError as e:
