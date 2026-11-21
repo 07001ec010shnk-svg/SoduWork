@@ -11,7 +11,12 @@ const fileTools = require('../main/conversation/device-transfer-files.cjs');
 
 async function scenario(t) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(),'device-transfer-test-'));
-  t.after(()=>fs.rm(root,{recursive:true,force:true}));
+  const state = { handle:null, reject:false, loseAck:false, imports:0, expectedFiles:['kept.txt'] };
+  t.after(async () => {
+    state.A?.close();
+    state.B?.close();
+    await fs.rm(root, { recursive: true, force: true });
+  });
   const workspace = path.join(root,'work');
   await fs.mkdir(workspace);
   await fs.writeFile(path.join(workspace,'kept.txt'),'finished action');
@@ -20,7 +25,6 @@ async function scenario(t) {
     session:Buffer.from(JSON.stringify({typ:'device',cid:device,uid:'owner'})).toString('base64url')+'.fixture'});
   const keys = Object.fromEntries(['A','B'].map(device=>[device,crypto.generateKeyPairSync('ec',{namedCurve:'prime256v1'})]));
   const input = {sessionId:sid,targetDeviceId:'B'};
-  const state = { handle:null, reject:false, loseAck:false, imports:0, expectedFiles:['kept.txt'] };
   const bundle = {schema:'soduwork.device-history/v1',conversation:{id:sid,taskId:'same-task',title:'Work',creator:{account:'owner',hub:'https://example.invalid'}},
     snapshot:{messages:[{role:'user',text:'continue'}],tools:[{id:'first-action',state:'completed'}]},
     coverage:{complete:true}};
@@ -62,7 +66,6 @@ async function scenario(t) {
   state.handle = {sessionId:sid,cwd:workspace,adapterId:'pi',snapshot:()=>({}),
     close:async()=>{state.handle=null;return true;}};
   state.A = create(deps.A); state.B = create(deps.B);
-  t.after(()=>{state.A.close();state.B.close();});
   return {state,input,bundle,reopen:()=>{state.A.close();state.B.close();state.A=create(deps.A);state.B=create(deps.B);}};
 }
 
