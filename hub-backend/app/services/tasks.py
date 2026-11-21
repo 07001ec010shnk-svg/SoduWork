@@ -529,7 +529,7 @@ async def create_task(
     t = models.Task(
         **identity,
         owner_client_id=owner_id,
-        title=(data.get("title") or "").strip()[:500] or "未命名",
+        title=(data.get("title") or "")[:500] or "未命名",
         source=(data.get("source") or "")[:500],
         note=(data.get("note") or "")[:50000],
         status=status,

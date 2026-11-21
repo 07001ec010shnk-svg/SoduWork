@@ -50,9 +50,10 @@ async def mark(session: AsyncSession, task: models.Task, status: str, *,
         task_events.record(session, task.id, "status.reset_from_done",
                            {"from": "done", "to": status, "reason": why or "撤回验收"}, actor="SoduWork")
     # #698, #699, #700: 已取消任务不可重新规划/执行/提交
-    if task.status == "cancel" and status != task.status:
+    # Allow cancel->todo for restore; block cancel->doing/planning.
+    if task.status == "cancel" and status == "doing":
         return False
-    # #672: done需求不可重新开工
+    # #672: done需求不可重新开工（引擎也不允许done->doing）
     if task.status == "done" and status == "doing":
         return False
     if status == "doing" and getattr(task, "archived_at", None):
