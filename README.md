@@ -12,6 +12,10 @@
 
 **A chat ends with an answer. A SoduWork request ends when the person who asked signs off.**
 
+<a href="https://trendshift.io/repositories/350333?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-350333" target="_blank" rel="noopener noreferrer">
+  <img src="https://trendshift.io/api/badge/trendshift/repositories/350333/daily" alt="mdiri-ai/SoduWork — #1 GitHub Trending Repository" width="250" height="55" />
+</a>
+
 **Multi-harness · Multi-agent · Self-hosted**
 
 Works with Pi · OpenCode · DeepSeek Harness · Qwen Code · Kimi Code · Codex Harness · Codex
