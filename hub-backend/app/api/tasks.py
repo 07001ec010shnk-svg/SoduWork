@@ -9,11 +9,12 @@ from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import get_settings
+from ..pagination import PageQuery
 from ..db import get_session
-from ..deps import current_ai_client, authenticated_client, current_client, enforce_client_quota
+from ..deps import current_ai_client, authenticated_client, current_client, enforce_client_access, enforce_client_quota
 from ..models import Client, Task, User
 from ..realtime import hub
-from ..schemas import BatchUpdate, TaskCreate, TaskUpdate, task_to_api
+from ..schemas import BatchUpdate, TaskCreate, TaskSyncCreate, TaskUpdate, task_to_api
 from ..services import audit, task_access
 from ..services import task_access as _task_access
 from ..services import tasks as svc
@@ -22,6 +23,7 @@ from ..services.task_dispatch_context import (
     _attach_dev_flow, _attach_skills, _fill_repo_wire, _settle_work_dir,
     _aio_thread, _link_task_repo, _stale_runner_hint, _push_task,
 )
+from ..timestamps import iso_utc
 
 router = APIRouter(prefix="/api/v1", tags=["tasks"])
 log = logging.getLogger("uvicorn.error")
@@ -103,8 +105,9 @@ router.include_router(personal_schedule_router)
 
 
 @router.get("/tasks")
-async def get_tasks(client: Client = Depends(current_client), session: AsyncSession = Depends(get_session)):
-    return await svc.list_tasks(session, client.id, include_related=True)
+async def get_tasks(client: Client = Depends(current_client), session: AsyncSession = Depends(get_session),
+                    window: PageQuery = None):
+    return await svc.list_tasks(session, client.id, include_related=True, page=window)
 
 
 @router.post("/tasks")
@@ -222,7 +225,7 @@ async def get_delivery_state(
         "blockers": truth.get("blockers") or [],
         "approvals": approvals,
         "outputContract": contract,
-        "reviewedAt": task.reviewed_at.isoformat() if task.reviewed_at else None,
+        "reviewedAt": iso_utc(task.reviewed_at) if task.reviewed_at else None,
         "engineering": {
             "projectId": getattr(task, "project_id", None),
             "repoId": str(getattr(task, "repo_id", "") or "").strip(),
@@ -237,7 +240,7 @@ async def get_delivery_state(
 
 @router.put("/tasks/{tid}")
 async def put_task(
-    tid: str, body: TaskCreate,
+    tid: str, body: TaskSyncCreate,
     client: Client = Depends(current_client), session: AsyncSession = Depends(get_session),
 ):
     """Create tasks idempotently using client-generated IDs so offline replay cannot create
@@ -308,7 +311,14 @@ async def get_daily_report(
     u = await _actor_user(session, client)
     if u is None:
         raise HTTPException(status_code=400, detail="本 SoduWork 未绑定用户，请让管理员分配归属")
+    from datetime import date as _date
     day = (date or "").strip() or dr.today_str()
+    try:
+        parsed_date = _date.fromisoformat(day)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="非法日期，请使用 YYYY-MM-DD 格式")
+    if parsed_date > _date.today():
+        raise HTTPException(status_code=400, detail="日报只能查询今天或之前的日期")
     from sqlalchemy import select as _sel
     from ..models import DailyReport
     rep = (await session.execute(
@@ -331,7 +341,14 @@ async def gen_daily_report(
     u = await _actor_user(session, client)
     if u is None:
         raise HTTPException(status_code=400, detail="本 SoduWork 未绑定用户，请让管理员分配归属")
+    from datetime import date as _date
     day = (body.get("date") or "").strip() or dr.today_str()
+    try:
+        parsed_date = _date.fromisoformat(day)
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="非法日期，请使用 YYYY-MM-DD 格式")
+    if parsed_date > _date.today():
+        raise HTTPException(status_code=400, detail="不允许为未来日期生成日报")
     rep = await dr.generate_for(session, u, day, notify=False)
     if rep is None:
         raise HTTPException(status_code=400, detail="今天还没有进展记录，先在需求里写一条再生成")
@@ -568,7 +585,13 @@ async def conversation_task_turn(
     if task is None:
         raise HTTPException(404, "需求不存在或不属于当前设备")
     if str(body.get("action") or "prepare") not in {"complete", "fail", "wait", "cancel"}:
-        await enforce_client_quota(session, client)
+        if conversation_turns.receipt_model_source(task, body) == "device":
+            # This endpoint records an authenticated native queue receipt. It
+            # cannot issue model tickets or launch a remote executor; those
+            # independent entry points retain their model quota admission.
+            await enforce_client_access(session, client)
+        else:
+            await enforce_client_quota(session, client)
     actor = await _actor_user(session, client)
     receipt = await conversation_turns.apply(session, task, body, _actor_label(actor, client))
     await session.commit()
@@ -630,9 +653,13 @@ async def conversation_task_delivery(
         if categories:
             prepared_categories[name] = categories[index]
     try:
+        from ..services.model_reference_privacy import is_local_model_reference
+        # Legacy desktops may include a device-only reference on delivery receipts.
+        # Keep the deliverable while excluding that reference from Hub persistence.
+        provider = "" if is_local_model_reference(model) else model[:80]
         result = await conversation_turns.deliver_artifacts(
             session, task, conversation_id=conversation_id[:180],
-            turn_id=turn_id[:120], provider=model[:80], files=prepared,
+            turn_id=turn_id[:120], provider=provider, files=prepared,
             categories=prepared_categories,
             outcome=normalized_outcome)
     except HTTPException:
@@ -714,8 +741,9 @@ async def ai_plan_task(
     from ..services import ai_exec
     from ..services import task_events as ev
     t = await _my_task(session, client, tid)
-    if t.status == "done":
-        raise HTTPException(status_code=400, detail="需求已完成，不用再出计划")
+    # #698: 已取消任务不可重新规划
+    if t.status in ("done", "cancel"):
+        raise HTTPException(status_code=400, detail="需求已关闭，不能再出计划")
     ctx = await ai_exec.load(session, force=True)
     aid = str(body.get("assigneeId") or "").strip()
     atype = str(body.get("assigneeType") or "").strip().lower()
@@ -1012,6 +1040,11 @@ async def put_milestones(
         m.agent_type = str(it.get("agentType") or "")[:16]
         m.model = str(it.get("model") or "")[:120]
         st = str(it.get("status") or "").strip()
+        # #664: skipped里程碑不可验收
+        # #665: skipped里程碑不可重新规划为doing/done
+        if m.status == "done" and st == "skipped":
+            # 已验收的里程碑不能被降级为skipped
+            raise HTTPException(status_code=400, detail=f"「{m.title}」已经验收通过，不能标记为不做")
         # Accept only user-editable states: skipped or planned.
         # Execution determines doing, done, and failed; clients cannot assign those results directly.
         # Preserve current state for other values instead of defaulting to planned.
@@ -1024,6 +1057,9 @@ async def put_milestones(
         keep.add(m.id)
     for mid, m in old.items():
         if mid not in keep:
+            # #662: 已验收(done)里程碑不可删除
+            if m.status == "done":
+                raise HTTPException(status_code=400, detail=f"「{m.title}」已经验收通过，不能删除")
             await session.delete(m)
     rows = await _load_milestones(session, tid)
     me = await _actor_user(session, client)
@@ -1131,6 +1167,11 @@ async def run_milestone(
     from ..services import ai_exec
     from ..services import task_events as ev
     t = await _my_task(session, client, tid)
+    # #672: Block re-opening of done tasks
+    # #699: 已取消任务不可执行
+    # #700: 已取消任务不可提交
+    if t.status in ("done", "cancel"):
+        raise HTTPException(status_code=409, detail="已完成或已取消的需求不能再执行里程碑")
     ref = await _dispatch_ref(session, tid)
     if not ref:
         raise HTTPException(status_code=409, detail="这条需求还没交给 AI，先让它出个计划")
@@ -1224,7 +1265,13 @@ async def milestone_verdict(
     # False acceptance can also close unresolved source issues in a batch.
     # Use rounds to establish that an execution result exists for review.
     # Use skipped to omit a milestone; acceptance is not a substitute for skipping.
-    if (m.rounds or 0) <= 0 and m.status == "planned":
+    # #664: skipped milestones must not be accepted and back-close the source requirement.
+    # #664: 未执行的skipped里程碑不可验收（已执行的skipped可以验收）
+    if (m.rounds or 0) <= 0:
+        if m.status == "skipped":
+            raise HTTPException(
+                status_code=409,
+                detail=f"「{m.title}」已标记为不执行（skipped），不可验收。要验收请先取消跳过并运行该里程碑")
         raise HTTPException(
             status_code=409,
             detail=f"「{m.title}」还没跑过，没有结果可验。要先跑这一条；不做就标「不做」，别用验收通过跳过它")
@@ -1416,8 +1463,6 @@ async def ai_session_task(
     limit: int = Query(default=400, ge=1, le=1000),
 ):
     """Behavior and constraints for this operation."""
-    import asyncio as _aio
-
     from ..services import ai_exec, execution_sessions
     if not isinstance(limit, int):
         limit = 400
@@ -1456,8 +1501,16 @@ async def ai_session_task(
             return {"ok": False, "items": [], "error": "这条需求还没交给 AI"}
         d = ev_row.detail or {}
         ref = d.get("ref") or d.get("issueId", "")
+        if not d.get("runnerId"):
+            from ..automation_models import ExecutionSession
+            from sqlalchemy import select
+            owner = await session.scalar(select(ExecutionSession).where(
+                ExecutionSession.task_id == tid, ExecutionSession.ref == ref))
+            if owner and owner.runner_id:
+                d = {**d, "runnerId": owner.runner_id}
     ctx = await ai_exec.load(session)
-    live = await _aio.to_thread(ai_exec.session_sync, ctx, ref, int(since or 0))
+    live = await ai_exec.read_session(ctx, ref, int(since or 0),
+        runner_id=str(d.get("runnerId") or ""), limit=limit)
     if live.get("ok"):
         # New Runners push events; older Runners and backend-local execution use read-through persistence during upgrades.
         await execution_sessions.ingest_live_snapshot(session, t, ref, live, d)
@@ -1913,7 +1966,7 @@ async def submit_task_for_review(
     """
     from ..services import release_control
     from ..services import task_requirements
-    from ..services import task_access
+    from ..services import task_notifications
     from ..services import task_events as ev
 
     # Serialize manual submission with execution starts and approval decisions.
@@ -1958,10 +2011,12 @@ async def submit_task_for_review(
         }, actor=who)
     ev.record(session, tid, "artifact.submitted_for_review",
               {"requestId": request.id, "versionId": artifact.id, "note": note}, actor=who)
+    # Commit the notification with the review, but deliver it outside this HTTP
+    # request. Slow devices must not turn an accepted submission into a timeout.
+    task_notifications.enqueue(session, task, "task.updated")
     await session.commit()
     await session.refresh(task)
     api = await svc.task_to_api_live(session, task)
-    await task_access.publish_task(session, task, "task.updated", api)
     return {"ok": True, "request": release_control.request_api(request), "task": api}
 
 
@@ -1984,7 +2039,11 @@ async def add_task_comment(
 ):
     """Post a comment and notify mentioned colleagues; body contains body and mentions entries."""
     t = await _view_task(session, client, tid)
-    text = (body.get("body") or "").strip()
+    raw = body.get("body")
+    if raw is not None and not isinstance(raw, str):
+        raise HTTPException(status_code=422, detail="评论正文必须是文本",
+                            headers={"X-Error-Code": "hub.input.comment_type"})
+    text = (raw or "").strip()
     mentions = body.get("mentions") or []
     if not text:
         raise HTTPException(status_code=400, detail="评论不能为空")
