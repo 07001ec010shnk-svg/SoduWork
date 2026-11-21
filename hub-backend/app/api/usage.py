@@ -1,7 +1,7 @@
 """Read-only usage APIs for Runner load, tokens, duration, and task accounting. Administrators
 follow visibility scope; clients see only their own tasks.
 """
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,6 +57,9 @@ async def admin_usage_overview(
     user_id: str = "",
     source: str = "",
     agent: str = "",
+    detail: Literal["all", "anomalous", "unpriced"] = "all",
+    page: Annotated[int, Query(ge=1)] = 1,
+    exclude_anomalies: bool = False,
     user: User = Depends(require_perm("client.view")),
     session: AsyncSession = Depends(get_session),
 ):
@@ -66,7 +69,8 @@ async def admin_usage_overview(
         raise HTTPException(status_code=404, detail="用户不在可见范围")
     return await usage_analytics.consistent_overview(
         session, days=days, user_ids=visible_users, user_id=user_id,
-        source_type=str(source or ""), agent_key=str(agent or ""))
+        source_type=str(source or ""), agent_key=str(agent or ""), detail=detail,
+        page=page, exclude_anomalies=exclude_anomalies)
 
 
 @router.get("/admin/usage/runners")
