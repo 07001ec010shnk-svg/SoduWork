@@ -256,7 +256,7 @@ python3 e2e_runner_tls.py --output /absolute/evidence/directory
   - `GET/POST /api/v1/tasks`、`GET/PATCH/DELETE /api/v1/tasks/{id}`
   - `POST /api/v1/tasks/batch-update`、`POST /api/v1/tasks/clear-done`（只清 done）
   - `POST /api/v1/tasks/{id}/agent/{run|retry|takeover}`
-  - `GET/PUT /api/v1/config`
+  - `GET /api/v1/config?withRevision=true` 返回当前设备设置、可写字段 `_configKeys` 和版本 `_configRevision`。向 `PUT /api/v1/config` 提交改动字段及读取时的版本。未知字段或无效值返回 422，版本过期返回 409，覆盖已有值但缺少版本返回 428。
   - `POST /api/v1/clients/enroll`（登记/心跳，激活后签发短期会话）
   - `WS /api/v1/ws?device=<设备ID>&session=<短期会话>`（实时推送）
 - 管理端

@@ -1,5 +1,6 @@
 (function (global) {
   const messages = {
+    "设置已在其他窗口更新，请核对后重新保存。": "Settings changed in another window. Review them before saving again.",
     "hub.input.pages": "Choose one pagination mode: limit/offset or page/pageSize.",
     "hub.input.inbox": "Team inbox tasks have no recipient. To send a task to someone, assign it to a member.",
     "hub.input.tier": "This environment tier is not supported.",
@@ -215,6 +216,7 @@
   "这一轮没跑成（{reason}）": "This turn failed ({reason})",
   "打不开对话（{reason}）": "Could not open chat ({reason})",
   "开不了对话（{reason}）": "Could not open chat ({reason})",
+  "本轮执行失败，请检查工作目录和执行底座后重试。": "This turn failed. Check the working directory and runtime, then retry.",
   "需求执行失败（{reason}）": "Issue execution failed ({reason})",
   "浏览网页": "Browse the web",
   "文件处理": "File operations",

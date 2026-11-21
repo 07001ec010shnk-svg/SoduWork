@@ -10,6 +10,7 @@ from .. import models
 from ..pagination import Page, list_result, select_rows
 from ..auth import hash_password
 from ..config import get_settings
+from . import catalog_names
 from ..permissions import ALL_KEYS, valid_keys
 from ..schemas import AdminName, _ms
 
@@ -186,7 +187,7 @@ async def scoped_user_ids(session: AsyncSession, scope: set[str] | None) -> set[
 
 # Organization structure.
 
-_org_name = TypeAdapter(AdminName)
+_admin_name = TypeAdapter(AdminName)
 
 
 async def _lock_org_writes(session: AsyncSession) -> None:
@@ -201,7 +202,7 @@ async def _lock_org_writes(session: AsyncSession) -> None:
 async def _available_org_name(session: AsyncSession, name: str, parent_id: str | None,
                               exclude_id: str | None = None) -> str:
     try:
-        name = _org_name.validate_python(name)
+        name = _admin_name.validate_python(name)
     except ValidationError as exc:
         # Moving a legacy node can supply its stored name instead of an API field.
         raise OrgMutationError("invalid_name") from exc
@@ -305,7 +306,9 @@ async def create_role(session: AsyncSession, name: str, permissions: list[str]) 
     unknown = sorted(set(str(key) for key in (permissions or [])) - set(ALL_KEYS))
     if unknown:
         raise ValueError("未知权限：" + ", ".join(unknown))
-    r = models.Role(name=name or "未命名角色", permissions=valid_keys(permissions))
+    name = _admin_name.validate_python(name)
+    await catalog_names.require_available(session, models.Role, name, "角色名已存在")
+    r = models.Role(name=name, permissions=valid_keys(permissions))
     session.add(r)
     await session.commit()
     await session.refresh(r)
@@ -319,6 +322,9 @@ async def update_role(session: AsyncSession, rid: str, name: str | None, permiss
     if r.is_system:
         raise ValueError("系统内置角色不允许修改")
     if name is not None:
+        name = _admin_name.validate_python(name)
+        if name != r.name:
+            await catalog_names.require_available(session, models.Role, name, "角色名已存在", exclude_id=rid)
         r.name = name
     if permissions is not None:
         unknown = sorted(set(str(key) for key in permissions) - set(ALL_KEYS))
@@ -330,8 +336,15 @@ async def update_role(session: AsyncSession, rid: str, name: str | None, permiss
     return role_to_api(r)
 
 
+async def lock_role_reference(session: AsyncSession, rid: str):
+    # A concurrent role deletion must observe the new assignment or complete first.
+    if session.get_bind().dialect.name == "sqlite":
+        await session.execute(update(models.Role).where(models.Role.id == rid).values(id=models.Role.id))
+    return await session.get(models.Role, rid, with_for_update=True, populate_existing=True)
+
+
 async def delete_role(session: AsyncSession, rid: str) -> dict:
-    r = await session.get(models.Role, rid)
+    r = await lock_role_reference(session, rid)
     if r is None:
         return {"ok": False, "reason": "not_found"}
     if r.is_system:
@@ -510,7 +523,9 @@ async def list_domains(session: AsyncSession, *, page: Page | None = None):
 
 async def create_domain(session: AsyncSession, name: str, sort: int = 0) -> dict:
     from uuid import uuid4
-    d = models.Domain(id="dom_" + uuid4().hex[:10], name=name or "未命名领域", sort=sort)
+    name = _admin_name.validate_python(name)
+    await catalog_names.require_available(session, models.Domain, name, "领域名已存在")
+    d = models.Domain(id="dom_" + uuid4().hex[:10], name=name, sort=sort)
     session.add(d)
     await session.commit()
     await session.refresh(d)
@@ -522,6 +537,9 @@ async def update_domain(session: AsyncSession, did: str, name: str | None, sort:
     if d is None:
         return None
     if name is not None:
+        name = _admin_name.validate_python(name)
+        if name != d.name:
+            await catalog_names.require_available(session, models.Domain, name, "领域名已存在", exclude_id=did)
         d.name = name
     if sort is not None:
         d.sort = sort

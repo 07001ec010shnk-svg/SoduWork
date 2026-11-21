@@ -90,6 +90,18 @@ class AdminProjectRouterTests(unittest.IsolatedAsyncioTestCase):
         await self.http.aclose()
         await self.engine.dispose()
 
+    async def test_creation_and_rename_reject_duplicate_names_within_owner_org(self):
+        base = {"name": "Project", "ownerUserId": "owner"}
+        for extra, status in (({"key": "ignored"}, 422), ({}, 409)):
+            result = await self.request("POST", "/projects", json={**base, **extra})
+            self.assertEqual(result.status_code, status, result.text)
+        created = await self.request("POST", "/projects", json={**base, "name": "Other"})
+        self.assertEqual(created.status_code, 200, created.text)
+        renamed = await self.request("PUT", "/projects/" + created.json()["id"], json={"name": "project"})
+        self.assertEqual(renamed.status_code, 409, renamed.text)
+        separate = await self.request("POST", "/projects", json={**base, "ownerUserId": "manager"})
+        self.assertEqual(separate.status_code, 200, separate.text)
+
     async def request(self, method, path, who="manager", **kwargs):
         headers = {"Authorization": "Bearer " + sign_token(who, 1)} if who else {}
         return await self.http.request(method, "/api/v1/admin" + path, headers=headers, **kwargs)
