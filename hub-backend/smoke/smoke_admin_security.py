@@ -35,6 +35,7 @@ AUDIT_EXEMPT = {
     ("POST", "/api/v1/admin/me/inbox/{tid}/claim"): "authenticated self-service claim",
     ("POST", "/api/v1/admin/alert-config/test"): "non-persistent probe",
     ("POST", "/api/v1/admin/capabilities/mcp/preflight"): "preflight only",
+    ("POST", "/api/v1/admin/capabilities/policy/preview"): "read-only Skill policy impact preview",
     ("POST", "/api/v1/admin/capabilities/skills/preflight"): "preflight only",
     ("POST", "/api/v1/admin/deployment-targets/{target_id}/probe"): "non-persistent probe",
     ("POST", "/api/v1/admin/dev-flow/preview"): "preview only",

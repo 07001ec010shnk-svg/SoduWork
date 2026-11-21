@@ -18,6 +18,10 @@ In Operations, open the pending human review count to see the requests in your s
 
 Open a recent failure to inspect its requirement or the failed node's logs. After correcting the cause, operators with run permission can retry an eligible node. For AI nodes that support model selection, the operator can select another available model for that retry. The original attempt stays in the run history.
 
+## Reviewing Skill access
+
+In the capability catalog, bundled Skills show a summary in the interface language. Expand a summary to read the author's original description. Use the switch to stage a policy change. **Save access policy** lists the Skills to add and remove. It estimates the impact from active devices' Skill selections and their owners' departments. A device matching several changes counts once. Confirm to apply the policy on the next execution, or cancel to return to the draft.
+
 ## Investigating usage and cost
 
 On **Usage and Cost**, open the anomaly count to see the original record IDs and exact token counts, including records older than the latest 30. The dashboard flags daily ledger records above one billion tokens. Exclude those records to compare the remaining trend and usage by scenario.
