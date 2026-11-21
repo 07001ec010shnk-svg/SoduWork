@@ -1165,6 +1165,7 @@ async def run_milestone(
     from ..services import ai_exec
     from ..services import task_events as ev
     t = await _my_task(session, client, tid)
+    # #672: Block re-opening of done tasks
     # #699: 已取消任务不可执行
     # #700: 已取消任务不可提交
     if t.status in ("done", "cancel"):
@@ -1262,12 +1263,13 @@ async def milestone_verdict(
     # False acceptance can also close unresolved source issues in a batch.
     # Use rounds to establish that an execution result exists for review.
     # Use skipped to omit a milestone; acceptance is not a substitute for skipping.
+    # #664: skipped milestones must not be accepted and back-close the source requirement.
     # #664: 未执行的skipped里程碑不可验收（已执行的skipped可以验收）
-    if m.status == "skipped" and (m.rounds or 0) <= 0:
-        raise HTTPException(
-            status_code=409,
-            detail=f"「{m.title}」已标记为不做且未执行，请先恢复为「计划」状态")
     if (m.rounds or 0) <= 0:
+        if m.status == "skipped":
+            raise HTTPException(
+                status_code=409,
+                detail=f"「{m.title}」已标记为不执行（skipped），不可验收。要验收请先取消跳过并运行该里程碑")
         raise HTTPException(
             status_code=409,
             detail=f"「{m.title}」还没跑过，没有结果可验。要先跑这一条；不做就标「不做」，别用验收通过跳过它")
