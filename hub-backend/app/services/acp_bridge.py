@@ -671,14 +671,11 @@ class AcpBridge:
             return
         if kind == "plan":
             self._flush_message()
-            for entry in update.get("entries") or []:
-                if not isinstance(entry, dict):
-                    continue
-                title = str(entry.get("content") or "").strip()
-                if title:
-                    _emit({"type": "tool_use", "part": {
-                        "tool": "Plan", "state": {
-                            "input": {"command": title[:300]}}}})
+            entries = [str(entry.get("content") or "").strip()[:300] for entry in update.get("entries") or []
+                       if isinstance(entry, dict)]
+            text = "\n".join(filter(None, entries))
+            if text:
+                _emit({"type": "plan", "part": {"text": text}})
             return
         if kind == "tool_call":
             self._flush_message()
@@ -699,8 +696,11 @@ class AcpBridge:
             _emit({"type": "tool_use", "part": {"tool": title, "callId": tool_id,
                    "toolKind": str(update.get("kind") or "")[:40],
                    "state": {"input": args}}})
-            return
-        if kind == "tool_call_update":
+            # Codex ACP's image reporter emits its terminal status on the initial
+            # notification and never sends a second update for this call.
+            if self.agent_name not in ("codex", "codex-harness"):
+                return
+        if kind in ("tool_call", "tool_call_update"):
             text = _text(update.get("content"))
             if update.get("status") in ("completed", "failed"):
                 text = self.codex_tool_output.finish(update, text)
