@@ -8,6 +8,8 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
+from pydantic import AwareDatetime
 from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -2097,14 +2099,43 @@ async def delete_integration(iid: str, user: User = Depends(require_perm("integr
 
 # Audit log.
 
+def _audit_filters(action: str | None = None, actor: str | None = None,
+                   since: AwareDatetime | None = None, until: AwareDatetime | None = None):
+    # SQLite stores UTC without an offset; compare the same instants on both databases.
+    try:
+        since = since.astimezone(timezone.utc) if since is not None else None
+        until = until.astimezone(timezone.utc) if until is not None else None
+    except OverflowError:
+        raise HTTPException(422, "时间超出支持范围") from None
+    if since is not None and until is not None and since >= until:
+        raise HTTPException(422, "开始时间必须早于结束时间")
+    return {"action": action, "actor": actor, "since": since, "until": until}
+
+
 @router.get("/audit")
 async def list_audit(
-    action: str | None = None, limit: int = 50, offset: int = 0,
+    filters: dict = Depends(_audit_filters),
+    limit: Annotated[int, Query(ge=0)] = 50, offset: Annotated[int, Query(le=2**63-1)] = 0,
     user: User = Depends(require_perm("audit.view")),
     session: AsyncSession = Depends(get_session),
 ):
     """List audit events for actors in the department subtree; superusers see all events."""
-    return await audit.list_audit(session, user, action=action, limit=min(limit, 200), offset=max(offset, 0))
+    result = await audit.list_audit(session, user, limit=min(limit, 200), offset=max(offset, 0), **filters)
+    return {**result, "environment": settings.soduwork_env.strip().lower()}
+
+
+@router.get("/audit/export.csv")
+async def export_audit(
+    filters: dict = Depends(_audit_filters),
+    user: User = Depends(require_perm("audit.view")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Download every matching event in the same order and scope as the audit list."""
+    chunks = await audit.export_csv(session, user, settings.soduwork_env.strip().lower(), **filters)
+    return StreamingResponse(chunks, media_type="text/csv", headers={
+        "Content-Disposition": 'attachment; filename="audit-log.csv"',
+        "Cache-Control": "no-store",
+    })
 
 
 @router.get("/receipts")
