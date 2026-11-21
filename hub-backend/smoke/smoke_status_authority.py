@@ -152,6 +152,38 @@ async def main():
         chk("authorized reopening records exactly its applied reset",
             len(events) == 1 and events[0].detail == {
                 "from": "done", "to": "todo", "reason": "Authorized fixture reopening"})
+        from app.services import task_rework
+        archived_at = datetime.now(timezone.utc)
+        for name, status, archived in (("archived", "done", archived_at), ("canceled", "cancel", None)):
+            protected = models.Task(id="t-rework-" + name, title="Protected old record",
+                                    status=status, archived_at=archived, owner_client_id="c-sa")
+            s.add(protected)
+            await s.commit()
+            result = await task_rework.resume_after_rejection(
+                s, protected, "Fixture review feedback", wait_for_executor=True)
+            events = list((await s.scalars(select(models.TaskEvent).where(
+                models.TaskEvent.task_id == protected.id,
+                models.TaskEvent.kind == "status.reset_from_done"))).all())
+            chk("rework preserves closed-record protection: " + name,
+                protected.status == status and protected.archived_at == archived)
+            chk("protected rework neither starts a model nor records a reset: " + name,
+                result["started"] is False and not events)
+        rejected = models.Task(id="t-rework-completed", title="Previously completed delivery",
+                               status="done", owner_client_id="c-sa")
+        artifact = am.ArtifactVersion(id="v-rework-completed", task_id=rejected.id,
+            kind="files", state="review", checksum="fixture-checksum",
+            source_ref="conversation:original-executor", manifest={"files": []})
+        s.add_all([rejected, artifact])
+        await s.commit()
+        result = await task_rework.resume_after_rejection(s, rejected, "Revise the original result",
+            artifact_version_id=artifact.id, request_id="q-rework-completed", wait_for_executor=True)
+        pending = rejected.work_routing["reworkPending"]
+        chk("authorized rejection reopens the same completed requirement", rejected.status == "doing")
+        chk("rejection keeps original bindings and waits for the executor",
+            result["started"] is False and result["waitingForExecutor"]
+            and pending["ref"] == artifact.source_ref and pending["versionId"] == artifact.id
+            and pending["requestId"] == "q-rework-completed" and pending["state"] == "awaiting_executor")
+
 
     # Reject new direct status writes that bypass the shared service.
     offenders = []

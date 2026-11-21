@@ -231,6 +231,20 @@ async def acknowledge_continuation(session, task_id, ref, submitted_at, *, actor
     return True
 
 
+async def _return_to_rework(session: AsyncSession, task: models.Task, *, why: str) -> bool:
+    from . import task_status
+
+    # Rework is an authorized reopening, but cannot bypass archival or active
+    # workflow ownership. Use the same allowed transitions as a manual reopen.
+    if getattr(task, "archived_at", None) or task.status == "cancel":
+        return False
+    if task.status == "done" and not await task_status.mark(session, task, "todo", why=why):
+        return False
+    if task.status == "todo":
+        return await task_status.mark(session, task, "doing", why=why)
+    return task.status == "doing"
+
+
 async def resume_after_rejection(
     session: AsyncSession,
     task: models.Task,
@@ -282,7 +296,7 @@ async def resume_after_rejection(
         # model run on the executor's behalf. The existing continuation action
         # consumes this marker, while background retry scans leave it untouched.
         if task.status in ("todo", "done"):
-            await task_status.mark(session, task, "doing", why="验收退回待返修")
+            await _return_to_rework(session, task, why="验收退回待返修")
         task.work_routing = {**dict(task.work_routing or {}), "reworkPending": {
             "state": "awaiting_executor", "feedback": feedback[:1000], "ref": ref,
             "requestId": request_id, "versionId": artifact_version_id, "actor": actor,
@@ -299,7 +313,7 @@ async def resume_after_rejection(
             # Create terminal evidence rather than blindly retrying a missing session.
             # A later manually arranged execution receives the retained review feedback.
             if task.status in ("todo", "done"):
-                await task_status.mark(session, task, "doing", why="验收退回待返修")
+                await _return_to_rework(session, task, why="验收退回待返修")
             return await _record_pending(
                 session, task, "", feedback, version_id=artifact_version_id,
                 request_id=request_id, actor=actor,
@@ -313,7 +327,7 @@ async def resume_after_rejection(
         # A client conversation cannot be resumed by the hub, but the task must
         # become executable so the owner can continue in the old chat or start a new one.
         if task.status in ("todo", "done"):
-            await task_status.mark(session, task, "doing", why="验收退回待返修")
+            await _return_to_rework(session, task, why="验收退回待返修")
         return await _record_pending(
             session, task, ref, feedback, version_id=artifact_version_id,
             request_id=request_id, actor=actor,
@@ -355,7 +369,7 @@ async def resume_after_rejection(
         execution.metadata_ = meta
     if task.status in ("todo", "done"):
         # Starting rework after rejected completed output returns the task to progress.
-        await task_status.mark(session, task, "doing", why="人工退回后自动返修")
+        await _return_to_rework(session, task, why="人工退回后自动返修")
     # Clear the pending-rework marker once continuation actually starts.
     routing = dict(task.work_routing or {})
     if routing.pop("reworkPending", None) is not None:
