@@ -156,6 +156,56 @@ class HubContractTests(unittest.IsolatedAsyncioTestCase):
         await self.request("POST", "admin/work-catalog/professions", 400,
                            json={"orgId": "row-0", "name": "Analyst", "category": "unlisted"})
 
+    async def test_users_and_positions_require_an_existing_department(self):
+        body = {"username": "candidate", "password": "example-password", "orgId": "missing"}
+        self.assertEqual((await self.request("POST", "admin/users", 400, json=body))["detail"], "部门不存在")
+        await self.request("POST", "admin/positions", 400, json={"name": "Analyst", "orgId": "missing"})
+        await self.request("PATCH", "admin/users/row-1", 400, json={"orgId": "missing"})
+        async with self.sessions() as session:
+            self.assertEqual((await session.get(models.User, "row-1")).org_id, "row-1")
+            self.assertIsNone(await session.scalar(select(models.User).where(models.User.username == "candidate")))
+            self.assertIsNone(await session.scalar(select(models.Position)))
+        created = await self.request("POST", "admin/users", json={**body, "orgId": "row-0"})
+        updated = await self.request("PATCH", f"admin/users/{created['id']}", json={"orgId": "row-1"})
+        self.assertEqual(updated["orgId"], "row-1")
+        self.assertEqual((await self.request("POST", "admin/positions",
+                                            json={"name": "Analyst", "orgId": "row-0"}))["orgId"], "row-0")
+
+    async def test_integration_rejects_unsupported_top_level_fields(self):
+        body = {"name": "GitLab", "type": "gitlab"}
+        error = await self.request("POST", "admin/integrations", 422, json={**body, "projectId": "project"})
+        self.assertIn("projectId", error["detail"][0]["loc"])
+        async with self.sessions() as session:
+            self.assertIsNone(await session.scalar(select(models.Integration)))
+        created = await self.request("POST", "admin/integrations", json=body)
+        self.assertEqual(created["name"], "GitLab")
+
+    async def test_environment_selector_uses_registered_tags_in_scope(self):
+        async with self.sessions() as session:
+            session.add_all([
+                automation_models.RunnerNode(id="runner", org_id="row-0", tags=["release"]),
+                automation_models.RunnerNode(id="embedded", client_id="row-0", tags=["client"]),
+                automation_models.RunnerNode(id="elsewhere", org_id="row-1", tags=["other"]),
+                automation_models.RunnerNode(id="personal", org_id="row-0", owner_user_id="row-0", tags=["personal"]),
+                automation_models.RunnerNode(id="retired", org_id="row-0", management_state="retired", tags=["old"]),
+            ])
+            await session.commit()
+        body = {"key": "testing", "orgId": "row-0"}
+        await self.request("POST", "admin/environments", 422, json={**body, "runnerSelector": {"tags": "test"}})
+        env = await self.request("POST", "admin/environments", json={
+            **body, "runnerSelector": {"tags": [" RELEASE ", "release", "client"]}})
+        self.assertEqual(env["runnerSelector"]["tags"], ["release", "client"])
+        path = f"admin/environments/{env['id']}"
+        for selector in ("invalid", {"tags": [True]}, {"runnerIds": "runner"}, {"tags": ["ghost"]},
+                         {"tags": ["other"]}, {"tags": ["personal"]}, {"tags": ["old"]}):
+            with self.subTest(selector=selector):
+                await self.request("PATCH", path, 422, json={"runnerSelector": selector})
+        async with self.sessions() as session:
+            row = await session.get(automation_models.Environment, env["id"])
+            self.assertEqual(row.runner_selector["tags"], ["release", "client"])
+        cleared = await self.request("PATCH", path, json={"runnerSelector": {"tags": []}})
+        self.assertEqual(cleared["runnerSelector"]["tags"], [])
+
     async def test_usage_window_and_enrollment(self):
         for path in ("usage/me", "admin/usage/overview"):
             for days in (-1, 0, 366, 999999):

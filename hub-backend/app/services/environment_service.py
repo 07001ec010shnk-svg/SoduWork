@@ -13,6 +13,7 @@ from .. import automation_models as am
 from .. import models
 from . import catalog_names, approval_policies, preflight_evidence, release_control
 from .environment_contracts import (
+    InvalidRunnerSelector,
     _KEY,
     _SECRET_WORD,
     _text,
@@ -326,6 +327,28 @@ class InvalidEnvironmentTier(ValueError):
     """The requested deployment tier is outside the catalog."""
 
 
+async def _environment_selector(session: AsyncSession, value, org_id: str | None) -> dict:
+    selector = _selector(value)
+    if not selector["tags"]:
+        return selector
+    # Offline registrations retain their tags. Personal and retired nodes do not serve deployments.
+    node = am.RunnerNode
+    query = select(node.tags).where(node.owner_user_id.is_(None), node.management_state != "retired")
+    if org_id:
+        from . import rbac
+        company = await rbac.company_org_ids_for_org(session, org_id)
+        clients = select(models.Client.id).join(models.User, models.Client.user_ref == models.User.id).where(
+            models.User.org_id.in_(company))
+        ancestors = await runner_orgs_for_org(session, org_id)
+        query = query.where(node.client_id.in_(clients) | ((node.client_id == "") & node.org_id.in_(ancestors)))
+    registered = {tag.lower() for tags in await session.scalars(query) for tag in (tags or [])
+                  if isinstance(tag, str)}
+    missing = sorted(set(selector["tags"]) - registered)
+    if missing:
+        raise InvalidRunnerSelector("Runner 标签未注册：" + "、".join(missing))
+    return selector
+
+
 async def save_environment(session: AsyncSession, body: dict, row: am.Environment | None = None
                            ) -> am.Environment:
     creating = row is None
@@ -375,7 +398,7 @@ async def save_environment(session: AsyncSession, body: dict, row: am.Environmen
     if "description" in body:
         row.description = _text(body.get("description"), 400)
     if "runnerSelector" in body:
-        row.runner_selector = _selector(body.get("runnerSelector"))
+        row.runner_selector = await _environment_selector(session, body["runnerSelector"], row.org_id)
     if "healthChecks" in body:
         row.health_checks = _checks(body.get("healthChecks"))
     if "rollback" in body:

@@ -146,6 +146,11 @@ async def _assert_org_in_scope(session: AsyncSession, user: User, org_id: str | 
         raise HTTPException(status_code=403, detail="只能在自己管辖的部门内操作")
 
 
+async def _require_existing_org(session: AsyncSession, org_id: str):
+    if org_id and await session.get(models.OrgUnit, org_id) is None:
+        raise HTTPException(status_code=400, detail="部门不存在")
+
+
 async def _assert_user_in_scope(session: AsyncSession, user: User, target: User):
     if user.is_super:
         return
@@ -320,6 +325,7 @@ async def create_user(
         missing = sorted(domain_ids - found)
         if missing:
             raise HTTPException(status_code=400, detail="业务域不存在：" + ", ".join(missing))
+    await _require_existing_org(session, body.orgId)
     if await rbac.get_user_by_username(session, body.username):
         raise HTTPException(status_code=400, detail="用户名已存在")
     try:
@@ -353,6 +359,7 @@ async def update_user(
     await _assert_user_in_scope(session, user, target)
     if body.orgId is not None:
         await _assert_org_in_scope(session, user, body.orgId)
+        await _require_existing_org(session, body.orgId)
     # An empty roleId is the legacy form used by clients to clear a role.
     # Validate non-empty assignments while preserving that clearing behavior.
     if body.roleId and await rbac.lock_role_reference(session, body.roleId) is None:
@@ -421,6 +428,7 @@ async def create_position(
     if not org_id:
         raise HTTPException(status_code=400, detail="请先选择所属组织")
     await _assert_org_in_scope(session, user, org_id)
+    await _require_existing_org(session, org_id)
     try:
         row = await work_catalog.save_profession(session, body, org_id)
     except ValueError as error:
