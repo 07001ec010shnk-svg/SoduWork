@@ -83,6 +83,8 @@ Local draft extraction honors the model's detected output-token parameter and co
 
 Native history and downloaded conversation replicas retain their account and Hub boundaries when listed, read, restored, or changed, including offline use. Unknown-owner archives require explicit import as separate read-only copies. Cached content does not grant permission to execute a requirement or cloud conversation; resolving a verified native source must preserve its original runtime, model, and permissions.
 
+When a saved reply contains a screenshot gallery, the desktop matches each relative path against the conversation’s file index. A missing or ambiguous match displays an unavailable preview. Verified primary outputs appear with the relevant reply or under **Chat output** when the index identifies only the conversation.
+
 Work-form conversations show their saved runtime selection in the sidebar before execution, labelled “Selected runtime”. Selection changes and reopening preserve this icon independently of actual execution provenance. Legacy drafts without a saved selection do not infer it from their archive format. Run `node e2e/workspace-runtime-label.cjs /absolute/evidence/directory` to check draft updates, history restoration and narrow sidebar layouts in isolated Electron.
 
 Remote notice history and receipt markers use account-scoped IndexedDB transactions and Web Locks when both browser capabilities are available. Local reminders remain in the existing localStorage cache. Migration retires a legacy snapshot only after a successful durable commit, and a failed write preserves that snapshot for retry. Environments without these capabilities keep the existing cache behavior.
