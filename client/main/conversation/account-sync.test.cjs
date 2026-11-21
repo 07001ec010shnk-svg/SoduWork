@@ -40,8 +40,11 @@ test('disabled account sync retains durable pending uploads and cached directori
   const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
   const { create: createStore } = require('./account-sync-store');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'account-sync-disabled-'));
-  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const file = path.join(root, 'outbox.json'), store = createStore(file, { persistent: true });
+  t.after(() => {
+    store.close();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
   const job = { id: 'retained-upload', hub: 'http://hub.test', ownerKey: 'alice', clientId: 'desktop',
     body: { sourceSessionId: 'native-private', sourceEpoch: 'legacy', sourceRevision: 1,
       messages: [{ role: 'user', text: 'Synthetic pending local history', position: 0 }] } };
