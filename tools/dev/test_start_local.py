@@ -1456,7 +1456,10 @@ class LocalStartupTests(unittest.TestCase):
             expected = cache_env.copy()
             if command[0] != 'npm':
                 self.assertEqual(command[1], '-I', command)
-                del expected['PYTHONHOME'], expected['PYTHONPATH']
+                expected.pop('PYTHONHOME', None)
+                expected.pop('PYTHONPATH', None)
+                for key in ('PIP_FIND_LINKS', 'PIP_NO_INDEX'):
+                    self.assertEqual(call.kwargs['env'].get(key), settings[key])
             self.assertTrue(call.kwargs['env'] == expected, 'Unexpected environment for ' + str(command[:3]))
 
     def test_isolated_runner_readiness_imports_native_tls_dependency(self):
