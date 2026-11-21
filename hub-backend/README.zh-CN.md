@@ -260,7 +260,7 @@ python3 e2e_runner_tls.py --output /absolute/evidence/directory
   - `POST /api/v1/clients/enroll`（登记/心跳，激活后签发短期会话）
   - `WS /api/v1/ws?device=<设备ID>&session=<短期会话>`（实时推送）
 - 管理端
-  - `POST /api/v1/admin/login` `{user,pass}` → 短期登录 token
+  - `POST /api/v1/admin/login` `{user,pass}` → 短期登录 token。五分钟内同一账号登录失败 10 次或同一 IP 失败 30 次后，Hub 返回 HTTP 429，响应头 `Retry-After` 表示还需等待的秒数。多个 Hub 进程通过数据库共享计数，失败记录可在审计日志中按 `admin.login.failed` 查询。
   - `GET /api/v1/admin/clients`、`GET /api/v1/admin/tasks`（需 `Authorization: Bearer <token>`）
   - `POST /api/v1/admin/dispatch` `{title,...,targets:[设备ID]}` → 平台建任务下发（origin=dispatch）
 

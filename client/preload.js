@@ -192,7 +192,6 @@ const workPreview = {
   onComposerInbox: (cb) => ipcRenderer.on('work-preview-composer-inbox', (_e, msg) => { try { cb(msg || {}); } catch (_) {} }),
   onComposerHello: (cb) => ipcRenderer.on('work-preview-composer-hello', (_e, msg) => { try { cb(msg || {}); } catch (_) {} }),
   onComposerRefresh: (cb) => ipcRenderer.on('work-preview-composer-refresh', (_e, msg) => { try { cb(msg || {}); } catch (_) {} }),
-  composerState: (payload) => ipcRenderer.invoke('work-preview-composer-state', payload || {}),
   composerTurnSettled: () => ipcRenderer.invoke('work-preview-composer-turn-settled'),
   composerSubmitResult: payload => ipcRenderer.invoke('work-preview-composer-submit-result', payload),
   authorizeComposerAutomation: id => ipcRenderer.invoke('work-preview-composer-automation-authorize',id),
