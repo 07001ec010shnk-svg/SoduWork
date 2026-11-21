@@ -239,7 +239,9 @@ export const api = {
   clientsPage: (p = {}) => call('GET', '/admin/clients?' + new URLSearchParams({
     paged: 'true', page: p.page || 1, pageSize: p.pageSize || 25,
     state: p.state || 'all', form: p.form || 'all', q: p.q || '',
+    ...(p.sortBy ? { sortBy: p.sortBy, sortDir: p.sortDir || 'asc' } : {}),
   }).toString()),
+  exportClients: filters => download('/admin/client-inventory/export.csv?' + new URLSearchParams(filters), 'soduwork-clients.csv'),
   clientAuthPolicy: () => call('GET', '/admin/client-auth-policy'),
   saveClientAuthPolicy: (b) => call('PUT', '/admin/client-auth-policy', b),
   teamModuleScope: () => call('GET', '/admin/team-module-scope'),

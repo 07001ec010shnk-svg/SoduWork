@@ -1,6 +1,6 @@
 import { translateText as tx, localeMap, useLocale } from '../i18n.js'
 import { createRefreshLoop } from '../polling.js'
-import React, { useCallback, useRef, useState, useEffect } from 'react'
+import React, { useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { api, can } from '../api.js'
 import { FilterInput, FilterSelect } from '../FilterControls.jsx'
 import ListPager from '../ListPager.jsx'
@@ -50,20 +50,6 @@ function ago(ms) {
 
 const PAGE_SIZE = 25
 
-// CSV is a hostile format: a cell containing a quote, comma or newline must be
-// quoted with doubled inner quotes, or the whole export shifts columns. Values
-// arrive already localized and mapped, so this stays a pure formatter.
-function csvCell(value) {
-  const s = String(value ?? '')
-  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s
-}
-
-function clientsCsv({ labels, rows }) {
-  const lines = [(labels || []).map(csvCell).join(',')]
-  for (const row of rows || []) lines.push(row.map(csvCell).join(','))
-  return lines.join('\r\n')
-}
-
 function Pager({ page, total, onChange }) {
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   return <ListPager page={page} pages={pages} total={total} onChange={onChange} />
@@ -71,7 +57,7 @@ function Pager({ page, total, onChange }) {
 
 function DeviceFleet() {
   const listRef = useViewportHeight(180)
-  const uiLocale = useLocale();
+  useLocale()
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
@@ -82,9 +68,10 @@ function DeviceFleet() {
   const [draft, setDraft] = useState('')
   const [composing, setComposing] = useState(false)
   const [q, setQ] = useState('')
-  const [sort, setSort] = useState({ key: '', dir: 'asc' })
+  const [sort, setSort] = useState({})
   const [exporting, setExporting] = useState(false)
   const requestSeq = useRef(0)
+  const filters = useMemo(() => ({ state, form, q, ...sort }), [state, form, q, sort])
 
   useEffect(() => {
     if (composing) return undefined
@@ -96,85 +83,46 @@ function DeviceFleet() {
     const seq = ++requestSeq.current
     if (!quiet) setLoading(true)
     try {
-      const next = await api.clientsPage({ page, pageSize: PAGE_SIZE, state, form, q })
+      const next = await api.clientsPage({ ...filters, page, pageSize: PAGE_SIZE })
       if (seq !== requestSeq.current) return
-      setData(next)
+      setData({ ...next, filters })
       setError('')
     } catch (e) {
       if (seq !== requestSeq.current) return
       setError(e.message || tx("终端数据没有加载出来"))
     }
-    if (!quiet && seq === requestSeq.current) setLoading(false)
-  }, [page, q, state, form])
+    if (seq === requestSeq.current) setLoading(false)
+  }, [page, filters])
 
   useEffect(() => {
     let alive = true
     const run = async (quiet) => { if (alive) await load(quiet) }
     run(false)
     const timer = setInterval(() => run(true), 15000)
-    return () => { alive = false; clearInterval(timer) }
+    return () => { alive = false; requestSeq.current++; clearInterval(timer) }
   }, [load])
 
   const items = (data && data.items) || []
-  /* Header sorting covers every data column; unknown auth states already
-     normalize to pending, which keeps that order stable and meaningful. */
-  const SORTERS = {
-    name: (c) => String(c.name || '').toLowerCase(),
-    owner: (c) => String(c.ownerName || '').toLowerCase(),
-    online: (c) => (c.online ? 0 : 1),
-    auth: (c) => authState(c.authState).key,
-    platform: (c) => platformLabel(c.platform).toLowerCase() + ' ' + String(c.version || ''),
-    lastSeen: (c) => Number(c.lastSeen || 0),
+  function toggleSort(key) {
+    setPage(1)
+    setSort(previous => {
+      const descending = previous.sortBy === key ? previous.sortDir === 'asc' : key === 'lastSeen'
+      return { sortBy: key, sortDir: descending ? 'desc' : 'asc' }
+    })
   }
-  const sorter = SORTERS[sort.key]
-  const viewItems = sorter ? [...items].sort((a, b) => {
-    const va = sorter(a)
-    const vb = sorter(b)
-    const cmp = typeof va === 'number' && typeof vb === 'number' ? va - vb : String(va).localeCompare(String(vb), uiLocale)
-    return sort.dir === 'asc' ? cmp : -cmp
-  }) : items
-  const toggleSort = (key) => setSort((s) => s.key === key
-    ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' }
-    : { key, dir: key === 'lastSeen' ? 'desc' : 'asc' })
-  /* Export walks every page of the current filter, not just the loaded page:
-     the table is paginated to 25 rows, so a single fetch would silently drop
-     the rest. 1000 pages is a defensive stop against a broken total. */
-  const exportCsv = async () => {
-    if (exporting) return
+
+  async function exportCsv() {
     setExporting(true)
     try {
-      const rows = []
-      let next = 1
-      while (next <= 1000) {
-        const batch = await api.clientsPage({ page: next, pageSize: PAGE_SIZE, state, form, q })
-        const batchItems = (batch && batch.items) || []
-        rows.push(...batchItems)
-        if (!batchItems.length || rows.length >= ((batch && batch.total) || 0)) break
-        next += 1
-      }
-      const table = clientsCsv({
-        labels: [tx("终端"), tx("终端 ID"), tx("归属成员"), tx("连接状态"), tx("设备身份"), tx("系统 / 版本"), tx("最后心跳")],
-        rows: rows.map((c) => [c.name || '', c.id || '', c.ownerName || '', c.online ? tx("在线") : tx("离线"),
-          authState(c.authState).label, platformLabel(c.platform) + ' ' + (c.version ? 'v' + c.version : '—'),
-          c.lastSeen ? new Date(c.lastSeen).toISOString() : '']),
-      })
-      const blob = new Blob(['\ufeff' + table], { type: 'text/csv;charset=utf-8' })
-      const url = URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = 'soduwork-clients-' + new Date().toISOString().slice(0, 10) + '.csv'
-      document.body.appendChild(link)
-      link.click()
-      link.remove()
-      URL.revokeObjectURL(url)
-      toast(tx("已导出 {0} 个终端", [rows.length]))
+      await api.exportClients(filters)
     } catch (e) {
-      toast(e.message || tx("导出没有完成"))
+      toast(e.message)
+    } finally {
+      setExporting(false)
     }
-    setExporting(false)
   }
   const counts = (data && data.counts) || { all: 0, online: 0, offline: 0, pending: 0, mobile: 0 }
-  const filters = [['all', tx("全部终端")], ['online', tx("在线")],
+  const stateOptions = [['all', tx("全部终端")], ['online', tx("在线")],
     ['offline', tx("离线")], ['pending', tx("待激活")]]
   /* Manage desktop and mobile clients through the shared device identity list. */
   const isMobile = (p) => /^(android|ios|harmony)|^mobile$/i.test(String(p || ''))
@@ -197,34 +145,37 @@ function DeviceFleet() {
       <div className="admin-filter-options">
       <label className="admin-filter-field en-state-filter"><span>{tx("终端状态")}</span><FilterSelect
         aria-label={tx("终端状态")} value={state} resetValue="all" onChange={(e) => { setState(e.target.value); setPage(1) }}>
-        {filters.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
+        {stateOptions.map(([key, label]) => <option key={key} value={key}>{label}</option>)}
       </FilterSelect></label>
       <label className="admin-filter-field en-form-filter"><span>{tx("终端形态")}</span><FilterSelect
         aria-label={tx("终端形态")} value={form} resetValue="all" onChange={(e) => { setForm(e.target.value); setPage(1) }}>
         {[['all', tx("全部形态")], ['desktop', tx("桌面端")], ['mobile', tx("移动端")]].map(([key, label]) => <option key={key} value={key}>{label}</option>)}
       </FilterSelect></label>
-      <button type="button" className="btn btn-ghost xs en-export-btn" onClick={exportCsv} disabled={exporting}>
-        {exporting ? tx("正在导出") : tx("导出 CSV")}
+      <button type="button" className="btn btn-ghost xs en-export-btn" onClick={exportCsv}
+        disabled={exporting || loading || !!error || !data?.total || composing || draft.trim() !== q}>
+        {exporting ? tx("正在导出…") : tx("导出 CSV")}
       </button>
       </div>
     </div>
-    {error && !data && <div className="en-state bad"><Icon name="alert" /><div><b>{tx("终端数据没有加载出来")}</b><span>{error}</span></div>
+    {error && <div className="en-state bad" role="alert"><Icon name="alert" /><div><b>{tx("终端数据没有加载出来")}</b><span>{error}</span></div>
       <button className="btn btn-ghost xs" onClick={() => load(false)}>{tx("重试")}</button></div>}
     {loading && !data && <div className="en-state"><span className="en-spinner" /><div><b>{tx("正在读取终端")}</b><span>{tx("只加载当前筛选和当前页")}</span></div></div>}
     {data && !items.length && <div className="en-empty"><Icon name="monitor" /><b>{tx("没有符合条件的终端")}</b>
       <span>{counts.all ? tx("换一个筛选条件或清空搜索词。") : tx("启动 SoduWork 客户端后，终端会自动登记到这里。")}</span></div>}
-    {!!items.length && <div ref={listRef} className="en-table-wrap admin-viewport-list" tabIndex={0} role="region" aria-label={tx("员工终端")}><table className="en-table">
+    {!!items.length && <div ref={listRef} className="en-table-wrap admin-viewport-list" tabIndex={0} role="region" aria-label={tx("员工终端")}><table className="en-table" aria-busy={loading}>
       <thead><tr>
-        {[['name', tx("终端")], ['owner', tx("归属成员")], ['online', tx("连接状态")], ['auth', tx("设备身份")], ['platform', tx("系统 / 版本")], ['lastSeen', tx("最后心跳")]].map(([key, label]) => (
-          <th key={key} aria-sort={sort.key === key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : undefined}>
-            <button type="button" className={'en-th-sort' + (sort.key === key ? ' is-active' : '')} onClick={() => toggleSort(key)}>
-              {label}<span className="en-th-arrow" aria-hidden="true">{sort.key === key ? (sort.dir === 'asc' ? '↑' : '↓') : '↕'}</span>
+        {[['name', tx("终端")], ['owner', tx("归属成员")], ['online', tx("连接状态")], ['auth', tx("设备身份")], ['platform', tx("系统 / 版本")], ['lastSeen', tx("最后心跳")]].map(([key, label]) => {
+          const active = data.filters.sortBy === key
+          const ascending = data.filters.sortDir === 'asc'
+          return <th key={key} scope="col" aria-sort={active ? (ascending ? 'ascending' : 'descending') : undefined}>
+            <button type="button" className={'en-th-sort' + (active ? ' is-active' : '')} onClick={() => toggleSort(key)}>
+              {label}<span className="en-th-arrow" aria-hidden="true">{active ? (ascending ? '↑' : '↓') : '↕'}</span>
             </button>
           </th>
-        ))}
+        })}
         <th className="admin-action-heading">{tx("操作")}</th>
       </tr></thead>
-      <tbody>{viewItems.map((c) => {
+      <tbody>{items.map((c) => {
         const auth = authState(c.authState)
         const name = c.ownerName || tx("未分配")
         return <tr key={c.id} className={c.online ? 'is-online' : ''} onDoubleClick={() => setDetail(c)}>
