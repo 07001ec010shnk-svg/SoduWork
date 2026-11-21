@@ -268,7 +268,7 @@ AdminName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1
 
 
 class IntegrationCreate(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
     name: AdminName
     type: str = "generic"
     config: dict = {}                    # GitLab configuration stores base_url and project; tokens remain in environment variables.
