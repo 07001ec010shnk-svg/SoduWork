@@ -529,17 +529,17 @@ async def create_task(
     t = models.Task(
         **identity,
         owner_client_id=owner_id,
-        title=data.get("title") or "未命名",
-        source=data.get("source") or "",
-        note=data.get("note") or "",
+        title=(data.get("title") or "").strip()[:500] or "未命名",
+        source=(data.get("source") or "")[:500],
+        note=(data.get("note") or "")[:50000],
         status=status,
         urgent=data.get("urgent"),
         important=data.get("important"),
-        handler=data.get("handler") or "me",
-        result=data.get("result") or "",
+        handler=(data.get("handler") or "me")[:200],
+        result=(data.get("result") or "")[:100000],
         origin=origin,
-        external_id=data.get("externalId"),
-        external_url=data.get("externalUrl"),
+        external_id=(data.get("externalId") or "")[:200],
+        external_url=(data.get("externalUrl") or "")[:2000],
     )
     from . import task_requirements
     data = dict(data)

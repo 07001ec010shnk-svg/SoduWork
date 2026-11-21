@@ -39,6 +39,15 @@ async def mark(session: AsyncSession, task: models.Task, status: str, *,
     """
     if task is None or status not in VALID:
         return False
+    # #631: done任务不可修改状态
+    if task.status == "done" and status != task.status:
+        return False
+    # #698, #699, #700: 已取消任务不可重新规划/执行/提交
+    if task.status == "cancel" and status != task.status:
+        return False
+    # #672: done需求不可重新开工
+    if task.status == "done" and status == "doing":
+        return False
     if status == "doing" and getattr(task, "archived_at", None):
         return False
     if task.status == status and status != "done":
