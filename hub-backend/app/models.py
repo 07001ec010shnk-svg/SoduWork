@@ -61,6 +61,14 @@ class TaskRequirementAccess(Base):
     __table_args__ = (Index("ix_requirement_access_principal", "principal_kind", "principal_id"),)
 
 
+class ClientPeerIdentity(Base):
+    """Immutable application role and possession key for direct device peers."""
+    __tablename__ = "client_peer_identity"
+    client_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16))
+    public_key: Mapped[str] = mapped_column(String(256))
+
+
 class Client(Base):
     """Client registration records keyed by device, with optional user_ref ownership."""
     __tablename__ = "client"

@@ -9,9 +9,19 @@ FastAPI + SQLAlchemy(async) + PostgreSQL（本地开发可回退 SQLite）。
 
 模块职责与状态归属见[首版范围](../docs/release-scope.md)。
 
+## 设备直连身份
+
+桌面登录或登记时通过 `POST /api/v1/client-auth/peer-identity` 登记 P-256 公钥，并获得有效期为 30 分钟的双向 TLS 证书。桌面用操作系统提供的安全存储机制加密保存私钥。Hub 签署账号、设备和应用角色；已登记的公钥或角色不能静默替换，修改可编辑的平台信息也不能升级角色。这是应用登记角色，不是硬件证明。迁移版本 `0093_device_peer_identity` 保存公钥与角色绑定；存在已登记绑定时拒绝降级删除。
+
+证书签发密钥通过 HKDF 与既有 Hub 认证密钥隔离用途，并绑定 `HUB_PUBLIC_URL`。客户端只在经过认证的 HTTPS 登录流程中获取签发方公钥证书；隔离源码开发允许回环 HTTP。轮换 `AUTH_SECRET` 或改变 Hub 公网地址会改变签发方身份。登记或安全存储失败时保留已有私钥。
+
+直连只使用已缓存且有效的证书，以及对端实际 TLS 公钥。桌面必须明确开启监听，并确认短期配对请求。同一账号的两台电脑须同时在线，每次迁移均需确认。跨设备浏览或继续会话仅开放给持有移动端角色证书的协议客户端，范围限于同一账号下明确选中并配对的桌面。此传输不会把设备地址、配对秘密、会话目录或正文发送给 Hub；连接失败也不会回退到 Hub 或其他设备。本次增加的是经过测试的移动端协议边界，不是新的手机应用或浏览器入口。
+
+本机退出登录或切换账号后，当前请求立即失效。离线对端不能即时获知 Hub 上的远程撤销：现有证书最长在 30 分钟内过期，过期后停止直连，直到后续重新完成经过认证的登录或登记。迁移操作不向 Hub 请求续签。运行 `python3 -m unittest test_device_peer_identity test_integrated_migration_history` 验证证书与数据库迁移。客户端 `device-peer-transport` 测试使用真实回环 TLS、合成证书和生产消息回执控制器，不代表真实手机或跨电脑验收已经完成。
+
 ## 模型代理用量核对
 
-短期核对时，将 Hub 数据库迁移至 `0093_proxy_usage_shadow`，设置
+短期核对时，先按“连数据库”一节升级 Hub 数据库，设置
 `PROXY_USAGE_SHADOW_ENABLED=true` 并重启 Hub。此开关默认关闭。Chat Completions
 和 Responses 两条代理路由将上游用量凭据写入 `proxy_usage_observation`。
 可按协议、供应商、模型、底座、凭据归属和凭据状态分组，只比较 reported 状态的计数。
@@ -185,6 +195,11 @@ Codex ACP 协商带版本的 `sessionFailure` 能力，在接受 `end_turn` 前�
 存在超长数据时，降级会拒绝缩窄字段。升级前请备份数据库和匹配版本的程序。
 
 ## 连数据库
+
+在后端目录执行 `alembic upgrade head`。唯一的 Alembic head 为
+`0094_merge_proxy_peer_identity`，合并了 `0093_proxy_usage_shadow` 和
+`0093_device_peer_identity`。数据库从其中任一版本升级时，Alembic 会先执行另一个版本，
+再完成合并，保留已有的代理用量观测记录和已登记的设备公钥。
 
 领域排序接受 32 位有符号整数及旧客户端使用的十进制整数字符串。非法值、
 布尔值、小数和越界值会在修改记录前返回 HTTP 400。PATCH 省略排序或传入 null
