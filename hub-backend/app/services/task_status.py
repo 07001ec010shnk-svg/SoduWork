@@ -40,8 +40,14 @@ async def mark(session: AsyncSession, task: models.Task, status: str, *,
     if task is None or status not in VALID:
         return False
     # #631: done任务不可修改状态
+    # #663: 撤回验收时重置done状态（仅引擎允许）
     if task.status == "done" and status != task.status:
-        return False
+        if not engine:
+            return False
+        # 引擎在撤回验收时可以重置状态，但需要清除已设置的done标记
+        from . import task_events
+        task_events.record(session, task.id, "status.reset_from_done",
+                           {"from": "done", "to": status, "reason": why or "撤回验收"}, actor="SoduWork")
     # #698, #699, #700: 已取消任务不可重新规划/执行/提交
     if task.status == "cancel" and status != task.status:
         return False

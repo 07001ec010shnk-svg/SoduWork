@@ -1037,6 +1037,11 @@ async def put_milestones(
         m.agent_type = str(it.get("agentType") or "")[:16]
         m.model = str(it.get("model") or "")[:120]
         st = str(it.get("status") or "").strip()
+        # #664: skipped里程碑不可验收
+        # #665: skipped里程碑不可重新规划为doing/done
+        if m.status == "done" and st == "skipped":
+            # 已验收的里程碑不能被降级为skipped
+            raise HTTPException(status_code=400, detail=f"「{m.title}」已经验收通过，不能标记为不做")
         # Accept only user-editable states: skipped or planned.
         # Execution determines doing, done, and failed; clients cannot assign those results directly.
         # Preserve current state for other values instead of defaulting to planned.
@@ -1049,6 +1054,9 @@ async def put_milestones(
         keep.add(m.id)
     for mid, m in old.items():
         if mid not in keep:
+            # #662: 已验收(done)里程碑不可删除
+            if m.status == "done":
+                raise HTTPException(status_code=400, detail=f"「{m.title}」已经验收通过，不能删除")
             await session.delete(m)
     rows = await _load_milestones(session, tid)
     me = await _actor_user(session, client)
