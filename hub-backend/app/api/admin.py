@@ -323,10 +323,13 @@ async def create_user(
         await rbac.validate_user_domains(session, body.domains)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    created = await rbac.create_user(
-        session, body.username, body.password, body.displayName,
-        body.orgId, body.roleId, position_ids, body.domains,
-        token_quota=body.tokenQuota.model_dump() if body.tokenQuota is not None else None)
+    try:
+        created = await rbac.create_user(
+            session, body.username, body.password, body.displayName,
+            body.orgId, body.roleId, position_ids, body.domains,
+            token_quota=body.tokenQuota.model_dump() if body.tokenQuota is not None else None)
+    except client_access.ClientAccessError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     await audit.log(session, user, "user.create", "user", created.get("id"), created.get("displayName") or body.username,
                     {"orgId": body.orgId, "roleId": body.roleId})
     return created
@@ -381,7 +384,10 @@ async def update_user(
         ).values(auth_state="pending", auth_version=Client.auth_version + 1,
                  activated_at=None, revoked_at=None).returning(Client.id)
             .execution_options(synchronize_session=False))).all())
-    updated = await rbac.update_user(session, uid, patch)
+    try:
+        updated = await rbac.update_user(session, uid, patch)
+    except client_access.ClientAccessError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     if client_ids:
         await device_connections.disconnect_many(client_ids)
     await audit.log(session, user, "user.update", "user", uid, target.display_name or target.username,

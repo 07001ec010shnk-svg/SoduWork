@@ -12,6 +12,7 @@ from ..auth import hash_password
 from ..config import get_settings
 from ..permissions import ALL_KEYS, valid_keys
 from ..schemas import AdminName, _ms
+from . import client_access
 
 _DEPT_ADMIN_PERMS = [
     "client.view", "client.assign", "client.control", "client.update",
@@ -365,14 +366,14 @@ async def get_user_by_username(session: AsyncSession, username: str) -> models.U
 async def create_user(session: AsyncSession, username: str, password: str, display_name: str,
                       org_id: str | None, role_id: str | None, positions: list | None = None,
                       domains: list | None = None, *, token_quota=None) -> dict:
+    password = client_access.validate_password(password, new_account=True)
     u = models.User(
-        username=username, password_hash=hash_password(password or ""),
+        username=username, password_hash=hash_password(password),
         display_name=display_name or username, org_id=org_id or None, role_id=role_id or None,
         positions=list(positions or []), domains=list(domains or []),
     )
     session.add(u)
     if token_quota is not None:
-        from . import client_access
         await session.flush()
         token_quota = await client_access.save_user_quota(session, u.id, token_quota)
     await session.commit()
@@ -384,6 +385,9 @@ async def update_user(session: AsyncSession, uid: str, patch: dict) -> dict | No
     u = await session.get(models.User, uid)
     if u is None:
         return None
+    password = patch.get("password")
+    if password is not None:
+        password = client_access.validate_password(password, new_account=True)
     if "displayName" in patch and patch["displayName"] is not None:
         u.display_name = patch["displayName"]
     if "orgId" in patch and patch["orgId"] is not None:
@@ -399,12 +403,11 @@ async def update_user(session: AsyncSession, uid: str, patch: dict) -> dict | No
         u.positions = list(patch["positions"] or [])
     if patch.get("domains") is not None:
         u.domains = list(patch["domains"] or [])
-    if patch.get("password"):
-        u.password_hash = hash_password(patch["password"])
+    if password is not None:
+        u.password_hash = hash_password(password)
         revoke_sessions = True
     if revoke_sessions:
         u.auth_version = int(u.auth_version or 0) + 1
-    from . import client_access
     if patch.get("tokenQuota") is not None:
         quota = await client_access.save_user_quota(session, uid, patch["tokenQuota"])
     else:
