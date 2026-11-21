@@ -16,8 +16,8 @@ router = APIRouter(prefix="/api/v1/admin", tags=["environments"])
 
 
 def _bad(error: ValueError) -> HTTPException:
-    return HTTPException(status_code=400 if isinstance(error, policy_svc.InvalidApprovalActions) else 409,
-                         detail=str(error))
+    invalid_input = isinstance(error, (policy_svc.InvalidApprovalActions, svc.InvalidEnvironmentTier))
+    return HTTPException(status_code=400 if invalid_input else 409, detail=str(error))
 
 
 def _approval_policy_input(body: dict) -> dict:
