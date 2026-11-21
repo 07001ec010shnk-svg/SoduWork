@@ -739,8 +739,9 @@ async def ai_plan_task(
     from ..services import ai_exec
     from ..services import task_events as ev
     t = await _my_task(session, client, tid)
-    if t.status == "done":
-        raise HTTPException(status_code=400, detail="需求已完成，不用再出计划")
+    # #698: 已取消任务不可重新规划
+    if t.status in ("done", "cancel"):
+        raise HTTPException(status_code=400, detail="需求已关闭，不能再出计划")
     ctx = await ai_exec.load(session, force=True)
     aid = str(body.get("assigneeId") or "").strip()
     atype = str(body.get("assigneeType") or "").strip().lower()
@@ -1164,6 +1165,8 @@ async def run_milestone(
     from ..services import ai_exec
     from ..services import task_events as ev
     t = await _my_task(session, client, tid)
+    # #699: 已取消任务不可执行
+    # #700: 已取消任务不可提交
     if t.status in ("done", "cancel"):
         raise HTTPException(status_code=409, detail="已完成或已取消的需求不能再执行里程碑")
     ref = await _dispatch_ref(session, tid)
