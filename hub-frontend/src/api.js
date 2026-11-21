@@ -300,12 +300,15 @@ export const api = {
   revokeClient: (id) => call('POST', '/admin/clients/' + id + '/revoke', {}),
   resetClientEnrollment: (id) => call('POST', '/admin/clients/' + id + '/reset-enrollment', {}),
   // Enterprise AI ledger views by member, scenario, agent, and model.
-  usageOverview: ({ days = 30, userId = '', source = '', agent = '' } = {}) => {
+  usageOverview: ({ days = 30, userId = '', source = '', agent = '', excludeAnomalies, detail, page } = {}) => {
     const query = new URLSearchParams()
     query.set('days', String(days))
     if (userId) query.set('user_id', userId)
     if (source) query.set('source', source)
     if (agent) query.set('agent', agent)
+    if (excludeAnomalies) query.set('exclude_anomalies', 'true')
+    if (detail) query.set('detail', detail)
+    if (page) query.set('page', String(page))
     return call('GET', '/admin/usage/overview?' + query.toString())
   },
   adminRunners: () => call('GET', '/admin/runners'),

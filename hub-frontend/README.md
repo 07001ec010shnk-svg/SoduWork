@@ -12,6 +12,12 @@ The model catalog starts with a compact service/model and live-load summary. Exp
 
 Service cards adapt from one to four columns according to the available content width. View opens model details in a dialog without resizing or rearranging the service grid. Add, discover and configure actions remain visible; enable/disable and deletion are in the More popover, with the existing deletion confirmation retained.
 
+## Investigating usage and cost
+
+On **Usage and Cost**, open the anomaly count to see the original record IDs and exact token counts, including records older than the latest 30. The dashboard flags daily ledger records above one billion tokens. Exclude those records to compare the remaining trend and usage by scenario.
+
+Open the unpriced records to check the affected models. Enter the highest applicable provider rate in USD per million tokens to estimate the cost of that usage. With a budget for the selected period, the calculator shows the share that priced USD usage and the estimated amount would consume together. The calculation is local to the page.
+
 ## Automation template dates
 
 Templates default to **No date limits**. Clear this option to set a start date, an end date, or both. Dates are inclusive and use the template's time zone (Asia/Shanghai by default); the existing hourly, daily or weekly rhythm determines execution times within that range. Invalid dates and reversed ranges are rejected before saving.

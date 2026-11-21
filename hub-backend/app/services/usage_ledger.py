@@ -59,6 +59,8 @@ async def upsert_cumulative(
         candidate = models.AIUsageEvent(
             idempotency_key=key,
             occurred_at=reported_at,
+            # The first receipt supplies its own quality before later upgrades.
+            quality="unknown",
         )
         try:
             async with session.begin_nested():
