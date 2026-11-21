@@ -739,8 +739,9 @@ async def ai_plan_task(
     from ..services import ai_exec
     from ..services import task_events as ev
     t = await _my_task(session, client, tid)
-    if t.status == "done":
-        raise HTTPException(status_code=400, detail="需求已完成，不用再出计划")
+    # #698: 已取消任务不可重新规划
+    if t.status in ("done", "cancel"):
+        raise HTTPException(status_code=400, detail="需求已关闭，不能再出计划")
     ctx = await ai_exec.load(session, force=True)
     aid = str(body.get("assigneeId") or "").strip()
     atype = str(body.get("assigneeType") or "").strip().lower()
@@ -1037,6 +1038,11 @@ async def put_milestones(
         m.agent_type = str(it.get("agentType") or "")[:16]
         m.model = str(it.get("model") or "")[:120]
         st = str(it.get("status") or "").strip()
+        # #664: skipped里程碑不可验收
+        # #665: skipped里程碑不可重新规划为doing/done
+        if m.status == "done" and st == "skipped":
+            # 已验收的里程碑不能被降级为skipped
+            raise HTTPException(status_code=400, detail=f"「{m.title}」已经验收通过，不能标记为不做")
         # Accept only user-editable states: skipped or planned.
         # Execution determines doing, done, and failed; clients cannot assign those results directly.
         # Preserve current state for other values instead of defaulting to planned.
@@ -1049,6 +1055,9 @@ async def put_milestones(
         keep.add(m.id)
     for mid, m in old.items():
         if mid not in keep:
+            # #662: 已验收(done)里程碑不可删除
+            if m.status == "done":
+                raise HTTPException(status_code=400, detail=f"「{m.title}」已经验收通过，不能删除")
             await session.delete(m)
     rows = await _load_milestones(session, tid)
     me = await _actor_user(session, client)
@@ -1156,6 +1165,9 @@ async def run_milestone(
     from ..services import ai_exec
     from ..services import task_events as ev
     t = await _my_task(session, client, tid)
+    # #672: Block re-opening of done tasks
+    # #699: 已取消任务不可执行
+    # #700: 已取消任务不可提交
     if t.status in ("done", "cancel"):
         raise HTTPException(status_code=409, detail="已完成或已取消的需求不能再执行里程碑")
     ref = await _dispatch_ref(session, tid)
@@ -1251,7 +1263,13 @@ async def milestone_verdict(
     # False acceptance can also close unresolved source issues in a batch.
     # Use rounds to establish that an execution result exists for review.
     # Use skipped to omit a milestone; acceptance is not a substitute for skipping.
+    # #664: skipped milestones must not be accepted and back-close the source requirement.
+    # #664: 未执行的skipped里程碑不可验收（已执行的skipped可以验收）
     if (m.rounds or 0) <= 0:
+        if m.status == "skipped":
+            raise HTTPException(
+                status_code=409,
+                detail=f"「{m.title}」已标记为不执行（skipped），不可验收。要验收请先取消跳过并运行该里程碑")
         raise HTTPException(
             status_code=409,
             detail=f"「{m.title}」还没跑过，没有结果可验。要先跑这一条；不做就标「不做」，别用验收通过跳过它")

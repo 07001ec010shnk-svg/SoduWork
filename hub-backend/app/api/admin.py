@@ -322,6 +322,8 @@ async def update_user(
     await _assert_user_in_scope(session, user, target)
     if body.orgId is not None:
         await _assert_org_in_scope(session, user, body.orgId)
+    # An empty roleId is the legacy form used by clients to clear a role.
+    # Validate non-empty assignments while preserving that clearing behavior.
     if body.roleId and await session.get(Role, body.roleId) is None:
         raise HTTPException(status_code=400, detail="角色不存在")
     if body.domains is not None:
