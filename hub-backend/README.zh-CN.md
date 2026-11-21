@@ -9,6 +9,19 @@ FastAPI + SQLAlchemy(async) + PostgreSQL（本地开发可回退 SQLite）。
 
 模块职责与状态归属见[首版范围](../docs/release-scope.md)。
 
+## 模型代理用量核对
+
+短期核对时，将 Hub 数据库迁移至 `0093_proxy_usage_shadow`，设置
+`PROXY_USAGE_SHADOW_ENABLED=true` 并重启 Hub。此开关默认关闭。Chat Completions
+和 Responses 两条代理路由将上游用量凭据写入 `proxy_usage_observation`。
+可按协议、供应商、模型、底座、凭据归属和凭据状态分组，只比较 reported 状态的计数。
+缺少回执记为 unknown，计数矛盾记为 conflict。outcome 表示代理传输状态。
+供应商响应 ID 仅保存哈希供核对，记录中不含模型消息和密钥。
+
+该表用于采样核对，独立于套餐额度和用量页面。采样范围为经过上述两个代理入口的请求，
+不含 Runner 直连、单独的视觉调用和设备私有模型。断开连接、过大的流式事件或写入失败
+可能造成观测缺失。采样结束后关闭开关并重启，已采集记录可继续用于比对。
+
 ## 快速开始（本地 SQLite，零配置）
 
 ```bash
@@ -222,7 +235,7 @@ test_schedule_update_input_validation`。这些测试已登记到发布质量检
 
 ## OpenCode 回合完成状态
 
-OpenCode 原生和 ACP 执行均保留当前回合的模型停止原因。达到输出 token 上限时，即使已有部分文本且原生进程正常退出，也会标记为未完成；已有进度和会话保留，可人工继续。ACP 适配器使用单次调用的临时插件，只观察原生会话、回合标识及停止原因；缺少完成证据时阻止成功结算，不重试工具或改变权限。执行 `python3 e2e_opencode_turn_outcome.py --binary /path/to/opencode`，可用明确指定的已安装二进制和隔离的本地回环模型服务进行验收。
+OpenCode 原生和 ACP 执行均保留当前回合的模型停止原因。达到输出 token 上限时，即使已有部分文本且原生进程正常退出，也会标记为未完成；已有进度和会话保留，可人工继续。ACP 适配器使用单次调用的临时插件，读取原生会话与回合标识、停止原因，以及模型已结算的 token 数；缺少完成证据时阻止成功结算，不重试工具或改变权限。执行 `python3 e2e_opencode_turn_outcome.py --binary /path/to/opencode`，可用明确指定的已安装二进制和隔离的本地回环模型服务进行验收。
 
 ## OpenCode 安装与网络诊断
 
