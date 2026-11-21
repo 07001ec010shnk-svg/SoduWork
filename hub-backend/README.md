@@ -6,6 +6,22 @@ Command examples use `sh start.sh` on macOS/Linux. On Windows, use `.\start.cmd`
 
 Hub provides identity, authorization, execution governance, plugins, shared materials, and desktop connectivity. It uses FastAPI and asynchronous SQLAlchemy with PostgreSQL; local development can use SQLite.
 
+## Model proxy usage observations
+
+For a limited reconciliation run, migrate the Hub database to `0093_proxy_usage_shadow`,
+set `PROXY_USAGE_SHADOW_ENABLED=true` and restart Hub. The default is false.
+The Chat Completions and Responses routes record upstream token evidence in
+`proxy_usage_observation`. Group by protocol, provider, model, agent, funding and
+evidence status. Compare only reported counts. Missing receipts are unknown;
+contradictory counts are conflicts. Outcome describes proxy transport completion.
+The provider response ID is hashed for matching. Model messages and keys are excluded.
+
+These observations are best effort and have no effect on quotas or the usage dashboard.
+The scope is requests through the two proxy routes. Direct Runner calls, separate
+vision calls and device-only models are outside this sample. A disconnect, oversized
+stream event or failed observation write can leave a gap. Disable the flag and
+restart after sampling; existing rows remain available for comparison.
+
 ## Start locally
 
 For a first session, use `sh start.sh` from the repository root; it creates an isolated database, environment, and administrator.
@@ -310,7 +326,7 @@ Run `SODUWORK_TEST_OPENCODE_BIN=/absolute/path/to/opencode python3 -m unittest t
 
 ## OpenCode turn completion
 
-Native and ACP OpenCode executions preserve the current turn's provider finish reason. An output-token limit is reported as incomplete even when partial text exists and the native process exits successfully; existing progress and the session remain available for manual continuation. The ACP adapter observes only native session/turn identifiers and stop reasons through an invocation-local plugin, and rejects missing completion evidence without retrying tools or changing permissions. Run `python3 e2e_opencode_turn_outcome.py --binary /path/to/opencode` for isolated loopback-provider acceptance using an explicitly selected installed binary.
+Native and ACP OpenCode executions preserve the current turn's provider finish reason. An output-token limit is reported as incomplete even when partial text exists and the native process exits successfully; existing progress and the session remain available for manual continuation. The ACP adapter observes native session/turn identifiers, stop reasons and settled token counts through an invocation-local plugin, and rejects missing completion evidence without retrying tools or changing permissions. Run `python3 e2e_opencode_turn_outcome.py --binary /path/to/opencode` for isolated loopback-provider acceptance using an explicitly selected installed binary.
 
 ## OpenCode installation and network diagnostics
 

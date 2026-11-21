@@ -31,6 +31,24 @@ def _uuid() -> str:
     return str(uuid.uuid4())
 
 
+class ProxyUsageObservation(Base):
+    """Request-level shadow evidence, deliberately independent of quota and session ledgers."""
+    __tablename__ = "proxy_usage_observation"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    client_id: Mapped[str] = mapped_column(String(36))
+    user_id: Mapped[str] = mapped_column(String(36))
+    agent: Mapped[str] = mapped_column(String(240))
+    provider: Mapped[str] = mapped_column(String(240))
+    model: Mapped[str] = mapped_column(String(240))
+    funding: Mapped[str] = mapped_column(String(24))
+    protocol: Mapped[str] = mapped_column(String(24))
+    outcome: Mapped[str] = mapped_column(String(24))
+    evidence: Mapped[str] = mapped_column(String(24))
+    provider_response_hash: Mapped[str] = mapped_column(String(64))
+    counts: Mapped[dict] = mapped_column(JSON)
+
+
 class TaskRequirementAccess(Base):
     """Source-scoped legacy requirement access; never grants Task execution rights."""
     __tablename__ = "task_requirement_access"

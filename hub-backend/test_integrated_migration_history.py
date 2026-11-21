@@ -29,7 +29,7 @@ from app.schema_migrations import (
 
 OLD_MERGE = "0067_merge_release_account_ownership"
 CANONICAL_MERGE = "0067_merge_account_ownership"
-CURRENT_HEAD = "0092_task_text_storage"
+CURRENT_HEAD = "0093_proxy_usage_shadow"
 
 
 class IntegratedMigrationHistoryTests(unittest.TestCase):
@@ -109,6 +109,7 @@ class IntegratedMigrationHistoryTests(unittest.TestCase):
         self.assertEqual(script.get_heads(), [CURRENT_HEAD])
         expected = {
             "0092_task_text_storage": "0091_domain_sort_validation",
+            "0093_proxy_usage_shadow": "0092_task_text_storage",
             "0091_domain_sort_validation": "0090_requirement_creator",
             "0090_requirement_creator": "0089_schedule_model_source",
             "0089_schedule_model_source": "0088_schedule_requirement_source",
