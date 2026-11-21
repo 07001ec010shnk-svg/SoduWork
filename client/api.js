@@ -47,7 +47,7 @@
   'use strict';
   var TASK_STORAGE_BASE = {
     tasks: 'soduwork_work_tasks_v5', ops: 'soduwork_work_task_ops_v1', shadow: 'soduwork_work_task_shadow_v1',
-    notices: 'soduwork_work_notices_v1'
+    notices: 'soduwork_work_notices_v1', 'config-edit-base': 'soduwork_work_cfg_edit_base_v1'
   };
   var LS_CFG = 'soduwork_work_cfg_v5';
   // An unscoped legacy credential has no trustworthy destination. Quarantine it
@@ -906,6 +906,29 @@
     return path;
   }
 
+  // Keep the revision tied to the authenticated scope and the snapshot the editor actually saw.
+  var configSnapshot = null, configWriteGeneration = 0;
+  function activeConfigSnapshot(scope) {
+    if (configSnapshot && sameDomainScope(configSnapshot.scope)) return configSnapshot;
+    try {
+      var saved = JSON.parse(localStorage.getItem(taskStorageKey('config-edit-base')) || 'null');
+      return saved && sameDomainScope(saved.scope) ? saved : null;
+    } catch (_) { return null; }
+  }
+  function rememberConfig(scope, value, local, persist = true) {
+    if (!value || !sameDomainScope(scope)) return {};
+    var cfg = Object.assign({}, value), revision = cfg._configRevision;
+    var keys = cfg._configKeys;
+    delete cfg._configRevision;
+    delete cfg._configKeys;
+    if (revision && persist) {
+      var base = local && Array.isArray(keys)
+        ? Object.fromEntries(Object.entries(local).filter(([key]) => keys.includes(key))) : local;
+      configSnapshot = { scope, revision, cfg: base || cfg, remote: cfg, keys };
+      try { localStorage.setItem(taskStorageKey('config-edit-base'), JSON.stringify(configSnapshot)); } catch (_) {}
+    }
+    return cfg;
+  }
   function domainScope() {
     return { hub: base().replace(/\/+$/, ''), clientId: device(), userId: String(_clientUser?.id || '') };
   }
@@ -1341,8 +1364,13 @@
       }
       return task;
     },
-    async getConfig() {
-      try { var c = await domainRead('config', '/config'); return c || {}; }
+    async getConfig(acceptBase) {
+      var scope = domainScope(), generation = configWriteGeneration;
+      try {
+        var result = await domainRead('config', '/config?withRevision=true');
+        return rememberConfig(scope, result, null,
+          generation === configWriteGeneration && (!acceptBase || acceptBase()));
+      }
       catch (e) { markFromError(e); return lsCfg(); }
     },
 
@@ -3573,10 +3601,56 @@
     },
     /* Synchronize configuration through saveCfg(). */
     async syncConfig(cfg) {
-      var scope = domainScope();
-      try { await jfetch('/config', { method: 'PUT', body: JSON.stringify(cfg || {}) });
+      var scope = domainScope(), taskScope = taskStorageKey('ops');
+      configWriteGeneration++;
+      try {
+        var patch = Object.assign({}, cfg);
+        var initial = activeConfigSnapshot(scope);
+        if (!initial) {
+          var snapshot = await jfetch('/config?withRevision=true', { taskScope });
+          if (!sameDomainScope(scope)) return false;
+          // Without an editing base, only a new or unchanged field can be written unconditionally.
+          if (Array.isArray(snapshot?._configKeys)) {
+            for (var key of Object.keys(patch)) if (!snapshot._configKeys.includes(key)) delete patch[key];
+          }
+        }
+        if (initial) {
+          for (var key of Object.keys(patch)) {
+            if ((Array.isArray(initial.keys) && !initial.keys.includes(key)) ||
+                JSON.stringify(patch[key]) === JSON.stringify(initial.cfg[key])) delete patch[key];
+          }
+          patch._configRevision = initial.revision;
+        }
+        var saved = await jfetch('/config?withRevision=true', { method: 'PUT', taskScope, body: JSON.stringify(patch) });
+        configWriteGeneration++;
+        rememberConfig(scope, saved, Object.assign({}, cfg));
         await invalidateDomain('config', scope); mark(true); return true; }
-      catch (e) { markFromError(e); return false; }
+      catch (e) {
+        markFromError(e);
+        if (e?.status === 409 || e?.status === 428) {
+          // Return the actual conflict to the store. It can reconcile its live copy and
+          // keep unrelated local edits rather than repeatedly uploading an obsolete snapshot.
+          var latest = await jfetch('/config?withRevision=true', { taskScope });
+          if (!sameDomainScope(scope) || !latest?._configRevision) return false;
+          var remote = rememberConfig(scope, latest, null, false);
+          var previous = initial?.remote || {};
+          var agreed = {};
+          for (var key of Object.keys(remote)) {
+            if (!Object.prototype.hasOwnProperty.call(patch || {}, key) ||
+                JSON.stringify(previous[key]) !== JSON.stringify(remote[key])) agreed[key] = remote[key];
+          }
+          return { conflict: true, current: agreed, accept(local) {
+            if (!sameDomainScope(scope)) return;
+            // Advance only after the store applied this response to the same edit. Local-only
+            // preferences (e.g. an explicit locale) must not replay over the winning Hub value.
+            var base = Object.assign({}, remote);
+            for (var key of Object.keys(agreed)) base[key] = local[key];
+            configWriteGeneration++;
+            rememberConfig(scope, latest, base);
+          } };
+        }
+        return false;
+      }
     },
 
     /*

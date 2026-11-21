@@ -12,7 +12,7 @@ from ..db import get_session
 from ..deps import require_perm
 from ..models import Task, User
 from ..schemas import task_to_api
-from ..services import audit, rbac
+from ..services import audit, catalog_names, rbac
 from ..services import tasks as svc
 from ..services.repository_catalog import lock_mapping_project
 
@@ -88,16 +88,30 @@ async def _project_owner(session: AsyncSession, actor: User, owner_id: str) -> U
     return owner
 
 
+async def _available_project_name(session, name, org_id, exclude_id=None):
+    from ..models import Project
+    try:
+        await catalog_names.require_available(
+            session, Project, name, "同名项目已经存在", Project.org_id == org_id, exclude_id=exclude_id)
+    except catalog_names.DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/projects")
 async def create_project(body: dict = Body(default_factory=dict),
                          user: User = Depends(require_perm("task.dispatch")),
                          session: AsyncSession = Depends(get_session)):
     from ..models import Project
+    unknown = sorted(set(body) - {"name", "desc", "group", "repoUrl", "ownerUserId"})
+    if unknown:
+        raise HTTPException(status_code=422, detail="未知字段：" + ", ".join(unknown))
     name = (body.get("name") or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="请填工程名")
     owner = await _project_owner(session, user, str(body.get("ownerUserId") or ""))
-    p = Project(name=name, desc=body.get("desc") or "", org_id=owner.org_id or user.org_id,
+    org_id = owner.org_id or user.org_id
+    await _available_project_name(session, name, org_id)
+    p = Project(name=name, desc=body.get("desc") or "", org_id=org_id,
                 owner_user_id=owner.id, created_by=user.id,
                 group=(body.get("group") or "").strip(), repo_url=(body.get("repoUrl") or "").strip())
     session.add(p); await session.commit(); await session.refresh(p)
@@ -142,6 +156,13 @@ async def update_project(pid: str, body: dict = Body(default_factory=dict),
     owner = None
     if "ownerUserId" in body:
         owner = await _project_owner(session, user, str(body.get("ownerUserId") or ""))
+    next_org = old_org or (owner.org_id if owner else None)
+    name = str(body.get("name") or "").strip() if "name" in body else p.name
+    if name != p.name or next_org != old_org:
+        if not name:
+            raise HTTPException(status_code=400, detail="请填工程名")
+        await _available_project_name(session, name, next_org, p.id)
+    if owner is not None:
         p.owner_user_id = owner.id
         if not p.org_id:
             p.org_id = owner.org_id

@@ -999,6 +999,35 @@ async def get_milestones(
     return out
 
 
+async def _milestone_selections(session, client, task, items):
+    """Check the entire edit against the same catalogs shown to the execution owner."""
+    from ..services import task_execution_options
+    edits = [item for item in items if isinstance(item, dict) and str(item.get("title") or "").strip()]
+    repos = {str(item.get("repoId") or "").strip() for item in edits} - {""}
+    if repos:
+        _, visible = await task_execution_options._visible_repos(session, client)
+        allowed = {repo["id"] for repo in visible if not task.project_id or repo["projectId"] == task.project_id}
+        if repos - allowed:
+            raise HTTPException(status_code=404, detail="里程碑引用的代码仓库不存在或不在当前项目范围内")
+    choices = None
+    for item in edits:
+        kind = str(item.get("agentType") or "").strip()
+        if kind not in {"", "agent", "squad"}:
+            raise HTTPException(status_code=422, detail="里程碑执行类型无效")
+        agent = str(item.get("agentId") or "").strip()
+        model = str(item.get("model") or "").strip()
+        if not (agent or model):
+            continue
+        if choices is None:
+            choices = await list_ai_agents(client, session)
+        if agent and not any(row.get("id") == agent for row in choices["squads" if kind == "squad" else "agents"]):
+            raise HTTPException(status_code=422, detail="所选里程碑执行者不可用")
+        if model and model not in [choices["defaultModel"], *choices["models"]]:
+            raise HTTPException(status_code=422, detail="所选里程碑模型不可用")
+        if len(agent) > 64 or len(model) > 120:
+            raise HTTPException(status_code=422, detail="里程碑执行者或模型标识过长")
+
+
 @router.put("/tasks/{tid}/milestones")
 async def put_milestones(
     tid: str,
@@ -1017,6 +1046,7 @@ async def put_milestones(
         raise HTTPException(status_code=400, detail="items 要是一个列表")
     if len(items) > 30:
         raise HTTPException(status_code=400, detail="里程碑太多了（最多 30 个），先拆成几条需求吧")
+    await _milestone_selections(session, client, t, items)
     old = {m.id: m for m in await _load_milestones(session, tid)}
     keep: set[str] = set()
     for i, it in enumerate(items):
@@ -1033,12 +1063,12 @@ async def put_milestones(
         m.seq = i
         m.title = title
         m.accept = str(it.get("accept") or "").strip()[:2000]
-        m.repo_id = str(it.get("repoId") or "")[:36]
+        m.repo_id = str(it.get("repoId") or "").strip()
         m.parallel_ok = bool(it.get("parallelOk"))
         # Each stage may override its executor and model.
-        m.agent_id = str(it.get("agentId") or "")[:64]
-        m.agent_type = str(it.get("agentType") or "")[:16]
-        m.model = str(it.get("model") or "")[:120]
+        m.agent_id = str(it.get("agentId") or "").strip()
+        m.agent_type = str(it.get("agentType") or "").strip()
+        m.model = str(it.get("model") or "").strip()
         st = str(it.get("status") or "").strip()
         # #664: skipped里程碑不可验收
         # #665: skipped里程碑不可重新规划为doing/done

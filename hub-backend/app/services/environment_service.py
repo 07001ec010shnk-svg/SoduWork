@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import automation_models as am
 from .. import models
-from . import approval_policies, preflight_evidence, release_control
+from . import catalog_names, approval_policies, preflight_evidence, release_control
 from .environment_contracts import (
     _KEY,
     _SECRET_WORD,
@@ -336,6 +336,8 @@ async def save_environment(session: AsyncSession, body: dict, row: am.Environmen
                     "custom", "regulated"} and not (
                         not creating and row is not None and row.tier == tier):
         raise InvalidEnvironmentTier("环境层级不受支持")
+    if creating or (key and key != row.key):
+        await catalog_names.lock_catalog(session, am.Environment)
     if creating:
         if not _KEY.fullmatch(key):
             raise ValueError("环境标识只允许小写字母、数字和短横线，且以字母开头")

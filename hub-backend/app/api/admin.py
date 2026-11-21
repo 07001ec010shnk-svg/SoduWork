@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models
 from ..auth import sign_token, verify_password
 from ..config import get_settings
+from ..services.catalog_names import DuplicateName
 from ..pagination import PageQuery
 from ..db import get_session
 from ..deps import current_user, has_perm, require_perm
@@ -249,6 +250,8 @@ async def create_role(body: RoleCreate,
                       session: AsyncSession = Depends(get_session)):
     try:
         result = await rbac.create_role(session, body.name, body.permissions)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await audit.log(session, user, "role.create", "role", result.get("id"),
@@ -262,6 +265,8 @@ async def update_role(rid: str, body: RoleUpdate,
                       session: AsyncSession = Depends(get_session)):
     try:
         r = await rbac.update_role(session, rid, body.name, body.permissions)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if r is None:
@@ -306,7 +311,7 @@ async def create_user(
     if not body.orgId:
         raise HTTPException(status_code=400, detail="请为用户指定所属部门")
     await _assert_org_in_scope(session, user, body.orgId)
-    if body.roleId and await session.get(Role, body.roleId) is None:
+    if body.roleId and await rbac.lock_role_reference(session, body.roleId) is None:
         raise HTTPException(status_code=400, detail="角色不存在")
     if body.domains:
         domain_ids = {str(value) for value in body.domains}
@@ -350,7 +355,7 @@ async def update_user(
         await _assert_org_in_scope(session, user, body.orgId)
     # An empty roleId is the legacy form used by clients to clear a role.
     # Validate non-empty assignments while preserving that clearing behavior.
-    if body.roleId and await session.get(Role, body.roleId) is None:
+    if body.roleId and await rbac.lock_role_reference(session, body.roleId) is None:
         raise HTTPException(status_code=400, detail="角色不存在")
     if body.domains is not None:
         domain_ids = {str(value) for value in body.domains}
@@ -483,7 +488,12 @@ async def create_domain(
     session: AsyncSession = Depends(get_session),
 ):
     sort = parse_integer(body.get("sort"), field="sort", default=0)
-    r = await rbac.create_domain(session, (body.get("name") or "").strip(), sort)
+    try:
+        r = await rbac.create_domain(session, body.get("name"), sort)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="领域名称必须为 1 到 64 个字符") from exc
     await audit.log(session, user, "domain.create", "domain", r["id"], r["name"], {})
     return r
 
@@ -500,7 +510,14 @@ async def update_domain(
     sort = body.get("sort")
     if sort is not None:
         sort = parse_integer(sort, field="sort")
-    r = await rbac.update_domain(session, did, body.get("name"), sort)
+    if "name" in body and body["name"] is None:
+        raise HTTPException(status_code=422, detail="领域名称必须为 1 到 64 个字符")
+    try:
+        r = await rbac.update_domain(session, did, body.get("name"), sort)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="领域名称必须为 1 到 64 个字符") from exc
     if r is None:
         raise HTTPException(status_code=404, detail="领域不存在")
     await audit.log(session, user, "domain.update", "domain", did, r["name"], {})
@@ -1966,6 +1983,8 @@ async def create_integration(body: IntegrationCreate,
     from ..services import scm_support
     try:
         result = await agg.create_integration(session, body.name, body.type, body.config)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except scm_support.RetiredScmError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -2231,6 +2250,8 @@ async def client_push(
         if forbidden:
             raise HTTPException(status_code=403,
                                 detail="本地模型配置由客户端管理，后台不能读取或修改")
+        from ..services import model_config_guard
+        await model_config_guard.personal(session, c, allow_patch=True)
         c.config = {**(c.config or {}), **patch}
         await session.commit()
         from ..services.client_domain_events import device_changed
