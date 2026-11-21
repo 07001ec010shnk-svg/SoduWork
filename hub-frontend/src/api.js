@@ -219,9 +219,11 @@ export const api = {
   audit: (p) => call('GET', '/admin/audit' + (p && Object.keys(p).length ? '?' + new URLSearchParams(p).toString() : '')),
   quotaPlans: () => call('GET', '/admin/quotas'),
   saveQuotaPlans: (body) => call('PUT', '/admin/quotas', body),
+  previewQuotaPlan: (body) => call('POST', '/admin/quotas/plans/preview', body),
   quotaMembers: (params = {}) => call('GET', '/admin/quotas/members' +
     (Object.keys(params).length ? '?' + new URLSearchParams(params).toString() : '')),
   quotaMember: (id) => call('GET', '/admin/quotas/members/' + encodeURIComponent(id)),
+  previewQuotaMember: (id, body) => call('POST', '/admin/quotas/members/' + encodeURIComponent(id) + '/preview', body),
   assignQuota: (id, body) => call('PUT', '/admin/quotas/members/' + encodeURIComponent(id), body),
   // Organization memory is restricted to administrators with org.manage.
   // Superadministrators may pass orgId to inspect another organization's memory.
