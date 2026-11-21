@@ -41,8 +41,9 @@ async def mark(session: AsyncSession, task: models.Task, status: str, *,
         return False
     # #631: done任务不可修改状态
     # #663: 撤回验收时重置done状态（仅引擎允许）
+    # Allow done->todo for re-opening requirements.
     if task.status == "done" and status != task.status:
-        if not engine:
+        if not engine and status != "todo":
             return False
         # 引擎在撤回验收时可以重置状态，但需要清除已设置的done标记
         from . import task_events
