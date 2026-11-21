@@ -1262,11 +1262,11 @@ async def milestone_verdict(
     # False acceptance can also close unresolved source issues in a batch.
     # Use rounds to establish that an execution result exists for review.
     # Use skipped to omit a milestone; acceptance is not a substitute for skipping.
-    # #664: skipped里程碑不可验收
-    if m.status == "skipped":
+    # #664: 未执行的skipped里程碑不可验收（已执行的skipped可以验收）
+    if m.status == "skipped" and (m.rounds or 0) <= 0:
         raise HTTPException(
             status_code=409,
-            detail=f"「{m.title}」已标记为不做，请先恢复为「计划」状态再验收")
+            detail=f"「{m.title}」已标记为不做且未执行，请先恢复为「计划」状态")
     if (m.rounds or 0) <= 0:
         raise HTTPException(
             status_code=409,
