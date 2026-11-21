@@ -233,7 +233,8 @@ export const api = {
   repositoryCatalog: (integrationId = '', search = '') => call('GET', '/admin/repository-catalog?' + new URLSearchParams({
     ...(integrationId ? { integrationId } : {}), ...(search ? { search } : {}),
   })),
-  syncRepositoryCatalog: (integrationId, clientId = '') => call('POST', '/admin/integrations/' + integrationId + '/repositories/sync', clientId ? { clientId } : {}, REPOSITORY_TIMEOUT),
+  syncRepositoryCatalog: (integrationId, clientId = '') => call('POST', '/admin/integrations/' + encodeURIComponent(integrationId) + '/repositories/sync', clientId ? { clientId } : {}, REPOSITORY_TIMEOUT),
+  repositorySyncProgress: (integrationId) => call('GET', '/admin/integrations/' + encodeURIComponent(integrationId) + '/repositories/sync'),
   savePullAccount: (integrationId, b) => call('POST', '/admin/integrations/' + integrationId + '/pull-account', b),
   testPullAccount: (integrationId, b = {}) => call('POST', '/admin/integrations/' + integrationId + '/pull-account/test', b, REPOSITORY_TIMEOUT),
   repositoryIssueSync: (catalogId) => call('GET', '/admin/repository-catalog/' + encodeURIComponent(catalogId) + '/issue-sync'),
