@@ -351,3 +351,7 @@ python3 e2e_dsh_private_probe.py \
 ```
 
 此显式检查使用生产私有探测作业和 ACP 桥接、实际安装的适配器与运行时，以及合成本机回环模型。先重现旧安装路径错误，再要求修正路径后出现真实模型请求并由 Agent 返回预期响应。检查使用可清理的用户目录、状态和临时目录，阻止 Node 连接非回环地址，并清理自身子进程；不会安装或更新依赖，也不使用真实凭据，不覆盖桌面界面、生产 Hub 或模型服务行为。由于需要已有原生安装，请在离线质量门禁之外单独运行。
+
+## 删除模型服务
+
+持有 `integration.manage` 权限时，通过 `GET /api/v1/admin/model-providers/{id}/deletion-impact` 获取服务版本、影响清单版本、子模型及可见的已保存模型选择。成员名称需要 `user.manage`，需求标题需要 `task.view`，两者均遵守部门可见范围。调用已有的 `DELETE /api/v1/admin/model-providers/{id}` 时，以 `expectedRevision`、`expectedImpact` 传入预览返回的版本，另以 `confirmId` 传入完整服务 ID。旧版请求未预览会返回 HTTP 428。遇到 HTTP 409 时，应重新获取清单并再次确认。内置服务禁止删除。

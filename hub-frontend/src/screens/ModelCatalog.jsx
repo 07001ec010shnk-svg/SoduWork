@@ -5,6 +5,7 @@ import { useViewportHeight } from '../viewport-height.js'
 import { Loading, ErrorState, Icon, Modal, Confirm, toast, SelectMenu } from '../ui.jsx'
 import LlmSettings from './LlmSettings.jsx'
 import ModelRuntime from './ModelRuntime.jsx'
+import ModelProviderDeletion from './ModelProviderDeletion.jsx'
 import './model-catalog-actions.css'
 import { CAPABILITY_LABELS, CAPABILITY_STATES, CapabilityBadges, ModelCapabilityStatus } from './ModelCapabilities.jsx'
 import './model-capabilities.css'
@@ -181,15 +182,14 @@ export default function ModelCatalog() {
         onClose={closeAddModel} onSaved={receipts => { closeAddModel(); modelsSaved(addM.provider, receipts) }} />}
       {discover && <DiscoverForm provider={discover}
         onClose={closeDiscovery} onSaved={receipts => { closeDiscovery(); modelsSaved(discover, receipts) }} />}
-      {del && <Confirm title={del.kind === 'p' ? tx("删除模型服务") : tx("删除模型")} danger confirmText={tx("删除")}
-        text={del.kind === 'p'
-          ? tx("确定删除「{0}」？它底下的模型会一起删掉，正在用这些模型的人会挑不到。", [del.name])
-          : tx("确定删除「{0}」？正在用它的人会挑不到。", [del.name])}
+      {del?.kind === 'p' && <ModelProviderDeletion key={del.id} providerId={del.id}
+        onClose={() => setDel(null)} onDeleted={() => { setDel(null); toast(tx("已删除")); load() }} />}
+      {del?.kind === 'm' && <Confirm title={tx("删除模型")} danger confirmText={tx("删除")}
+        text={tx("确定删除「{0}」？正在用它的人会挑不到。", [del.name])}
         onClose={() => setDel(null)}
         onConfirm={async () => {
           try {
-            if (del.kind === 'p') await api.deleteModelProvider(del.id, del.revision)
-            else await api.deleteModelDef(del.id, del.revision)
+            await api.deleteModelDef(del.id, del.revision)
             toast(tx("已删除"))
           } catch (e) { toast(tx("删不掉：") + (e.message || e)) }
           setDel(null); load()
