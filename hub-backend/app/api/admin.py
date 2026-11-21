@@ -1420,6 +1420,25 @@ async def del_model_provider(
     return {"ok": True}
 
 
+@router.post("/model-providers/test-connection", dependencies=[Depends(require_perm("integration.manage"))])
+async def test_model_provider_connection(body: dict = Body(default_factory=dict),
+                                         session: AsyncSession = Depends(get_session)):
+    """List models using draft settings without persisting a provider or its credentials."""
+    from ..models import ModelProvider
+    from ..services import model_discovery
+    base = str(body.get("baseUrl") or "").strip()
+    kind = str(body.get("kind") or "openai-compat")
+    key = str(body.get("apiKey") or "").strip()
+    if not key and body.get("providerId"):
+        provider = await session.get(ModelProvider, str(body["providerId"]))
+        if provider and provider.api_key:
+            if base.rstrip("/") != provider.base_url.rstrip("/") or kind != provider.kind:
+                return {"ok": False, "models": [], "code": "model.discovery.reenter-key",
+                        "detail": "服务地址或协议已更改，请输入用于测试的密钥"}
+            key = provider.api_key
+    return await model_discovery.discover(base, key, kind, allow_empty=True)
+
+
 @router.post("/model-providers/{pid}/discover")
 async def discover_model_provider(
     pid: str,

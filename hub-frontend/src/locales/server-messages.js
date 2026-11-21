@@ -39,6 +39,8 @@ export const serverMessages = {
   'plugin.tools.missing': ['尚未选择：{names}', 'Not selected: {names}', '未選択：{names}', '선택되지 않음: {names}'],
   'model.discovery.invalid-url': ['先填写以 http(s):// 开头的服务地址', 'Enter a service address that starts with http(s)://.', 'http(s):// で始まるサービスアドレスを入力してください。', 'http(s)://로 시작하는 서비스 주소를 입력하세요.'],
   'model.discovery.missing-key': ['先配置组织密钥', 'Configure the organization key first.', '先に組織キーを設定してください。', '먼저 조직 키를 설정하세요.'],
+  'model.discovery.invalid-list': ['服务没有返回有效的模型列表', 'The service did not return a valid model list.', 'サービスから有効なモデル一覧が返されませんでした。', '서비스가 올바른 모델 목록을 반환하지 않았습니다.'],
+  'model.discovery.reenter-key': ['服务地址或协议已更改，请输入用于测试的密钥', 'Enter a key to test the changed service address or protocol.', '変更したサービスアドレスまたはプロトコルでテストするキーを入力してください。', '서비스 주소 또는 프로토콜을 변경했습니다. 테스트에 사용할 키를 입력하세요.'],
   'model.discovery.provider-incomplete': ['服务需要先启用，并填写地址与密钥后才能读取模型列表', 'Enable the service and fill in the address and key before reading the model list.', 'モデル一覧を読み取る前に、サービスを有効化しアドレスとキーを入力してください。', '모델 목록을 읽기 전에 서비스를 활성화하고 주소와 키를 입력하세요.'],
   'model.discovery.unreachable': ['连不上模型服务：{error}', 'Cannot reach the model service: {error}', 'モデルサービスに接続できません：{error}', '모델 서비스에 연결할 수 없습니다: {error}'],
   'model.discovery.invalid-payload': ['模型列表不是有效的 JSON 响应', 'The model list is not a valid JSON response.', 'モデル一覧が有効な JSON 応答ではありません。', '모델 목록이 올바른 JSON 응답이 아닙니다.'],

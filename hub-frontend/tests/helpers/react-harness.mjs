@@ -93,7 +93,7 @@ export async function createComponentHarness(file, { dependencies = {}, exportNa
   }
   return {
     render,
-    nodes: (predicate) => walk(predicate, render(), []),
+    nodes: (predicate, root = render()) => walk(predicate, root, []),
     act(callback) { callback(); return render() },
     async flush() { await new Promise((resolve) => setImmediate(resolve)); return render() },
     unmount() { slots.forEach((slot) => slot?.cleanup?.()); mounted = false },
