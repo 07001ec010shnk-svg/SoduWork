@@ -22,6 +22,9 @@ from .workdirs import validate_repo_local_dir
 from ..timestamps import iso_utc
 
 
+SYNC_LEASE_SECONDS = 1800
+
+
 class InvalidRepositoryInput(ValueError):
     """A repository mapping field failed request validation."""
 
@@ -201,6 +204,23 @@ def _normalized(integration: models.Integration, raw: dict,
     return payload
 
 
+async def sync_stage(session: AsyncSession, integration_id: str) -> str | None:
+    detail = await session.scalar(select(am.ResourceLease.detail).where(
+        am.ResourceLease.resource_kind == "repository-sync",
+        am.ResourceLease.resource_key == integration_id,
+        am.ResourceLease.lease_until > datetime.now(timezone.utc),
+    ))
+    return (detail or {}).get("stage")
+
+
+async def _publish_sync_stage(session: AsyncSession, lease: resource_leases.LeaseHandle,
+                              stage: str) -> None:
+    # This commits the stage before listing or starting the catalog transaction.
+    if not await resource_leases.heartbeat(session, lease, ttl_seconds=SYNC_LEASE_SECONDS,
+                                          detail={"integrationId": lease.key, "stage": stage}):
+        raise resource_leases.LeaseBusy("Repository synchronization lease expired")
+
+
 async def sync_integration(session: AsyncSession, integration_id: str, *,
                            client_id: str = "") -> dict:
     integration = await session.get(models.Integration, integration_id)
@@ -211,11 +231,13 @@ async def sync_integration(session: AsyncSession, integration_id: str, *,
     if connector is None or not callable(getattr(connector, "list_repositories", None)):
         raise ValueError("This integration cannot list repositories")
     lease = await resource_leases.acquire(
-        session, "repository-sync", str(integration.id), ttl_seconds=1800,
-        detail={"integrationId": str(integration.id)})
+        session, "repository-sync", str(integration.id), ttl_seconds=SYNC_LEASE_SECONDS,
+        detail={"integrationId": str(integration.id), "stage": "preparing"})
     try:
         cfg, org_id = await _runtime_config(session, integration, client_id)
+        await _publish_sync_stage(session, lease, "listing")
         rows = await asyncio.to_thread(connector.list_repositories, cfg)
+        await _publish_sync_stage(session, lease, "saving")
         seen: set[str] = set()
         created = updated = 0
         now = datetime.now(timezone.utc)
@@ -272,6 +294,9 @@ async def sync_integration(session: AsyncSession, integration_id: str, *,
         await session.commit()
         return {"ok": True, "total": len(seen), "created": created,
                 "updated": updated, "inactive": stale}
+    except (resource_leases.LeaseBusy, asyncio.CancelledError):
+        await session.rollback()
+        raise
     except Exception as exc:
         await session.rollback()
         integration = await session.get(models.Integration, integration_id)
