@@ -22,6 +22,23 @@
 .app .content .admin-access-page .admin-filterbar .btn {
   min-height: var(--filter-height);
 }
+.app .content .admin-filter-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--filter-height);
+  color: var(--ink-2);
+  font-size: 14.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.app .content .admin-filter-check > input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
 .admin-access-note {
   min-width: 0;
   margin: 0;

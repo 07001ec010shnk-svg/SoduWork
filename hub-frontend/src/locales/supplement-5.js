@@ -223,5 +223,11 @@ export default {
   "方案正文\n汇报材料": "Proposal document\nPresentation",
   "目标和边界清楚\n关键判断有依据": "Clear objectives and boundaries\nEvidence supporting key decisions",
   "系统会在任务创建时冻结这份交付标准": "These delivery standards are frozen when the issue is created",
-  "停用后不再参与新任务匹配，历史任务不受影响": "Disabled scenarios no longer match new issues; historical issues are unaffected"
+  "停用后不再参与新任务匹配，历史任务不受影响": "Disabled scenarios no longer match new issues; historical issues are unaffected",
+  "未激活": "Not activated",
+  "从未登录，账号不可用": "Never signed in; the account cannot be used",
+  "登录过之后被停用，账号不可用": "Disabled after signing in; the account cannot be used",
+  "停用账号不可登录；从未登录的为未激活账号": "Disabled accounts cannot sign in; accounts never signed in are not activated",
+  "按用户名识别的测试账号": "Test account identified by username",
+  "仅看测试账号": "Test accounts only"
 }

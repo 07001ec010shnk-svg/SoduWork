@@ -9,6 +9,13 @@ import './admin-access-pages.css'
 
 const AVA = ['#245cb9', '#087052', '#855209', '#b02c43', '#6246a8']
 function avaColor(s) { let h = 0; for (const c of (s || '?')) h = (h * 31 + c.charCodeAt(0)) % 997; return AVA[h % AVA.length] }
+const TEST_ACCOUNT_RE = /test|qa\b|verify|demo|deact/i
+
+function userState(u) {
+  if (u.isActive) return { key: 'active', label: tx("启用"), hint: '' }
+  if (!u.lastLogin) return { key: 'inactive', label: tx("未激活"), hint: tx("从未登录，账号不可用") }
+  return { key: 'disabled', label: tx("已停用"), hint: tx("登录过之后被停用，账号不可用") }
+}
 
 export default function Users() {
   const uiLocale = useLocale();
@@ -19,6 +26,8 @@ export default function Users() {
   const [edit, setEdit] = useState(null)
   const [q, setQ] = useState('')
   const [dept, setDept] = useState('')
+  const [status, setStatus] = useState('')
+  const [onlyTest, setOnlyTest] = useState(false)
   if (users.loading || orgs.loading || roles.loading) return <Loading />
   const ul = users.data || [], ol = orgs.data || [], rl = roles.data || []
   const orgName = (id) => { const o = ol.find((x) => x.id === id); return o ? o.name : '—' }
@@ -27,7 +36,9 @@ export default function Users() {
   const filtered = ul.filter((u) => {
     const kw = q.trim().toLowerCase()
     const hit = !kw || (u.displayName || '').toLowerCase().includes(kw) || (u.username || '').toLowerCase().includes(kw)
-    return hit && (!dept || u.orgId === dept)
+    const st = userState(u)
+    const stHit = !status || st.key === status
+    return hit && (!dept || u.orgId === dept) && stHit && (!onlyTest || TEST_ACCOUNT_RE.test(u.username || ''))
   })
   const active = ul.filter((u) => u.isActive).length
 
@@ -36,7 +47,7 @@ export default function Users() {
       <div className="statrow admin-access-summary">
         <div className="stat"><div className="sv">{ul.length}</div><div className="sl"><span className="sd" style={{ background: 'var(--c-blue)' }} />{tx("用户总数")}</div></div>
         <div className="stat"><div className="sv">{active}</div><div className="sl"><span className="sd" style={{ background: 'var(--c-green)' }} />{tx("启用中")}</div></div>
-        <div className="stat"><div className="sv">{ul.length - active}</div><div className="sl"><span className="sd" style={{ background: 'var(--offline)' }} />{tx("已停用")}</div></div>
+        <div className="stat" title={tx("停用账号不可登录；从未登录的为未激活账号")}><div className="sv">{ul.length - active}</div><div className="sl"><span className="sd" style={{ background: 'var(--offline)' }} />{tx("已停用")}</div></div>
       </div>
       <div className="admin-filterbar">
         <FilterInput aria-label={tx("搜索姓名或账号")} value={q} onChange={(e) => setQ(e.target.value)} placeholder={tx("搜索姓名 / 账号")} />
@@ -45,6 +56,13 @@ export default function Users() {
             <option value="">{tx("全部部门")}</option>
             {orgOptions(ol).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
           </FilterSelect>
+          <FilterSelect className="f-sel" aria-label={tx("状态")} value={status} onChange={(e) => setStatus(e.target.value)}>
+            <option value="">{tx("全部状态")}</option>
+            <option value="active">{tx("启用中")}</option>
+            <option value="inactive">{tx("未激活")}</option>
+            <option value="disabled">{tx("已停用")}</option>
+          </FilterSelect>
+          <label className="admin-filter-check"><input type="checkbox" checked={onlyTest} onChange={(e) => setOnlyTest(e.target.checked)} />{tx("仅看测试账号")}</label>
           <button className="btn btn-ghost" onClick={() => { users.reload(); orgs.reload(); roles.reload() }}><Icon name="refresh" />{tx("刷新")}</button>
           <button className="btn btn-primary" onClick={() => setEdit({ user: null })}><Icon name="plus" />{tx("新建用户")}</button>
         </div>
@@ -58,10 +76,10 @@ export default function Users() {
             return (
               <tr key={u.id}>
                 <td><span className="cli"><span className="ava" style={{ background: avaColor(nm) }}>{nm.slice(0, 1)}</span><span className="nm">{nm}{u.isSuper && <span className="chip src-ext" style={{ marginLeft: 6, fontSize: 14.5 }}>{tx("超级")}</span>}</span></span></td>
-                <td className="mono">{u.username}</td>
+                <td className="mono">{u.username}{TEST_ACCOUNT_RE.test(u.username || '') && <span className="chip src-ext" style={{ marginLeft: 6 }} title={tx("按用户名识别的测试账号")}>{tx("测试")}</span>}</td>
                 <td>{orgName(u.orgId)}</td>
                 <td>{u.isSuper ? <span className="chip src-ext">{tx("全部权限")}</span> : roleName(u.roleId)}</td>
-                <td><span className={'status-dot ' + (u.isActive ? 'on' : 'off')}><i />{u.isActive ? tx("启用") : tx("停用")}</span></td>
+                <td><span className={'status-dot ' + (userState(u).key === 'active' ? 'on' : 'off')} title={userState(u).hint || undefined}><i />{userState(u).label}</span></td>
                 <td className="muted nowrap">{u.lastLogin ? new Date(u.lastLogin).toLocaleString(getLocale()) : '—'}</td>
                 <td><div className="admin-row-actions"><button className="admin-text-action" onClick={() => setEdit({ user: u })}>{tx("编辑")}</button></div></td>
               </tr>
