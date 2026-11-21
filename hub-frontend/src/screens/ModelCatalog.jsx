@@ -645,7 +645,7 @@ function DiscoverForm({ provider, onClose, onSaved }) {
       .then((r) => {
         if (!alive) return
         if (!r.ok) { setDetail(r.code ? serverMessage({ key: r.code, params: r.params, fallback: r.detail }) : (r.detail || tx("读取失败"))); setPhase('error'); return }
-        const list = (r.models || []).map((name) => ({ name, checked: true }))
+        const list = (r.models || []).map((name) => ({ name, checked: false }))
         if (list.length === 0) { setPhase('empty'); return }
         setRows(list); setPhase('ready')
       })
@@ -653,8 +653,11 @@ function DiscoverForm({ provider, onClose, onSaved }) {
     return () => { alive = false }
   }, [provider.id])
 
+  const [query, setQuery] = useState('')
+  const matches = row => row.name.toLowerCase().includes(query.trim().toLowerCase())
+  const filtered = rows.filter(matches)
   const checkedCount = rows.filter((r) => r.checked).length
-  function toggleAll(next) { setRows((current) => current.map((r) => ({ ...r, checked: next }))) }
+  function toggleAll(next) { setRows((current) => current.map(r => matches(r) ? { ...r, checked: next } : r)) }
 
   async function importSelected() {
     const picked = rows.filter((r) => r.checked)
@@ -689,13 +692,16 @@ function DiscoverForm({ provider, onClose, onSaved }) {
         {phase === 'error' && <div className="model-discover-note">{detail}</div>}
         {phase === 'empty' && <div className="model-discover-note">{tx("这个服务的模型都已经在目录里了。")}</div>}
         {phase === 'ready' && <>
+          <input type="search" className="f-in" aria-label={tx("按模型名称筛选")} placeholder={tx("按模型名称筛选")}
+            value={query} onChange={event => setQuery(event.target.value)} />
           <div className="model-discover-toolbar">
-            <button type="button" className="admin-card-action" onClick={() => toggleAll(true)}>{tx("全选")}</button>
-            <button type="button" className="admin-card-action" onClick={() => toggleAll(false)}>{tx("全不选")}</button>
-            <span className="muted">{tx("共 {0} 个", [rows.length])}</span>
+            <button type="button" className="admin-card-action" onClick={() => toggleAll(true)}>{tx("选择筛选结果")}</button>
+            <button type="button" className="admin-card-action" onClick={() => toggleAll(false)}>{tx("取消选择筛选结果")}</button>
+            <span className="muted">{tx("共 {0} 个", [filtered.length])}</span>
           </div>
+          <p aria-live="polite">{tx("将在此服务下添加并启用 {0} 个模型。", [checkedCount])}</p>
           <div className="model-discover-list" role="region" tabIndex={0} aria-label={tx("发现的模型列表")}>
-            {rows.map((row) => (
+            {filtered.map((row) => (
               <label className="model-discover-row" key={row.name}>
                 <input type="checkbox" checked={row.checked}
                   onChange={(e) => setRows((current) => current.map((r) => r.name === row.name ? { ...r, checked: e.target.checked } : r))} />

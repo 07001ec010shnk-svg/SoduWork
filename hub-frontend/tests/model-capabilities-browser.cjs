@@ -222,6 +222,7 @@ app.whenReady().then(async()=>{
   assert.equal(requests.filter(r=>r.key==='/admin/model-capabilities/check' && r.body.model==='new-chat-model').length,2)
   await click('发现模型')
   await wait("document.querySelectorAll('.model-discover-row').length === 5", 'discovered models')
+  await click('选择筛选结果')
   await clickElement("document.querySelector('.modal:not(.model-provider-dialog) .modal-foot .btn-primary')")
   await wait("!document.querySelector('.modal:not(.model-provider-dialog)')", 'partially successful import saved')
   // Queued import checks also continue while the model list is not displayed.
