@@ -6,6 +6,9 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+from datetime import datetime, timezone
+
+from sqlalchemy import select
 
 _TEMP = tempfile.TemporaryDirectory(prefix="soduwork-status-authority-smoke-")
 DB = str(Path(_TEMP.name) / "test.db")
@@ -118,6 +121,37 @@ async def main():
         chk("③ run 结束后客户端能改状态了",
             await task_status.mark(s, t_run, "done", why="测试") and t_run.status == "done")
         await s.rollback()
+
+    # Existing completed records must not gain a reset event when admission fails.
+    async with SessionLocal() as s:
+        completed = models.Task(id="t-reset-plain", title="Completed record", status="done", owner_client_id="c-sa")
+        managed = models.Task(id="t-reset-managed", title="Managed completed record", status="done", owner_client_id="c-sa")
+        reopened = models.Task(id="t-reset-reopen", title="Reopened completed record", status="done", owner_client_id="c-sa")
+        s.add_all([completed, managed, reopened, am.WorkflowRun(id="r-reset", task_id=managed.id,
+            plugin_id="p1", plugin_version_id="pv-sa", binding_id="b-reset", state="running")])
+        await s.commit()
+        for task, target, engine_owned in ((completed, "doing", True), (managed, "todo", False)):
+            applied = await task_status.mark(s, task, target, engine=engine_owned,
+                                            why="Rejected fixture transition", refresh_memory=False)
+            await s.commit()
+            events = list((await s.scalars(select(models.TaskEvent).where(
+                models.TaskEvent.task_id == task.id,
+                models.TaskEvent.kind == "status.reset_from_done"))).all())
+            chk("rejected completed transition preserves its state: " + task.id,
+                not applied and task.status == "done")
+            chk("rejected completed transition commits no reset event: " + task.id,
+                not events, [event.detail for event in events])
+        applied = await task_status.mark(s, reopened, "todo", why="Authorized fixture reopening",
+                                        refresh_memory=False)
+        await s.commit()
+        events = list((await s.scalars(select(models.TaskEvent).where(
+            models.TaskEvent.task_id == reopened.id,
+            models.TaskEvent.kind == "status.reset_from_done"))).all())
+        chk("authorized reopening of an existing completed record remains available",
+            applied and reopened.status == "todo")
+        chk("authorized reopening records exactly its applied reset",
+            len(events) == 1 and events[0].detail == {
+                "from": "done", "to": "todo", "reason": "Authorized fixture reopening"})
 
     # Reject new direct status writes that bypass the shared service.
     offenders = []
