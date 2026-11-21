@@ -387,7 +387,9 @@ function UploadModal({ onClose, onDone }) {
 
   return <Modal title={tx("上传客户端发布")} icon="send" onClose={busy ? undefined : onClose}
     foot={<>
-      <button className="btn btn-ghost" disabled={busy && progress.sent} onClick={() => busy ? controller.current?.abort() : onClose()}>{tx("取消")}</button>
+      <button className="btn btn-ghost" disabled={busy && progress.sent} onClick={() => busy ? controller.current?.abort() : onClose()}>
+        {busy ? tx("上传中，请勿关闭") : tx("取消")}
+      </button>
       <button className="btn btn-primary" disabled={busy} onClick={submit}>
         {busy ? tx("上传中，安装包较大请稍候…") : tx("上传")}
       </button>
