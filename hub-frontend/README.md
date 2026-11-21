@@ -12,6 +12,10 @@ The model catalog starts with a compact service/model and live-load summary. Exp
 
 Service cards adapt from one to four columns according to the available content width. View opens model details in a dialog without resizing or rearranging the service grid. Add, discover and configure actions remain visible; enable/disable and deletion are in the More popover, with the existing deletion confirmation retained.
 
+## Reviewing Skill access
+
+In the capability catalog, bundled Skills show a summary in the interface language. Expand a summary to read the author's original description. Use the switch to stage a policy change. **Save access policy** lists the Skills to add and remove. It estimates the impact from active devices' Skill selections and their owners' departments. A device matching several changes counts once. Confirm to apply the policy on the next execution, or cancel to return to the draft.
+
 ## Investigating usage and cost
 
 On **Usage and Cost**, open the anomaly count to see the original record IDs and exact token counts, including records older than the latest 30. The dashboard flags daily ledger records above one billion tokens. Exclude those records to compare the remaining trend and usage by scenario.

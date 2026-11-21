@@ -440,6 +440,7 @@ export const api = {
     setTimeout(() => URL.revokeObjectURL(url), 30000)
   },
   capabilityCatalog: () => call('GET', '/admin/capabilities'),
+  previewCapabilityPolicy: (cfg) => call('POST', '/admin/capabilities/policy/preview', { cfg }),
   saveCapabilityPolicy: (cfg) => call('PUT', '/admin/capabilities', { cfg }),
   preflightCapabilitySkill: (file) => upload('/admin/capabilities/skills/preflight', file),
   importCapabilitySkill: (file) => upload('/admin/capabilities/skills/import', file),
