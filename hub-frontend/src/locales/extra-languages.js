@@ -16,6 +16,10 @@ import { ja as quotaJa, ko as quotaKo } from './quota-management.js'
 import { ja as accessCatalogJa, ko as accessCatalogKo } from './access-catalog.js'
 import { ja as operationsJa, ko as operationsKo } from './operations-overview.js'
 const ja = {
+  'Anthropic 服务根地址': 'Anthropic サービスのルート URL',
+  '连接成功，本次读取到 {0} 个模型。': '接続に成功しました。モデルを {0} 件取得しました。',
+  '示例：{0}。': '例：{0}。',
+  '发消息前还需添加模型并确认额度。': 'メッセージ送信前にモデルを追加し、利用枠を確認してください。',
   '跳到主要内容': 'メインコンテンツへ移動',
   '更多': 'その他',
   '登录状态已变更，请重试本次操作': 'ログイン状態が変わりました。この操作をもう一度実行してください。',
@@ -58,6 +62,10 @@ const ja = {
 };
 
 const ko = {
+  'Anthropic 服务根地址': 'Anthropic 서비스 루트 URL',
+  '连接成功，本次读取到 {0} 个模型。': '연결했습니다. 모델 {0}개를 가져왔습니다. ',
+  '示例：{0}。': '예: {0}. ',
+  '发消息前还需添加模型并确认额度。': '메시지를 보내기 전에 모델을 추가하고 할당량을 확인하세요.',
   '跳到主要内容': '본문으로 건너뛰기',
   '更多': '더 보기',
   '登录状态已变更，请重试本次操作': '로그인 상태가 변경되었습니다. 이 작업을 다시 시도하세요.',
