@@ -10,6 +10,7 @@ import { ErrorState, toast } from '../ui.jsx'
 export default function AlertChannel() {
   const uiLocale = useLocale();
   const [url, setUrl] = useState('')
+  const usesPlainHttp = /^http:\/\//i.test(url.trim())
   const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState(null)
@@ -40,12 +41,14 @@ export default function AlertChannel() {
       <div className="card-head"><h3>{tx("告警通道")}</h3>
         <span className="muted" style={{ fontSize: 14.5 }}>{tx("发布、上线核对、合并这几关失败时，除了应用内提醒，再往这个地址发一份")}</span></div>
       <div className="integration-alert-body">
-        <label className="f-lbl">{tx("机器人地址")}<small>{tx("企业微信 / 钉钉 / 飞书的群机器人 Webhook 都行；留空＝不往外发")}</small></label>
+        <label className="f-lbl" htmlFor="alert-webhook-url">{tx("机器人地址")}<small>{tx("企业微信 / 钉钉 / 飞书的群机器人 Webhook 都行；留空＝不往外发")}</small></label>
         <div className="integration-alert-controls">
-          <input className="f-in mono" value={url} disabled={!loaded}
+          <input id="alert-webhook-url" className="f-in mono" value={url} disabled={!loaded}
+            aria-describedby={usesPlainHttp ? 'alert-http-warning' : undefined}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…" />
         </div>
+        {usesPlainHttp && <p id="alert-http-warning" role="status" className="integration-alert-warning">{tx('HTTP 会以明文发送告警内容，建议使用 HTTPS 地址。')}</p>}
         <p className="muted" style={{ fontSize: 14.5, lineHeight: 1.7, marginTop: 10 }}>{tx("「测一下」会")}<b>{tx("真发一条")}</b>{tx("测试消息到群里。地址本身不进审计日志，只记“配没配”。")}</p>
       </div>
       <div className="admin-card-actions integration-alert-actions">
