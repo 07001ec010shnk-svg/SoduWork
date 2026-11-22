@@ -103,7 +103,7 @@ export default function ClientReleases() {
   const [uploadOpen, setUploadOpen] = useState(false)
   const [confirmEnable, setConfirmEnable] = useState(null)   // Release awaiting enablement.
   const [toggling, setToggling] = useState('')
-  const [downloading, setDownloading] = useState('')
+  const [pendingDownloads, setPendingDownloads] = useState([])
   // Per-device update version and stage.
   const [attempts, setAttempts] = useState([])
   const [counts, setCounts] = useState({})
@@ -205,6 +205,7 @@ export default function ClientReleases() {
                 <summary>{tx("更新内容")}</summary><div data-user-content>{notes}</div>
               </details>)}
             {group.rows.map((row) => {
+              const downloading = pendingDownloads.find(id => id === row.id)
               const plat = PLATFORM_META[row.platform] || { label: row.platform || '?', mark: '?' }
               return <div key={row.id} className="cr-row">
                 <span className="cr-platform">
@@ -224,10 +225,10 @@ export default function ClientReleases() {
                 <span className="cr-actions">
                   {manage && <button className="admin-text-action" disabled={!!downloading}
                     onClick={async () => {
-                      setDownloading(row.id)
+                      setPendingDownloads(ids => [...ids, row.id])
                       try { await api.downloadClientRelease(row.id, row.artifactName) }
                       catch (error) { toast(error.message || tx("请稍后重试")) }
-                      finally { setDownloading('') }
+                      finally { setPendingDownloads(ids => ids.filter(id => id !== row.id)) }
                     }}>{tx(downloading === row.id ? "下载中" : "下载")}</button>}
                   {manage && (row.enabled
                     ? <button className="admin-text-action" disabled={toggling === row.id}
