@@ -254,6 +254,22 @@ class ModelIdentifierBoundaryTests(unittest.IsolatedAsyncioTestCase):
         })
         self.assertEqual(response.status_code, 409, response.text)
 
+    async def test_deletion_preview_distinguishes_pinned_providers_with_the_same_model(self):
+        async with self.sessions.begin() as session:
+            for provider in ("first", "second"):
+                session.add(models.ModelProvider(id=provider, name=provider))
+                session.add(models.ModelDef(id=provider + ":shared", provider_id=provider, name="shared"))
+            for member, saved in (("one", {"name": "shared", "providerId": "first"}),
+                                  ("two", {"name": "shared", "providerId": "second"}),
+                                  ("legacy", "shared")):
+                session.add(models.User(id=member, username=member, is_active=True))
+                session.add(models.Client(id="device-" + member, user_ref=member,
+                                          auth_state="active", agent_models={"qwen": saved}))
+        for provider, members in (("first", ["legacy", "one"]), ("second", ["legacy", "two"])):
+            response = await self.request("GET", f"/model-providers/{provider}/deletion-impact")
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual([row["id"] for row in response.json()["members"]], members)
+
     async def test_wellformed_provider_and_model_round_trip(self):
         created = await self.request("PUT", "/model-providers/good", json={
             "expectedRevision": "new", "name": "Good", "kind": "openai-compat",
