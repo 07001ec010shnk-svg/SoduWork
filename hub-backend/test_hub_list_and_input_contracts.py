@@ -1,5 +1,8 @@
 """Exercise list and write contracts on the Hub HTTP routes against isolated SQLite."""
+import csv
+import io
 import os
+from datetime import datetime, timedelta, timezone
 import unittest
 from unittest.mock import AsyncMock, patch
 
@@ -146,6 +149,90 @@ class HubContractTests(unittest.IsolatedAsyncioTestCase):
         self.user.is_super = False
         limited = await self.request("GET", "admin/users?limit=1")
         self.assertEqual(([user["id"] for user in limited["items"]], limited["total"]), (["row-0"], 1))
+
+    async def test_client_inventory_sort_applies_before_pagination(self):
+        now = datetime.now(timezone.utc)
+        async with self.sessions() as session:
+            for key, name, owner, state, platform, version, seen in (
+                ("sort-a", "Zulu", "row-1", "revoked", "darwin", "2", now - timedelta(days=1)),
+                ("sort-b", "ALPHA", None, "active", "Linux", "5", now + timedelta(minutes=5)),
+                ("sort-c", "alpha", "row-2", "pending", "macOS", "1", None),
+            ):
+                device = models.Client(id=key, name=name, user_ref=owner, auth_state=state,
+                                       platform=platform, app_version=version, last_seen_at=seen)
+                session.add(device)
+            await session.commit()
+
+        # Names differing only by case tie on the device ID; Darwin and macOS
+        # share a displayed platform, so their ordering falls back to version.
+        orders = {
+            "name": ("bca", "abc"), "owner": ("bac", "cab"), "online": ("bac", "acb"),
+            "auth": ("bca", "acb"), "platform": ("bca", "acb"), "lastSeen": ("abc", "bac"),
+        }
+        for key, (asc, desc) in orders.items():
+            for direction, expected in (("asc", asc), ("desc", desc)):
+                with self.subTest(key=key, direction=direction):
+                    params = {"q": "sort-", "sortBy": key, "sortDir": direction, "pageSize": 2}
+                    first = await self.request("GET", "admin/clients", params={**params, "paged": 1})
+                    next_page = await self.request("GET", "admin/client-inventory", params={**params, "page": 2})
+                    self.assertEqual(first["total"], 3)
+                    self.assertEqual([item["id"] for item in first["items"] + next_page["items"]],
+                                     ["sort-" + suffix for suffix in expected])
+        for endpoint in ("admin/client-inventory", "admin/client-inventory/export.csv"):
+            for invalid in ({"sortBy": "other"}, {"sortDir": "other"}):
+                await self.request("GET", endpoint, expected=422, params=invalid)
+
+    async def test_client_inventory_csv_matches_scoped_filtered_order_across_batches(self):
+        self.user.is_super = False
+        self.user._perms = {"client.view"}
+        seen = datetime(2024, 6, 15, 12, 34, 56, tzinfo=timezone.utc)
+        special_name = '=Fleet, "one"\nsecond line'
+        async with self.sessions() as session:
+            member = await session.get(models.User, "row-0")
+            member.display_name = "  +Manager"
+            for i in range(405):
+                session.add(models.Client(id=f"fleet-{i:03}", name=special_name if i == 0 else "Fleet",
+                                          user_ref="row-0" if i % 2 == 0 else None, platform="Android",
+                                          app_version="1.2.3", last_seen_at=seen + timedelta(minutes=i)))
+            # Each of these violates exactly one of scope, form, state or search.
+            session.add_all([
+                models.Client(id="fleet-other-org", user_ref="row-1", platform="Android"),
+                models.Client(id="fleet-desktop", platform="Linux"),
+                models.Client(id="fleet-online", platform="Android",
+                              last_seen_at=datetime.now(timezone.utc) + timedelta(minutes=5)),
+                models.Client(id="unmatched", platform="Android"),
+            ])
+            await session.commit()
+
+        filters = {"state": "offline", "form": "mobile", "q": "fleet", "sortBy": "lastSeen", "sortDir": "desc"}
+        expected_ids = [f"fleet-{i:03}" for i in reversed(range(405))]
+        listed = []
+        for page in range(1, 6):
+            part = await self.request("GET", "admin/clients", params={**filters, "paged": 1, "page": page, "pageSize": 100})
+            self.assertEqual(part["total"], len(expected_ids))
+            listed.extend(item["id"] for item in part["items"])
+        self.assertEqual(listed, expected_ids)
+
+        endpoint = "admin/client-inventory/export.csv"
+        response = await self.http.get(endpoint, params=filters)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.content.startswith(b"\xef\xbb\xbf"))
+        self.assertTrue(response.headers["content-type"].startswith("text/csv"))
+        self.assertIn("attachment;", response.headers["content-disposition"])
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        records = list(csv.DictReader(io.StringIO(response.content.decode("utf-8-sig"), newline="")))
+        self.assertEqual([row["id"] for row in records], listed)
+        self.assertEqual(records[-1], {
+            "id": "fleet-000", "name": "'" + special_name, "ownerName": "'  +Manager",
+            "connectionState": "offline", "authState": "pending", "platform": "Android",
+            "version": "1.2.3", "lastSeen": seen.isoformat(),
+        })
+        empty = await self.http.get(endpoint, params={**filters, "q": "not-found"})
+        self.assertEqual(empty.status_code, 200)
+        self.assertEqual(len(empty.content.decode("utf-8-sig").splitlines()), 1)
+        self.user._perms = set()
+        for path in ("admin/client-inventory", endpoint):
+            await self.request("GET", path, expected=403)
 
     async def test_device_search_treats_keywords_as_literal_substrings(self):
         async with self.sessions() as session:
