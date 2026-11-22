@@ -556,18 +556,18 @@ async def delete_profession(session: AsyncSession, row: models.Position) -> str:
     return ""
 
 
-async def validate_profession_ids(
-    session: AsyncSession, org_id: str | None, value
-) -> list[str]:
-    """Normalize profile IDs and reject references outside the current organization inheritance
-    scope.
-    """
+def check_profession_ids(value, visible_positions: set[str]) -> list[str]:
     position_ids = _items(value, limit=100, length=36)
-    visible_positions = {
-        row.id for row in await profession_rows(session, org_id)}
     if any(item not in visible_positions for item in position_ids):
         raise ValueError("职业画像不属于当前员工所在组织")
     return position_ids
+
+
+async def validate_profession_ids(
+    session: AsyncSession, org_id: str | None, value
+) -> list[str]:
+    visible_positions = {row.id for row in await profession_rows(session, org_id)}
+    return check_profession_ids(value, visible_positions)
 
 
 async def validate_scenario(

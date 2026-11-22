@@ -51,6 +51,7 @@ def user_to_api(u: models.User, *, token_quota=None) -> dict:
     }
     if token_quota is not None:
         result["tokenQuota"] = token_quota
+        result["isTestAccount"] = u.is_test_account
     return result
 
 
@@ -191,10 +192,11 @@ async def scoped_user_ids(session: AsyncSession, scope: set[str] | None) -> set[
 _admin_name = TypeAdapter(AdminName)
 
 
-async def _lock_org_writes(session: AsyncSession) -> None:
-    """Serialize rare tree edits, including insertion of siblings that don't exist yet."""
+async def lock_org_tree(session: AsyncSession, *, shared: bool = False) -> None:
+    """Keep subtree scope and user assignments consistent with department edits."""
     if session.get_bind().dialect.name == "postgresql":
-        await session.execute(text("LOCK TABLE org_unit IN SHARE ROW EXCLUSIVE MODE"))
+        await session.execute(text("LOCK TABLE org_unit IN SHARE MODE" if shared else
+                                   "LOCK TABLE org_unit IN SHARE ROW EXCLUSIVE MODE"))
     else:
         # Reserve the SQLite writer without changing any existing row.
         await session.execute(update(models.OrgUnit).where(False).values(sort=models.OrgUnit.sort))
@@ -233,7 +235,7 @@ async def create_org(
     pid = str(parent_id or "").strip() or None
     if scope is not None and (not pid or pid not in scope):
         raise OrgMutationError("out_of_scope")
-    await _lock_org_writes(session)
+    await lock_org_tree(session)
     if pid and await session.get(models.OrgUnit, pid) is None:
         raise OrgMutationError("parent_not_found")
     o = models.OrgUnit(name=await _available_org_name(session, name, pid), parent_id=pid, sort=sort)
@@ -248,7 +250,7 @@ async def update_org(
     parent_id: str | None, sort: int | None, *, scope: set[str] | None,
 ) -> dict | None:
     """Update only an authorized node and keep the department tree acyclic."""
-    await _lock_org_writes(session)
+    await lock_org_tree(session)
     o = await session.get(models.OrgUnit, oid, populate_existing=True)
     if o is None:
         return None
@@ -278,7 +280,8 @@ async def update_org(
 async def delete_org(
     session: AsyncSession, oid: str, *, scope: set[str] | None,
 ) -> dict:
-    o = await session.get(models.OrgUnit, oid)
+    await lock_org_tree(session)
+    o = await session.get(models.OrgUnit, oid, populate_existing=True)
     if o is None:
         return {"ok": False, "reason": "not_found"}
     if scope is not None and oid not in scope:
@@ -378,10 +381,11 @@ async def get_user_by_username(session: AsyncSession, username: str) -> models.U
 
 async def create_user(session: AsyncSession, username: str, password: str, display_name: str,
                       org_id: str | None, role_id: str | None, positions: list | None = None,
-                      domains: list | None = None, *, token_quota=None) -> dict:
+                      domains: list | None = None, *, token_quota=None, is_test_account: bool | None = None) -> dict:
     password = client_access.validate_password(password, new_account=True)
     u = models.User(
         username=username, password_hash=hash_password(password),
+        is_test_account=is_test_account,
         display_name=display_name or username, org_id=org_id or None, role_id=role_id or None,
         positions=list(positions or []), domains=list(domains or []),
     )
@@ -394,15 +398,14 @@ async def create_user(session: AsyncSession, username: str, password: str, displ
     return user_to_api(u, token_quota=token_quota or {"mode": "inherit", "limit": 0})
 
 
-async def update_user(session: AsyncSession, uid: str, patch: dict) -> dict | None:
-    u = await session.get(models.User, uid)
-    if u is None:
-        return None
+def apply_user_patch(u: models.User, patch: dict) -> None:
     password = patch.get("password")
     if password is not None:
         password = client_access.validate_password(password, new_account=True)
     if "displayName" in patch and patch["displayName"] is not None:
         u.display_name = patch["displayName"]
+    if "isTestAccount" in patch:
+        u.is_test_account = patch["isTestAccount"]
     if "orgId" in patch and patch["orgId"] is not None:
         u.org_id = patch["orgId"] or None
     if "roleId" in patch:
@@ -421,6 +424,13 @@ async def update_user(session: AsyncSession, uid: str, patch: dict) -> dict | No
         revoke_sessions = True
     if revoke_sessions:
         u.auth_version = int(u.auth_version or 0) + 1
+
+
+async def update_user(session: AsyncSession, uid: str, patch: dict) -> dict | None:
+    u = await session.get(models.User, uid)
+    if u is None:
+        return None
+    apply_user_patch(u, patch)
     if patch.get("tokenQuota") is not None:
         quota = await client_access.save_user_quota(session, uid, patch["tokenQuota"])
     else:
