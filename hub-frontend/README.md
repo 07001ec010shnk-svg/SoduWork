@@ -14,9 +14,9 @@ Service cards adapt from one to four columns according to the available content 
 
 ## Handling approvals and failed runs
 
-In Operations, open the pending human review count to see the requests in your scope. The queue shows how long each request has waited and, when your role allows, its requirement, version and remaining reviewers. A request is marked overdue at its deadline or after 24 hours if it has no deadline. A reviewer with approval permission can vote or transfer an eligible assignment. Request and requirement creators with approval permission can withdraw pending requests. Super administrators can manage withdrawals and transfers. Delivery acceptance stays with the requirement creator.
+In Operations, open the pending human review count to see the requests in your scope. The queue shows how long each request has waited and, when your role allows, its requirement, version and remaining reviewers. A request is marked overdue at its deadline or after 24 hours if it has no deadline. An assigned reviewer can vote or transfer an eligible assignment with permission for that gate. Request and requirement creators with approval permission can withdraw pending requests. Super administrators can manage withdrawals and transfers. Withdrawing a request stops the linked gate and requires a fresh approval before work can continue. Delivery acceptance stays with the requirement creator.
 
-Open a recent failure to inspect its requirement or the failed node's logs. After correcting the cause, operators with run permission can retry an eligible node. For AI nodes that support model selection, the operator can select another available model for that retry. The original attempt stays in the run history.
+Open a recent failure to inspect its requirement or the failed node's logs. After correcting the cause, operators with run permission can retry an eligible node. AI nodes using the shared model gateway can retry with another available organization model. The original attempt stays in the run history.
 
 ## Reviewing Skill access
 

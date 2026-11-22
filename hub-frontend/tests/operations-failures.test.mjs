@@ -56,3 +56,23 @@ test('retry uses the selected node model and is unavailable for read-only or his
   const historical = { ...node, diagnosis: { ...node.diagnosis, retryable: false } }
   assert.doesNotMatch(renderToStaticMarkup(host.render({ node: historical })), /<button|<select/)
 })
+
+test('the open log drawer follows the latest run error after retry', async () => {
+  const node = { id: 'attempt-2', key: 'build', attempt: 2, state: 'failed' }
+  const run = { id: 'run-9', state: 'failed', error: 'first failure', nodes: [node] }
+  const calls = []
+  const host = await createComponentHarness(file('PluginRunDialogs'), {
+    exportName: 'RunDrawer', props: { run, evidenceOpen: true },
+    dependencies: { ...deps, '../api.js': { api: { retryRunGate: async (...args) => {
+      calls.push(args)
+      return { run: { ...run, state: 'succeeded', error: '' } }
+    } } } },
+  })
+  const errors = () => host.nodes(n => n.props.className === 'ops-run-error').map(n => n.props.children)
+  assert.deepEqual(errors(), ['first failure'])
+  await host.nodes(n => n.type.name === 'NodeRunRow')[0].props.onRetry(node, 'model-b')
+  assert.deepEqual(calls, [['run-9', 'build', { sourceNodeId: 'attempt-2', resumeRework: false,
+    execution: { model: 'model-b' } }]])
+  assert.deepEqual(errors(), [])
+  host.unmount()
+})

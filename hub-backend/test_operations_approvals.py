@@ -2,6 +2,7 @@
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
@@ -14,6 +15,7 @@ from app import automation_models as am, models
 from app.api import operations
 from app.auth import sign_token
 from app.db import Base, get_session
+from app.services import deployments, workflow_engine
 
 
 class OperationsApprovalTests(unittest.IsolatedAsyncioTestCase):
@@ -111,6 +113,64 @@ class OperationsApprovalTests(unittest.IsolatedAsyncioTestCase):
             rows = (await s.scalars(select(models.AuditLog))).all()
             self.assertEqual([(r.actor_id, r.target_id) for r in rows], [("alice", "a"), ("bob", "a")])
 
+    async def assert_withdrawal_stops_workflow(self, node_type, request_id):
+        async with self.sessions() as s:
+            request = await s.get(am.ApprovalRequest, request_id)
+            version = am.PluginVersion(id="workflow", plugin_id="plugin", version="1", checksum="fixed",
+                workflow={"nodes": [{"key": "implement", "type": "ai"},
+                    {"key": "gate", "type": node_type, "dependsOn": ["implement"],
+                     "retry": {"maxAttempts": 3},
+                     "config": {"onReject": {"retryFrom": "implement"}, "onFailure": {"retryFrom": "implement"}}}]})
+            run = am.WorkflowRun(id="run", task_id=request.task_id, plugin_id="plugin",
+                                 plugin_version_id=version.id, state="running")
+            previous = am.NodeRun(run_id=run.id, node_key="implement", node_type="ai",
+                                  state="succeeded", idempotency_key="implement")
+            gate = am.NodeRun(id="gate", run_id=run.id, node_key="gate", node_type=node_type,
+                              state="waiting_human", output={"requestId": request.id}, idempotency_key="gate")
+            s.add_all([version, run, previous, gate])
+            await s.commit()
+        response = await self.request(f"approvals/{request_id}/withdraw", body={"note": "Release on hold"})
+        self.assertEqual(response.status_code, 200, response.text)
+        async with self.sessions() as s:
+            run = await s.get(am.WorkflowRun, "run")
+            gate = await s.get(am.NodeRun, "gate")
+            await workflow_engine._poll_node(s, run, gate)
+            await workflow_engine._schedule_locked(s, run.id)
+            self.assertEqual(run.state, "failed")
+            self.assertIn("撤回", run.error)
+            self.assertEqual(gate.output["failureKind"], "escalation")
+            self.assertFalse(run.context.get("reworkRounds"))
+            nodes = (await s.scalars(select(am.NodeRun).order_by(am.NodeRun.node_key))).all()
+            self.assertEqual([(n.node_key, n.state) for n in nodes], [("gate", "failed"), ("implement", "succeeded")])
+            self.assertIsNone(await s.scalar(select(am.WorkflowOutbox.id)))
+            self.assertIsNone(await s.scalar(select(am.ApprovalDecision.id)))
+
+    async def test_withdraw_stops_human_gate_without_retrying_implementation(self):
+        await self.assert_withdrawal_stops_workflow("human_review", "b")
+
+    async def test_withdraw_stops_deploy_chain_waiting_for_uat(self):
+        async with self.sessions() as s:
+            task = await s.get(models.Task, "ta")
+            task.repo_id = "repo"
+            request = await s.get(am.ApprovalRequest, "a")
+            request.action, request.environment_id = "uat", "environment"
+            artifact = await s.get(am.ArtifactVersion, "va")
+            artifact.kind, artifact.state = "code", "tested"
+            s.add_all([models.Repo(id="repo", project_id="project", name="Repo"),
+                am.Environment(id="environment", key="stage", name="Stage",
+                    promotion_policy={"requiresAcceptance": True, "marksDelivery": True}),
+                am.DeploymentTarget(id="target", repo_id="repo", environment_id="environment", name="Target"),
+                am.DeploymentRun(task_id=task.id, artifact_version_id=artifact.id, target_id="target",
+                                 environment_id="environment", state="succeeded", idempotency_key="deployment")])
+            await s.commit()
+        with patch.object(deployments.environment_service, "preflight_chain", AsyncMock(return_value={"ok": True})):
+            await self.assert_withdrawal_stops_workflow("deploy_chain", "a")
+            async with self.sessions() as s:
+                status = await deployments.chain_status(s, await s.get(models.Task, "ta"))
+                self.assertFalse(status["complete"])
+                self.assertEqual(status["environments"][0]["acceptance"], "cancelled")
+                self.assertEqual(status["runs"][0]["state"], "succeeded")
+
     async def test_withdraw_leaves_history_and_cannot_vote_on_reissued_request(self):
         self.assertEqual((await self.request("approvals/a/withdraw", body={"note": "Revising"})).status_code, 200)
         async with self.sessions() as s:
@@ -126,6 +186,38 @@ class OperationsApprovalTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual((await s.get(am.ApprovalRequest, "replacement")).status, "pending")
         res = await self.request("approvals/replacement/decision", body={"decision":"approve"})
         self.assertEqual(res.status_code, 200, res.text)
+
+    async def test_gate_specific_permission_follows_assignment_through_transfer(self):
+        async with self.sessions() as session:
+            session.add(models.Role(id="merger", name="Merge only", permissions=["operations.view", "delivery.merge"]))
+            for uid in ("alice", "bob"):
+                (await session.get(models.User, uid)).role_id = "merger"
+            for rid in ("a", "x"):
+                request = await session.get(am.ApprovalRequest, rid)
+                request.action = "merge"
+                request.policy_snapshot = {"approvers": [{"type": "permission", "key": "delivery.merge"}]}
+            await session.commit()
+        async def queue_for(uid):
+            return {item["id"]: item for item in (await self.request("approvals", who=uid)).json()["items"]}
+
+        rows = await queue_for("alice")
+        self.assertEqual(set(rows), {"a", "b"})
+        self.assertTrue(all(rows["a"][key] for key in ("canViewDetails", "canDecide", "canTransfer", "canWithdraw")))
+        self.assertFalse(any(rows["b"][key] for key in ("canViewDetails", "canDecide", "canWithdraw", "assignees")))
+        reject = {"decision": "reject", "note": "Needs revision"}
+        self.assertEqual((await self.request("approvals/b/decision", body=reject)).status_code, 403)
+        self.assertEqual((await self.request("approvals/b/withdraw", body={"note": "retry"})).status_code, 403)
+        self.assertEqual((await self.request("approvals/x/decision", body=reject)).status_code, 403)
+        other = (await queue_for("bob"))["a"]
+        self.assertFalse(any(other[key] for key in ("taskTitle", "assignees", "canViewDetails", "canDecide")))
+        self.assertEqual((await self.request("approvals/a/decision", who="bob", body=reject)).status_code, 403)
+        transfer = {"fromUserId": "alice", "toUserId": "bob", "note": "Please review"}
+        result = await self.request("approvals/a/transfer", body=transfer)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertTrue((await queue_for("bob"))["a"]["canDecide"])
+        result = await self.request("approvals/a/decision", who="bob", body=reject)
+        self.assertEqual(result.status_code, 200, result.text)
+        self.assertEqual(result.json()["status"], "rejected")
 
     async def test_partial_vote_and_quorum_survive_transfer(self):
         async with self.sessions() as s:

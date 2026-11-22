@@ -62,7 +62,7 @@ function ApprovalPage({ page, setPage, select, formatAge }) {
         {row.dueAt && <div>{tx('审批提醒时间：{0}', [new Date(row.dueAt).toLocaleString(locale)])}</div>}
         <div>{row.canViewDetails
           ? tx('待处理人：{0}', [assignees || tx('未分配')])
-          : tx('查看对象和处理人需要需求查看或发布审批权限。')}</div>
+          : tx('当前账号无权查看这项审批的对象和处理人。')}</div>
         <div className="ops-approval-actions">
           {row.canViewDetails && can('task.view') && <button className="btn btn-ghost xs" onClick={() => select(row, 'task')}>{tx('查看需求')}</button>}
           {actions.map(action => <button key={action} className="btn btn-ghost xs" onClick={() => select(row, action)}>{actionNames[action]}</button>)}

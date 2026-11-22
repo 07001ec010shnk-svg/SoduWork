@@ -173,7 +173,7 @@ function InputField({ def, value, onChange }) {
   </Field>
 }
 
-export function RunDrawer({ run: initial, onClose, onChanged, evidenceOpen = false, summaryError }) {
+export function RunDrawer({ run: initial, onClose, onChanged, evidenceOpen = false }) {
   const uiLocale = useLocale();
   const [run, setRun] = useState(initial)
   const [busyNode, setBusyNode] = useState('')
@@ -261,7 +261,7 @@ export function RunDrawer({ run: initial, onClose, onChanged, evidenceOpen = fal
           <div className="run-id-row"><span><small>{tx("运行编号")}</small><code>{run.id}</code></span>
             <button type="button" onClick={copyRunId}>{tx("复制")}</button></div>
           <section className="evidence-section"><h4>{tx("运行时间线")}</h4>
-            {summaryError && <pre className="ops-run-error">{summaryError}</pre>}
+            {run.error && <pre className="ops-run-error">{run.error}</pre>}
             {(run.events || []).map((event) => <div className="event-line" key={event.id}>
               <span /><div><b>{EVENT[event.kind] || event.kind}</b><small>{fmt(event.at)}</small></div>
             </div>)}

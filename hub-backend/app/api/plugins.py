@@ -761,7 +761,7 @@ async def run_detail(
 
 
 async def _add_retry_models(session, run, task, detail):
-    from ..services import agent_execution_options, model_catalog, task_assignment
+    from ..services import agent_execution_options, llm, model_catalog, task_assignment
     nodes = [node for node in detail["nodes"] if node["type"] in ("ai", "ai_review")
              and node["diagnosis"].get("actionKey") == "retry-gate"]
     if not nodes:
@@ -773,6 +773,7 @@ async def _add_retry_models(session, run, task, detail):
     binding = await session.get(am.PluginBinding, run.binding_id) if run.binding_id else None
     project = await task_assignment.project_route(session, task.project_id)
     choices = None
+    inherited_model = ""
     for node in nodes:
         key = node["key"]
         if key not in definitions:
@@ -783,7 +784,15 @@ async def _add_retry_models(session, run, task, detail):
             if choices is None:
                 catalog = await model_catalog.choices(session)
                 choices = [name for name in [catalog["default"], *catalog["list"]] if name]
-            node["retryModels"] = [name for name in choices if name != route["model"]]
+                shared = await llm.load(session)
+                if llm.enabled(shared):
+                    inherited_model = shared.get("llm_model", "")
+            executor = node["executor"]
+            previous = ((executor.get("resolved") or {}).get("model")
+                        or (executor.get("requested") or {}).get("model")
+                        or route["model"] or inherited_model)
+            previous = model_catalog.canonical_model_name(previous)
+            node["retryModels"] = [name for name in choices if name != previous]
 
 
 @run_router.post("/plugin-runs/{run_id}/cancel")

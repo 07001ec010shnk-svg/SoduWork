@@ -24,7 +24,7 @@ export function OperationsTaskDialog({ taskId, onClose }) {
 function FailureRunDialog({ row, onClose, onChanged }) {
   const { data, error, reload } = useAsync(() => api.pluginRun(row.id))
   if (data) return <RunDrawer run={data} onClose={onClose} onChanged={onChanged}
-    summaryError={row.error} evidenceOpen />
+    evidenceOpen />
   return <Modal title={tx('插件运行详情')} icon="activity" onClose={onClose}>
     {error ? <ErrorState msg={error.message} onRetry={reload} /> : <Loading />}
   </Modal>
