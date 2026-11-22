@@ -23,7 +23,13 @@ def _bad(error: ValueError) -> HTTPException:
     if isinstance(error, (catalog_names.DuplicateName, svc.BusinessConflict)):
         return HTTPException(status_code=409, detail=str(error))
     if isinstance(error, policy_svc.InvalidPolicyInput):
-        return HTTPException(status_code=400, detail=str(error))
+        return HTTPException(status_code=400, detail=str(error), headers={"X-Error-Code": "hub.input.tier"})
+    # Approval policy business errors (unsupported/empty actions, missing approvers) are 409.
+    msg = str(error)
+    if msg in (
+        "至少选择一个适用场景", "审批职责必须是数组", "至少选择一种审批职责",
+    ) or msg.startswith(("不支持的审批场景", "不支持的审批职责")):
+        return HTTPException(status_code=409, detail=msg)
     # Generic value errors (e.g., invalid key format, bad selector) are 422.
     return HTTPException(status_code=422, detail=str(error))
 
