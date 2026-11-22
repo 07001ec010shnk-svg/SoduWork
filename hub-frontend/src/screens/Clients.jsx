@@ -316,13 +316,13 @@ function ClientDetail({ client, onClose, onChanged }) {
   const saveDisabled = busy === 'owner' || (!owner && ownerUnchanged) || (ownerUnchanged && auth.key === 'active')
   return (
     <>
-      <Modal wide className="client-detail-modal" onClose={onClose}
+      <Modal dirty={Boolean(notice) || !ownerUnchanged} wide className="client-detail-modal" onClose={onClose}
         title={<span className="client-detail-heading"><span className="cli"><span className="ava">{(client.name || client.id).slice(0, 1)}</span><span className="nm">{client.name || client.id}</span></span>
           <span className={'status-dot ' + (client.online ? 'on' : 'off')}><i />{client.online ? tx("在线") : tx("离线")}</span></span>}
-        foot={<>
+        foot={dismiss => <>
           {can('client.update') && <button className="btn btn-primary" disabled={busy === 'update'} onClick={() => setConfirm({ title: tx("升级完整客户端"), text: client.online ? tx("系统会创建可追踪的升级任务，客户端下载并校验完整安装包后，由用户确认重启安装。确定下发？") : tx("设备当前离线。升级任务会持久排队，设备下次上线后自动领取，不会丢失。确定排队？"), confirmText: tx("确认升级"), run: requestUpdate })} title={tx("升级完整客户端")}><Icon name="external" />{tx("升级客户端")}</button>}
           {can('client.control') && <button className="btn btn-ghost" disabled={busy === 'reload'} onClick={() => setConfirm({ text: tx("将强制该 SoduWork 立即刷新，会打断用户正在做的事。确定？"), run: () => push({ type: 'command', action: 'reload' }, 'reload') })}><Icon name="refresh" />{tx("强制刷新")}</button>}
-          <button className="btn btn-ghost" onClick={onClose}>{tx("关闭")}</button>
+          <button className="btn btn-ghost" onClick={dismiss}>{tx("关闭")}</button>
         </>}>
           {!d && <div className="muted">{tx("加载中…")}</div>}
           <div className={'device-auth-panel ' + auth.key}>

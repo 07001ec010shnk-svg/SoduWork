@@ -1,3 +1,4 @@
+import { ja as firstChatJa, ko as firstChatKo } from './first-chat.js'
 import { ja as auditJa, ko as auditKo } from './audit.js'
 import { ja as automationTemplatesJa, ko as automationTemplatesKo } from './automation-templates.js'
 import { ja as capabilityCatalogJa, ko as capabilityCatalogKo } from './capability-catalog.js'
@@ -52,6 +53,8 @@ const ja = {
   '用户管理': 'ユーザー管理', '角色权限': 'ロールと権限', '身份接入': 'ID 接続', '审计日志': '監査ログ', '保存': '保存', '取消': 'キャンセル',
   '关闭': '閉じる', '确定': '確認', '删除': '削除', '编辑': '編集', '添加': '追加', '刷新': '更新', '搜索': '検索', '重试': '再試行',
   '加载中…': '読み込み中…', '语言': '言語', '界面语言': '表示言語', '我的设置': 'マイ設定', '服务运行正常': 'サービスは正常です',
+  '自定义': 'カスタム', '上传中，请勿关闭': 'アップロード中 — ウィンドウを閉じないでください', '上传中…': 'アップロード中…',
+  '当前系统语言为繁体中文，暂以简体中文显示。待繁体中文语言包上线后自动切换。': 'システム言語は繁体中国語です。現在簡体中国語で表示されています。繁体中国語の言語パック提供時に自動的に切替されます。',
   '正在确认服务': 'サービスを確認中', '服务连接异常': 'サービス接続の問題', '同事': 'メンバー', '首页': 'ホーム', '返回': '戻る', '创建': '作成',
   '打开': '開く', '查看': '表示', '导出': 'エクスポート', '导入': 'インポート', '测试连接': '接続をテスト', '启用': '有効化', '停用': '無効化',
   '云端环境': 'クラウド環境', '连接器': 'コネクター', '插件': 'プラグイン', '技能': 'スキル', '模型': 'モデル', '智能体': 'エージェント',
@@ -98,6 +101,8 @@ const ko = {
   '用户管理': '사용자 관리', '角色权限': '역할 및 권한', '身份接入': 'ID 연동', '审计日志': '감사 로그', '保存': '저장', '取消': '취소',
   '关闭': '닫기', '确定': '확인', '删除': '삭제', '编辑': '편집', '添加': '추가', '刷新': '새로 고침', '搜索': '검색', '重试': '다시 시도',
   '加载中…': '로드 중…', '语言': '언어', '界面语言': '인터페이스 언어', '我的设置': '내 설정', '服务运行正常': '서비스가 정상입니다',
+  '自定义': '사용자 지정', '上传中，请勿关闭': '업로드 중 — 창을 닫지 마세요', '上传中…': '업로드 중…',
+  '当前系统语言为繁体中文，暂以简体中文显示。待繁体中文语言包上线后自动切换。': '시스템 언어가 번체 중국어입니다. 현재 간체 중국어로 표시됩니다. 번체 중국어 언어팩 제공 시 자동으로 전환됩니다.',
   '正在确认服务': '서비스 확인 중', '服务连接异常': '서비스 연결 문제', '同事': '동료', '首页': '홈', '返回': '뒤로', '创建': '생성',
   '打开': '열기', '查看': '보기', '导出': '내보내기', '导入': '가져오기', '测试连接': '연결 테스트', '启用': '사용', '停用': '사용 중지',
   '云端环境': '클라우드 환경', '连接器': '커넥터', '插件': '플러그인', '技能': '스킬', '模型': '모델', '智能体': '에이전트',
@@ -114,6 +119,6 @@ const ko = {
 const shellMessages = locale => Object.fromEntries(Object.entries(dictionary['zh-CN']).map(([key, source]) => [source, dictionary[locale][key]]))
 
 export const messagesByLocale = Object.freeze({
-  'ja-JP': Object.freeze({ ...shellMessages('ja-JP'), ...auditJa, ...automationTemplatesJa, ...ja, ...connectorJa, ...cloudRunnerJa, ...modelJa, ...quotaJa, ...accessCatalogJa, ...operationsJa, ...governanceJa, ...insightsMetricsJa, ...usageCenterJa, ...modelRuntimeOverviewJa, ...modelProviderDeletionJa, ...capabilityCatalogJa, ...legalJa }),
-  'ko-KR': Object.freeze({ ...shellMessages('ko-KR'), ...auditKo, ...automationTemplatesKo, ...ko, ...connectorKo, ...cloudRunnerKo, ...modelKo, ...quotaKo, ...accessCatalogKo, ...operationsKo, ...governanceKo, ...insightsMetricsKo, ...usageCenterKo, ...modelRuntimeOverviewKo, ...modelProviderDeletionKo, ...capabilityCatalogKo, ...legalKo }),
+  'ja-JP': Object.freeze({ ...shellMessages('ja-JP'), ...firstChatJa, ...auditJa, ...automationTemplatesJa, ...ja, ...connectorJa, ...cloudRunnerJa, ...modelJa, ...quotaJa, ...accessCatalogJa, ...operationsJa, ...governanceJa, ...insightsMetricsJa, ...usageCenterJa, ...modelRuntimeOverviewJa, ...modelProviderDeletionJa, ...capabilityCatalogJa, ...legalJa }),
+  'ko-KR': Object.freeze({ ...shellMessages('ko-KR'), ...firstChatKo, ...auditKo, ...automationTemplatesKo, ...ko, ...connectorKo, ...cloudRunnerKo, ...modelKo, ...quotaKo, ...accessCatalogKo, ...operationsKo, ...governanceKo, ...insightsMetricsKo, ...usageCenterKo, ...modelRuntimeOverviewKo, ...modelProviderDeletionKo, ...capabilityCatalogKo, ...legalKo }),
 });
