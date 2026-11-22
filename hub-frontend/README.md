@@ -8,6 +8,8 @@ React + Vite application for Hub administration. Entry point: `src/main.jsx`; ro
 
 Manage organizations, accounts, clients, execution networks, models, capabilities, tasks, approvals, plugins, and release configuration. Hub enforces authorization; hiding a button is not an access check.
 
+Copy a management page's address to share it or open it in another tab. For example, `/#/identity` opens Identity for accounts with access. Use the browser's Back and Forward buttons to revisit pages. On the Users page, reloading restores the current administrator's search and department filters in that tab. Copied links open the page with fresh filters.
+
 The model catalog starts with a compact service/model and live-load summary. Expand the overview for configuration, hourly metrics and request distribution; service and concurrency actions stay available while it is collapsed. Enabled services stay ahead of disabled ones, with custom services first within each group. A newly created service is temporarily brought into view; reopening restores that stable group order.
 
 Service cards adapt from one to four columns according to the available content width. View opens model details in a dialog without resizing or rearranging the service grid. Add, discover and configure actions remain visible; enable/disable and deletion are in the More popover, with the existing deletion confirmation retained.
