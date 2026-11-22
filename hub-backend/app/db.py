@@ -150,6 +150,7 @@ _WANT_COLUMNS = {
         ("created_by", "VARCHAR(36)"),
         ("created_by_name", "VARCHAR(64) DEFAULT ''"),
         ("assignee_user_id", "VARCHAR(36)"),
+        ("review_recipient_user_id", "VARCHAR(36)"),
         ("recur", "VARCHAR(16)"),
         ("recur_at", "{ts}"),
         ("progress", "{json}"),

@@ -159,6 +159,10 @@ class TaskSyncCreate(TaskCreate):
     source: str = ""
 
 
+class ReviewRecipient(BaseModel):
+    userId: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=36)] | None
+
+
 class TaskUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
     kind: Optional[str] = None
