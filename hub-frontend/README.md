@@ -12,6 +12,8 @@ Copy a management page's address to share it or open it in another tab. For exam
 
 The model catalog starts with a compact service/model and live-load summary. Expand the overview for configuration, hourly metrics and request distribution; service and concurrency actions stay available while it is collapsed. Enabled services stay ahead of disabled ones, with custom services first within each group. A newly created service is temporarily brought into view; reopening restores that stable group order.
 
+Before deleting a custom model service, review its model list and the visible members and open issues with matching shared-model selections. Model selections stored by name can match more than one service. Enter the exact service ID to delete it. A changed preview requires confirmation again.
+
 Service cards adapt from one to four columns according to the available content width. View opens model details in a dialog without resizing or rearranging the service grid. Add, discover and configure actions remain visible; enable/disable and deletion are in the More popover, with the existing deletion confirmation retained.
 
 ## Handling approvals and failed runs
