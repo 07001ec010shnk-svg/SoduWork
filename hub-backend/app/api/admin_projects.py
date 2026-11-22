@@ -384,10 +384,13 @@ async def update_repo(rid: str, body: dict = Body(default_factory=dict),
 @router.delete("/repos/{rid}")
 async def delete_repo(rid: str, user: User = Depends(require_perm("task.dispatch")),
                       session: AsyncSession = Depends(get_session)):
-    from ..models import Repo
-    r = await session.get(Repo, rid)
+    from ..automation_models import DeploymentTarget
+    from ..services.repository_catalog import lock_deployment_repository
+    r = await lock_deployment_repository(session, rid)
     if r is None:
         return {"ok": True}
+    if await session.scalar(select(DeploymentTarget.id).where(DeploymentTarget.repo_id == rid).limit(1)):
+        raise HTTPException(status_code=409, detail="该仓库仍有关联的部署目标，请先改绑或移除部署目标。")
     name = r.name
     await session.delete(r)
     await session.commit()

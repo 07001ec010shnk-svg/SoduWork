@@ -2314,7 +2314,8 @@ async def export_audit(
 
 @router.get("/receipts")
 async def list_receipts(
-    limit: int = 50, offset: int = 0,
+    limit: Annotated[int, Query(ge=0)] = 50,
+    offset: Annotated[int, Query(ge=0, le=2**63-1)] = 0,
     user: User = Depends(require_perm("task.view")),
     session: AsyncSession = Depends(get_session),
 ):
@@ -2322,34 +2323,31 @@ async def list_receipts(
     trace requests through resolution.
     """
     from ..schemas import _ms
-    vis = await _visible_client_ids(session, user)   # None leaves superusers unrestricted.
-    rows = (await session.execute(
-        select(TaskEvent).where(TaskEvent.kind == "receipt").order_by(TaskEvent.at.desc())
-    )).scalars().all()
-    # Scope linked tasks and include their titles, owning devices, and completion times.
-    tmap = {}
-    tids = list({e.task_id for e in rows})
-    if tids:
-        tres = (await session.execute(select(Task).where(Task.id.in_(tids)))).scalars().all()
-        tmap = {t.id: t for t in tres}
+    query = (select(TaskEvent, Task.title, Task.status)
+             .outerjoin(Task, Task.id == TaskEvent.task_id)
+             .where(TaskEvent.kind == "receipt"))
+    scope = await rbac.scope_org_ids(session, user)
+    if scope is not None:
+        owners = select(User.id).where(User.org_id.in_(scope))
+        query = (query.join(Client, Client.id == Task.owner_client_id)
+                 .where(or_(Client.user_ref.is_(None), Client.user_ref.in_(owners))))
+    query = query.order_by(TaskEvent.at.desc(), TaskEvent.id.desc()).limit(min(limit, 200)).offset(offset)
+    rows = await session.execute(query)
     out = []
-    for e in rows:
-        t = tmap.get(e.task_id)
-        if vis is not None and (t is None or t.owner_client_id not in vis):
-            continue  # Outside the visible scope.
+    for e, title, status in rows:
         d = e.detail or {}
         out.append({
             "id": e.id,
             "taskId": e.task_id,
-            "title": d.get("title") or (t.title if t else ""),
+            "title": d.get("title") or title or "",
             "requesterName": d.get("to") or "",
             "contact": d.get("contact") or "",
             "external": bool(d.get("external")),
             "via": d.get("via") or "",           # box: notify requester; self: self-completion; relay: notify registrar; recorded: retain only.
-            "status": (t.status if t else ""),
+            "status": status or "",
             "at": _ms(e.at),
         })
-    return out[offset:offset + min(limit, 200)]
+    return out
 
 
 @router.get("/bindings")
