@@ -600,7 +600,17 @@ async def abort(session, client, transfer_id):
     row_id = identity(client.id, transfer_id)
     row = await session.get(Handoff, row_id)
     if not row:
-        raise HTTPException(404, "交接记录不存在")
+        # A missing row means the first prepare has not committed yet (#871):
+        # record the abort as a tombstone fence so a late prepare loses the
+        # race, but detach it from every real task — the tombstone carries a
+        # synthetic task id that can never match a dispatch lookup (#635's
+        # no-phantom requirement; ownership checks above still gate writes).
+        row = Handoff(id=row_id, owner_client_id=client.id, owner_user_id=user.id,
+                      transfer_id=transfer_id, task_id=row_id, phase="aborted",
+                      request_hash="", options={}, source={})
+        session.add(row)
+        await session.commit()
+        return public(row)
     if row.phase == "aborted":
         return public(row)
     changed = await session.execute(update(Handoff).where(
