@@ -18,6 +18,10 @@ In Operations, open the pending human review count to see the requests in your s
 
 Open a recent failure to inspect its requirement or the failed node's logs. After correcting the cause, operators with run permission can retry an eligible node. AI nodes using the shared model gateway can retry with another available organization model. The original attempt stays in the run history.
 
+## Setting up your first chat
+
+Administrators with integration management access can open the **First chat checklist** on the governance overview. Connect a model service, then select the service to add or discover a chat model. The last two links open the desktop runtime and model settings. Sign in to the desktop with the same account so its readiness appears here. Choose **Check again** to refresh progress. **Skip checklist** hides it for your account in this browser, and **Show first chat checklist** brings it back.
+
 ## Reviewing Skill access
 
 In the capability catalog, bundled Skills show a summary in the interface language. Expand a summary to read the author's original description. Use the switch to stage a policy change. **Save access policy** lists the Skills to add and remove. It estimates the impact from active devices' Skill selections and their owners' departments. A device matching several changes counts once. Confirm to apply the policy on the next execution, or cancel to return to the draft.
