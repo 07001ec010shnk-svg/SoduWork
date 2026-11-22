@@ -524,23 +524,27 @@ async def proxy_config(
                 "reason": "此底座不使用企业模型配置，请检查执行底座"}
     # Match controlled dispatch: explicit choice > Agent preference > company
     # default. A removed preference is an actionable error, never a silent swap.
-    want, provider = (str(model or "").strip(), "") if custom_acp or ignore_preference else (
-        model_catalog.agent_choice(client, cli, model))
+    want, provider = model_catalog.agent_choice(client, cli, model)
+    # History recovery may discard an obsolete name-only preference. A provider
+    # selection also identifies the account being billed and must survive recovery.
+    if custom_acp or (ignore_preference and not provider):
+        want, provider = str(model or "").strip(), ""
     # Signed proxy tickets and usage receipts bind funding to this exact runtime.
     client._proxy_quota_runtime = cli
     usable = await model_catalog.usable(session, client)
+    pinned_error = {"providerPinned": True} if provider else {}
     if provider:
         usable = [row for row in usable if row.get("providerId") == provider]
     if want and not any(item["name"] == want for item in usable):
-        return {"ok": False, "path": PROXY_PATH,
+        return {"ok": False, "path": PROXY_PATH, **pinned_error,
                 "reason": f"你选择的模型「{want}」现在不可用，请重新选择"}
     conf = await _resolve_catalog(session, client, want, available=usable)
     if not conf:
-        return {"ok": False, "path": PROXY_PATH,
+        return {"ok": False, "path": PROXY_PATH, **pinned_error,
                 "reason": "还没有可用的模型：去「我的模型」配一把自己的密钥，或让管理员配好共享模型服务"}
     if conf.get("kind") != "openai-compat":
         return {"ok": False, "path": PROXY_PATH, "code": "unsupported_model_protocol",
-                "protocol": conf.get("kind"), "supportedProtocols": ["openai-compat"],
+                **pinned_error, "protocol": conf.get("kind"), "supportedProtocols": ["openai-compat"],
                 "reason": _protocol_guidance(conf)}
     hit = next((m for m in usable if m["name"] == conf["model"]), {})
     image_models = await model_catalog.usable(session, client, "image")

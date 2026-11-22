@@ -77,7 +77,11 @@ class PersonalModelQuotaTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(routed["key"] == second_key)
         async with self.sessions.begin() as session:
             (await session.get(models.ModelProvider, "second")).enabled = False
-        self.assertFalse((await self.config("")).json()["ok"])
+        for params in ({"agent": "pi"}, {"agent": "pi", "ignore_preference": "1"}):
+            unavailable = (await self.http.get("/api/v1/ai-proxy/config",
+                headers=self.headers, params=params)).json()
+            self.assertFalse(unavailable["ok"])
+            self.assertTrue(unavailable["providerPinned"])
         cleared = await self.http.put("/api/v1/agent-setup/model", headers=self.headers, json={"key": "pi", "model": ""})
         self.assertEqual(cleared.status_code, 200)
         self.assertEqual((await self.config("shared-model")).json()["providerKey"], "shared")
