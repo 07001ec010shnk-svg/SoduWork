@@ -46,6 +46,11 @@ async def _resolve_catalog(session, client, model_name="", modality="chat", *, a
     narrow test double. Keep that supported while the real resolver receives
     the already-admitted rows and avoids a second provider/model query.
     """
+    ticket_provider = getattr(client, "_proxy_provider_id", "") if modality == "chat" else ""
+    if ticket_provider and available is not None:
+        available = [row for row in available if row.get("providerId") == ticket_provider]
+        if not available or (model_name and not any(row["name"] == model_name for row in available)):
+            raise HTTPException(409, "模型凭据已变化，请重新选择模型后继续")
     resolver = model_catalog.resolve
     try:
         parameters = inspect.signature(resolver).parameters.values()
@@ -519,12 +524,13 @@ async def proxy_config(
                 "reason": "此底座不使用企业模型配置，请检查执行底座"}
     # Match controlled dispatch: explicit choice > Agent preference > company
     # default. A removed preference is an actionable error, never a silent swap.
-    want = str(model or "").strip() or (
-        "" if custom_acp or ignore_preference else model_catalog.agent_model(client, cli)
-    )
+    want, provider = (str(model or "").strip(), "") if custom_acp or ignore_preference else (
+        model_catalog.agent_choice(client, cli, model))
     # Signed proxy tickets and usage receipts bind funding to this exact runtime.
     client._proxy_quota_runtime = cli
     usable = await model_catalog.usable(session, client)
+    if provider:
+        usable = [row for row in usable if row.get("providerId") == provider]
     if want and not any(item["name"] == want for item in usable):
         return {"ok": False, "path": PROXY_PATH,
                 "reason": f"你选择的模型「{want}」现在不可用，请重新选择"}
@@ -541,7 +547,7 @@ async def proxy_config(
     video_models = await model_catalog.usable(session, client, "video")
     from ..services import model_quota
     proxy_key, expires_in = device_auth.issue_proxy_ticket(client, quota_runtime=cli,
-        quota_binding=model_quota.binding(conf))
+        quota_binding=model_quota.binding(conf), provider_id=provider)
     mcp_key, mcp_expires_in = device_auth.issue_mcp_ticket(client)
     image_routing = model_catalog.normalize_image_routing(conf.get("imageRouting"))
     # Catalog values may come from an administrator-edited JSON payload. Keep
