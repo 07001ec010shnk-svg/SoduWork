@@ -1459,12 +1459,32 @@ async def put_model_provider(
     return {"ok": True, "keyChanged": bool(new_key)}
 
 
+async def _provider_deletion_impact(session, user, provider):
+    from ..services import model_provider_impact
+    vis = await _visible_client_ids(session, user) if not user.is_super and has_perm(user, "task.view") else None
+    return await model_provider_impact.preview(session, user, provider, vis)
+
+
+@router.get("/model-providers/{pid}/deletion-impact")
+async def model_provider_deletion_impact(
+    pid: str, user: User = Depends(require_perm("integration.manage")),
+    session: AsyncSession = Depends(get_session),
+):
+    provider = await session.get(models.ModelProvider, pid)
+    if provider is None:
+        raise HTTPException(404, detail="没有这个模型服务")
+    if provider.builtin:
+        raise HTTPException(400, detail="内置的服务不能删——不想用就停用它")
+    return await _provider_deletion_impact(session, user, provider)
+
+
 @router.delete("/model-providers/{pid}")
 async def del_model_provider(
     pid: str,
     expectedRevision: str | None = None,
     user: User = Depends(require_perm("integration.manage")),
     session: AsyncSession = Depends(get_session),
+    confirmId: str | None = None, expectedImpact: str | None = None,
 ):
     from sqlalchemy import delete as _del
 
@@ -1475,6 +1495,13 @@ async def del_model_provider(
         raise HTTPException(status_code=404, detail="没有这个模型服务")
     if p.builtin:
         raise HTTPException(status_code=400, detail="内置的服务不能删——不想用就停用它")
+    if confirmId is None or not expectedImpact:
+        raise HTTPException(428, detail="请刷新管理端，预览删除影响并输入服务 ID 后再删除")
+    if confirmId != pid:
+        raise HTTPException(400, detail="输入的服务 ID 不匹配")
+    impact = await _provider_deletion_impact(session, user, p)
+    if impact["impactRevision"] != expectedImpact:
+        raise HTTPException(409, detail="删除影响已变化，请重新核对清单后确认")
     await session.execute(_del(ModelDef).where(ModelDef.provider_id == pid))
     await session.delete(p)
     await session.commit()
