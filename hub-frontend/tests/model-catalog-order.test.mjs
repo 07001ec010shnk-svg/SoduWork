@@ -18,6 +18,7 @@ async function mount(t, catalog, { api = {}, takeNav = () => null, ...options } 
       '../api.js': { api: { modelCatalog: async () => structuredClone(catalog), ...api } },
       '../ui.jsx': { takeNav, Modal: () => null, SelectMenu: () => null, Confirm: () => null,
         Icon: () => null, Loading: () => null, ErrorState: () => null, toast() {} },
+      './ModelProviderDeletion.jsx': { __esModule: true, default: () => null },
       './LlmSettings.jsx': { __esModule: true, default: () => null }, './ModelRuntime.jsx': { __esModule: true, default: Runtime },
       './model-catalog-actions.css': {}, './model-capabilities.css': {},
       './ModelCapabilities.jsx': { CAPABILITY_LABELS: {}, CAPABILITY_STATES: {}, CapabilityBadges() {}, ModelCapabilityStatus() {} },
