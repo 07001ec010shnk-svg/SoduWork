@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .. import models
 from ..auth import sign_token, verify_password
 from ..config import get_settings
+from ..csv_export import csv_chunks
+from ..timestamps import iso_utc
 from ..services.catalog_names import DuplicateName
 from ..pagination import PageQuery
 from ..db import get_session
@@ -57,20 +59,21 @@ from ..services import device_auth
 from ..services import device_connections
 from ..services import environment_service
 from .input_validation import parse_integer
+from .first_chat import REPORT_KEY
 
 log = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 settings = get_settings()
 
-# Local model services are owned by the desktop client and must never be exposed
-# through administrative device APIs or changed by an administrator.
-_CLIENT_LOCAL_MODEL_KEYS = frozenset(("modelProviders",))
+# Device-owned model settings and first-chat reports stay out of generic
+# administrative device reads and patches.
+_CLIENT_PRIVATE_CONFIG_KEYS = frozenset(("modelProviders", REPORT_KEY))
 
 
 def _admin_client_config(value) -> dict:
     """Return the administrative configuration view without client-local model data."""
     config = dict(value or {}) if isinstance(value, dict) else {}
-    for key in _CLIENT_LOCAL_MODEL_KEYS:
+    for key in _CLIENT_PRIVATE_CONFIG_KEYS:
         config.pop(key, None)
     return config
 
@@ -130,14 +133,20 @@ async def permissions():
 
 # Visibility scope helpers.
 
+async def _client_scope(session: AsyncSession, user: User):
+    """Restrict devices to scoped owners plus unassigned devices in the query itself."""
+    orgs = await rbac.scope_org_ids(session, user)
+    if orgs is None:
+        return ()
+    owners = select(User.id).where(User.org_id.in_(orgs)).correlate(None)
+    return (or_(Client.user_ref.is_(None), Client.user_ref.in_(owners)),)
+
+
 async def _visible_client_ids(session: AsyncSession, user: User) -> set[str] | None:
-    """Return visible client IDs: scoped owners plus unassigned devices, or None for superusers."""
-    scope = await rbac.scope_org_ids(session, user)
-    if scope is None:
+    scope = await _client_scope(session, user)
+    if not scope:
         return None
-    uids = await rbac.scoped_user_ids(session, scope) or set()
-    res = await session.execute(select(Client.id, Client.user_ref))
-    return {cid for cid, uref in res.all() if (uref in uids) or (uref is None)}
+    return set(await session.scalars(select(Client.id).where(*scope)))
 
 
 async def _assert_org_in_scope(session: AsyncSession, user: User, org_id: str | None):
@@ -359,6 +368,11 @@ async def update_user(
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
     await _assert_user_in_scope(session, user, target)
+    if body.password is not None:
+        if len(body.password) < 8:
+            raise HTTPException(status_code=422, detail="密码长度不能少于 8 个字符")
+        if len(body.password) > 128:
+            raise HTTPException(status_code=422, detail="密码长度不能超过 128 个字符")
     if body.orgId is not None:
         await _assert_org_in_scope(session, user, body.orgId)
         await _require_existing_org(session, body.orgId)
@@ -555,10 +569,15 @@ async def delete_domain(
 class ClientListFilters:
     def __init__(self, q: str = Query(default="", max_length=120),
                  state: str = Query(default="all", pattern="^(all|online|offline|pending)$"),
-                 form: str = Query(default="all", pattern="^(all|desktop|mobile)$")):
+                 form: str = Query(default="all", pattern="^(all|desktop|mobile)$"),
+                 sort_by: str | None = Query(default=None, alias="sortBy",
+                                             pattern="^(name|owner|online|auth|platform|lastSeen)$"),
+                 sort_dir: str = Query(default="asc", alias="sortDir", pattern="^(asc|desc)$")):
         self.q = q
         self.state = state
         self.form = form
+        self.sort_by = sort_by
+        self.sort_dir = sort_dir
 
 
 ClientFilters = Annotated[ClientListFilters, Depends()]
@@ -583,27 +602,12 @@ async def list_clients(
     return [client_to_api(c, settings.offline_after_seconds) for c in await session.scalars(query)]
 
 
-@router.get("/client-inventory")
-async def paged_clients(
-    filters: ClientFilters, page: ClientPageNumber = None, page_size: ClientPageSize = None,
-    window: PageQuery = None, user: User = Depends(require_perm("client.view")),
-    session: AsyncSession = Depends(get_session),
-):
-    """Return items, total and counts for every request, including an empty page."""
-    vis = await _visible_client_ids(session, user)
-    if window:
-        if page is not None or page_size is not None:
-            raise HTTPException(status_code=422, detail="请选择一种分页方式：limit/offset 或 page/pageSize",
-                                headers={"X-Error-Code": "hub.input.pages"})
-        offset, page_size = window.offset, window.limit
-        page = offset // page_size + 1
-    else:
-        page, page_size = page or 1, page_size or 25
-        offset = (page - 1) * page_size
+async def _client_inventory_query(session, user, filters):
     state, form, q = filters.state, filters.form, filters.q
 
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.offline_after_seconds)
-    scope = [] if vis is None else [Client.id.in_(vis)]
+    online = case((Client.last_seen_at >= cutoff, 1), else_=0)
+    scope = await _client_scope(session, user)
     state_where = {
         "online": [Client.last_seen_at.is_not(None), Client.last_seen_at >= cutoff],
         "offline": [or_(Client.last_seen_at.is_(None), Client.last_seen_at < cutoff)],
@@ -618,22 +622,64 @@ async def paged_clients(
     keyword = q.strip().lower()
     search = []
     if keyword:
-        like = f"%{keyword}%"
         search = [or_(
-            func.lower(func.coalesce(Client.name, "")).like(like),
-            func.lower(Client.id).like(like),
-            func.lower(func.coalesce(User.display_name, "")).like(like),
-            func.lower(func.coalesce(User.username, "")).like(like),
+            func.lower(func.coalesce(Client.name, "")).contains(keyword, autoescape=True),
+            func.lower(Client.id).contains(keyword, autoescape=True),
+            func.lower(func.coalesce(User.display_name, "")).contains(keyword, autoescape=True),
+            func.lower(func.coalesce(User.username, "")).contains(keyword, autoescape=True),
         )]
 
-    total = int(await session.scalar(
-        select(func.count()).select_from(Client).outerjoin(User, User.id == Client.user_ref)
-        .where(*scope, *state_where, *form_where, *search)
-    ) or 0)
+    owner = func.coalesce(func.nullif(User.display_name, ""), User.username, "")
+    query = (select(Client, owner.label("owner_name"), online.label("online"))
+             .outerjoin(User, User.id == Client.user_ref)
+             .where(*scope, *state_where, *form_where, *search))
+    if filters.sort_by is None:
+        order = (online.desc(), Client.created_at.desc())
+    else:
+        # Match the normalized platform labels displayed in the terminal table.
+        platform_name = case(
+            (platform_lc.like("win%"), "windows"),
+            (or_(platform_lc.like("darwin%"), platform_lc.like("mac%")), "macos"),
+            (platform_lc.like("linux%"), "linux"), (platform_lc.like("ios%"), "ios"),
+            (platform_lc.like("android%"), "android"), (platform_lc.like("harmony%"), "harmonyos"),
+            else_=platform_lc,
+        )
+        columns = {
+            "name": (func.lower(func.coalesce(Client.name, "")),),
+            "owner": (func.lower(owner),),
+            "online": (1 - online,),  # Ascending groups online devices first.
+            "auth": (case((Client.auth_state.in_(("active", "revoked")), Client.auth_state),
+                          else_="pending"),),
+            "platform": (platform_name, func.lower(func.coalesce(Client.app_version, ""))),
+            "lastSeen": (Client.last_seen_at,),
+        }[filters.sort_by]
+        order = tuple((col.desc() if filters.sort_dir == "desc" else col.asc()).nulls_last()
+                      for col in columns)
+    return query.order_by(*order, Client.id), scope, online, is_mobile
+
+
+@router.get("/client-inventory")
+async def paged_clients(
+    filters: ClientFilters, page: ClientPageNumber = None, page_size: ClientPageSize = None,
+    window: PageQuery = None, user: User = Depends(require_perm("client.view")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Return items, total and counts for every request, including an empty page."""
+    if window:
+        if page is not None or page_size is not None:
+            raise HTTPException(status_code=422, detail="请选择一种分页方式：limit/offset 或 page/pageSize",
+                                headers={"X-Error-Code": "hub.input.pages"})
+        offset, page_size = window.offset, window.limit
+        page = offset // page_size + 1
+    else:
+        page, page_size = page or 1, page_size or 25
+        offset = (page - 1) * page_size
+    query, scope, online, is_mobile = await _client_inventory_query(session, user, filters)
+    total = await session.scalar(query.order_by(None).with_only_columns(func.count()))
     summary = (await session.execute(
         select(
             func.count(),
-            func.sum(case((Client.last_seen_at >= cutoff, 1), else_=0)),
+            func.sum(online),
             func.sum(case((Client.auth_state != "active", 1), else_=0)),
             func.sum(case((is_mobile, 1), else_=0)),
         ).select_from(Client).where(*scope)
@@ -642,21 +688,11 @@ async def paged_clients(
     online_count, pending_count = int(summary[1] or 0), int(summary[2] or 0)
     mobile_count = int(summary[3] or 0)
 
-    query = (
-        select(Client, User.display_name, User.username)
-        .outerjoin(User, User.id == Client.user_ref)
-        .where(*scope, *state_where, *form_where, *search)
-        .order_by(
-            case((Client.last_seen_at >= cutoff, 1), else_=0).desc(),
-            Client.created_at.desc(), Client.id,
-        )
-        .offset(offset).limit(page_size)
-    )
-    rows = await session.execute(query)
+    rows = await session.execute(query.offset(offset).limit(page_size))
     items = []
-    for client, display_name, username in rows.all():
+    for client, owner, online_at_query in rows:
         item = client_to_api(client, settings.offline_after_seconds)
-        item["ownerName"] = display_name or username or ""
+        item.update(ownerName=owner, online=bool(online_at_query))
         items.append(item)
     return {
         "items": items, "total": total, "page": page, "pageSize": page_size, "offset": offset,
@@ -666,6 +702,32 @@ async def paged_clients(
             "mobile": mobile_count,
         },
     }
+
+
+@router.get("/client-inventory/export.csv")
+async def export_client_inventory(
+    filters: ClientFilters, user: User = Depends(require_perm("client.view")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Export the complete filtered inventory with the same scope and ordering as the table."""
+    query, _, _, _ = await _client_inventory_query(session, user, filters)
+    query = query.with_only_columns(
+        Client.id, Client.name, query.selected_columns.owner_name, query.selected_columns.online,
+        Client.auth_state, Client.platform, Client.app_version, Client.last_seen_at,
+    )
+    rows = await session.stream(query.execution_options(yield_per=400))
+    fields = ("id", "name", "ownerName", "connectionState", "authState", "platform", "version", "lastSeen")
+
+    def values(row):
+        device_id, name, owner, online, auth, platform, version, heartbeat = row
+        return (device_id, name, owner, "online" if online else "offline",
+                auth if auth in ("active", "revoked") else "pending", platform, version, iso_utc(heartbeat))
+
+    return StreamingResponse(csv_chunks(rows, fields, values), media_type="text/csv", headers={
+        "Content-Disposition": 'attachment; filename="soduwork-clients.csv"',
+        "Cache-Control": "no-store",
+    })
+
 
 @router.post("/clients/{cid}/assign")
 async def assign_client(
@@ -1397,12 +1459,32 @@ async def put_model_provider(
     return {"ok": True, "keyChanged": bool(new_key)}
 
 
+async def _provider_deletion_impact(session, user, provider):
+    from ..services import model_provider_impact
+    vis = await _visible_client_ids(session, user) if not user.is_super and has_perm(user, "task.view") else None
+    return await model_provider_impact.preview(session, user, provider, vis)
+
+
+@router.get("/model-providers/{pid}/deletion-impact")
+async def model_provider_deletion_impact(
+    pid: str, user: User = Depends(require_perm("integration.manage")),
+    session: AsyncSession = Depends(get_session),
+):
+    provider = await session.get(models.ModelProvider, pid)
+    if provider is None:
+        raise HTTPException(404, detail="没有这个模型服务")
+    if provider.builtin:
+        raise HTTPException(400, detail="内置的服务不能删——不想用就停用它")
+    return await _provider_deletion_impact(session, user, provider)
+
+
 @router.delete("/model-providers/{pid}")
 async def del_model_provider(
     pid: str,
     expectedRevision: str | None = None,
     user: User = Depends(require_perm("integration.manage")),
     session: AsyncSession = Depends(get_session),
+    confirmId: str | None = None, expectedImpact: str | None = None,
 ):
     from sqlalchemy import delete as _del
 
@@ -1413,6 +1495,13 @@ async def del_model_provider(
         raise HTTPException(status_code=404, detail="没有这个模型服务")
     if p.builtin:
         raise HTTPException(status_code=400, detail="内置的服务不能删——不想用就停用它")
+    if confirmId is None or not expectedImpact:
+        raise HTTPException(428, detail="请刷新管理端，预览删除影响并输入服务 ID 后再删除")
+    if confirmId != pid:
+        raise HTTPException(400, detail="输入的服务 ID 不匹配")
+    impact = await _provider_deletion_impact(session, user, p)
+    if impact["impactRevision"] != expectedImpact:
+        raise HTTPException(409, detail="删除影响已变化，请重新核对清单后确认")
     await session.execute(_del(ModelDef).where(ModelDef.provider_id == pid))
     await session.delete(p)
     await session.commit()
@@ -1837,20 +1926,25 @@ async def put_alert_config(
 ):
     from ..models import AppSetting
     from ..services import notify
-    url = str(body.get("url") or "").strip()[:600]
-    if url and not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=422, detail="告警地址要以 http:// 或 https:// 开头")
-    row = (await session.execute(select(AppSetting).where(
+    url = body.get("url")
+    if url is not None:
+        url = str(url).strip()[:600]
+        if url and not url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=422, detail="告警地址要以 http:// 或 https:// 开头")
+        row = (await session.execute(select(AppSetting).where(
+            AppSetting.key == notify.ALERT_URL_KEY))).scalars().first()
+        if row is None:
+            session.add(AppSetting(key=notify.ALERT_URL_KEY, value=url))
+        else:
+            row.value = url
+        await session.commit()
+    # Read current state for audit and response.
+    current_row = (await session.execute(select(AppSetting).where(
         AppSetting.key == notify.ALERT_URL_KEY))).scalars().first()
-    if row is None:
-        session.add(AppSetting(key=notify.ALERT_URL_KEY, value=url))
-    else:
-        row.value = url
-    await session.commit()
     # Webhook URLs permit message injection if leaked; audit only whether a URL is configured.
     await audit.log(session, user, "alert.config", "setting", None, "告警通道",
-                    {"configured": bool(url)})
-    return {"ok": True, "configured": bool(url)}
+                    {"configured": bool(current_row and current_row.value)})
+    return {"ok": True, "configured": bool(current_row and current_row.value)}
 
 
 @router.post("/alert-config/test")
@@ -2304,10 +2398,11 @@ async def client_push(
             patch = {}
         if not isinstance(patch, dict):
             raise HTTPException(status_code=400, detail="config.patch 必须是对象")
-        forbidden = sorted(_CLIENT_LOCAL_MODEL_KEYS.intersection(patch))
+        forbidden = sorted(_CLIENT_PRIVATE_CONFIG_KEYS.intersection(patch))
         if forbidden:
             raise HTTPException(status_code=403,
-                                detail="本地模型配置由客户端管理，后台不能读取或修改")
+                                detail="本地模型配置由客户端管理，后台不能读取或修改" if "modelProviders" in forbidden
+                                else "首聊状态由客户端报告")
         from ..services import model_config_guard
         await model_config_guard.personal(session, c, allow_patch=True)
         c.config = {**(c.config or {}), **patch}

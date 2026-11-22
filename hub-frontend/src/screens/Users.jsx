@@ -1,7 +1,7 @@
 import { getLocale, translateText as tx, localeMap, useLocale } from '../i18n.js'
 import React, { useState, useEffect, useId } from 'react'
 import { orgOptions } from '../org-options.js'
-import { api } from '../api.js'
+import { api, getUser } from '../api.js'
 import { FilterInput, FilterSelect } from '../FilterControls.jsx'
 import { useViewportHeight } from '../viewport-height.js'
 import { useAsync, Loading, Icon, Modal, Confirm, toast, SelectMenu } from '../ui.jsx'
@@ -24,8 +24,21 @@ export default function Users() {
   const orgs = useAsync(() => api.orgs())
   const roles = useAsync(() => api.roles())
   const [edit, setEdit] = useState(null)
-  const [q, setQ] = useState('')
-  const [dept, setDept] = useState('')
+  const user = getUser()
+  const account = user?.id || user?.username
+  const [{ q, dept }, setFilters] = useState(() => {
+    const saved = window.history.state?.usersFilters
+    return account && saved?.account === account && typeof saved.q === 'string' && typeof saved.dept === 'string'
+      ? saved : { q: '', dept: '' }
+  })
+  function changeFilters(next) {
+    setFilters(next)
+    if (account) {
+      // Keep searches on this history entry so copying the URL shares only the page.
+      try { window.history.replaceState({ ...window.history.state, usersFilters: { ...next, account } }, '') }
+      catch { /* Filtering still works when the browser limits history writes. */ }
+    }
+  }
   const [status, setStatus] = useState('')
   const [onlyTest, setOnlyTest] = useState(false)
   if (users.loading || orgs.loading || roles.loading) return <Loading />
@@ -50,9 +63,9 @@ export default function Users() {
         <div className="stat" title={tx("停用账号不可登录；从未登录的为未激活账号")}><div className="sv">{ul.length - active}</div><div className="sl"><span className="sd" style={{ background: 'var(--offline)' }} />{tx("已停用")}</div></div>
       </div>
       <div className="admin-filterbar">
-        <FilterInput aria-label={tx("搜索姓名或账号")} value={q} onChange={(e) => setQ(e.target.value)} placeholder={tx("搜索姓名 / 账号")} />
+        <FilterInput aria-label={tx("搜索姓名或账号")} value={q} onChange={(e) => changeFilters({ q: e.target.value, dept })} placeholder={tx("搜索姓名 / 账号")} />
         <div className="admin-filter-options">
-          <FilterSelect className="f-sel" aria-label={tx("所属部门")} value={dept} onChange={(e) => setDept(e.target.value)}>
+          <FilterSelect className="f-sel" aria-label={tx("所属部门")} value={dept} onChange={(e) => changeFilters({ q, dept: e.target.value })}>
             <option value="">{tx("全部部门")}</option>
             {orgOptions(ol).map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
           </FilterSelect>
@@ -148,9 +161,9 @@ function UserEditor({ user, orgs, roles, onClose, onDone }) {
   }
 
   return (
-    <Modal title={isNew ? tx("新建用户") : tx("编辑用户")} icon="users" onClose={onClose}
-      foot={<>
-        <button className="btn btn-ghost" onClick={onClose}>{tx("取消")}</button>
+    <Modal title={isNew ? tx("新建用户") : tx("编辑用户")} icon="users" draft={[username, displayName, password, orgId, roleId, isActive, [...posSel].sort(), [...domSel].sort()]} onClose={onClose}
+      foot={dismiss => <>
+        <button className="btn btn-ghost" onClick={dismiss}>{tx("取消")}</button>
         <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? tx("保存中…") : tx("保存")}</button>
       </>}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 2 }}>
@@ -235,8 +248,8 @@ function DomainManager({ domains, onClose, onChanged }) {
     catch (e) { toast(tx("删除失败：") + e.message) }
   }
   return (
-    <Modal title={tx("管理领域 / 模块")} icon="grid" onClose={onClose}
-      foot={<button className="btn btn-primary" onClick={onClose}>{tx("完成")}</button>}>
+    <Modal title={tx("管理领域 / 模块")} icon="grid" dirty={!!name || list.some(row => row._edit != null && row._edit !== row.name)} onClose={onClose}
+      foot={dismiss => <button className="btn btn-primary" onClick={dismiss}>{tx("完成")}</button>}>
       <p className="muted" style={{ fontSize: 14.5, marginTop: 0 }}>{tx("领域是负责的业务块（支付、订单、前端等）。给成员标记领域后，分配需求时会优先选择对应负责人。")}</p>
       <label className="f-lbl" htmlFor={`${formId}-new-domain`}>{tx("领域名称")}</label>
       <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
