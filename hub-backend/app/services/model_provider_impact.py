@@ -17,7 +17,11 @@ def _object(value):
     return value if isinstance(value, dict) else {}
 
 
-def _matches(names, agent, model):
+def _matches(names, agent, model, *, provider_id=None):
+    if provider_id is not None and isinstance(model, dict):
+        if model.get("providerId") != provider_id:
+            return False
+        model = model.get("name")
     if not isinstance(model, str) or is_local_model_reference(model):
         return False
     agent = str(agent or "").strip().lower()
@@ -25,7 +29,7 @@ def _matches(names, agent, model):
     return kind in GATEWAY_MODEL_KINDS and model_catalog.canonical_model_name(model) in names
 
 
-async def _members(session, names, scope):
+async def _members(session, provider_id, names, scope):
     query = (select(User.id, User.display_name, User.username, Client.agent_models)
              .join(Client, Client.user_ref == User.id)
              .where(User.is_active.is_(True), Client.auth_state == "active"))
@@ -33,7 +37,7 @@ async def _members(session, names, scope):
         query = query.where(User.org_id.in_(scope))
     members = {}
     for uid, display, username, prefs in await session.execute(query):
-        if any(_matches(names, agent, model) for agent, model in _object(prefs).items()):
+        if any(_matches(names, agent, model, provider_id=provider_id) for agent, model in _object(prefs).items()):
             members[uid] = display or username
     return [{"id": uid, "name": members[uid]} for uid in sorted(members)]
 
@@ -105,7 +109,7 @@ async def preview(session, user, provider, visible_clients):
     names = {m.name for m in definitions if m.modality == "chat"}
     show_members = user.is_super or has_perm(user, "user.manage")
     show_tasks = user.is_super or has_perm(user, "task.view")
-    members = (await _members(session, names, await rbac.scope_org_ids(session, user))
+    members = (await _members(session, provider.id, names, await rbac.scope_org_ids(session, user))
                if names and show_members else [])
     tasks = await _tasks(session, names, visible_clients) if names and show_tasks else []
     result = {

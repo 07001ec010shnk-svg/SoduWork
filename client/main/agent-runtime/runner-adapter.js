@@ -508,7 +508,7 @@ async function createRunnerHandle(request, defaults, initialSession) {
   // unreadable. Retry only resumed conversations with the current default; new
   // chats keep an explicit model failure visible so a typo is not silently changed.
   const canRecoverStaleModel = Boolean(resumedRef || opts.resumedConversation) && !modelName.startsWith('local:') &&
-    prepared?.code !== 'LOCAL_AGENT_DEFAULT_UNAVAILABLE';
+    !prepared?.providerPinned && prepared?.code !== 'LOCAL_AGENT_DEFAULT_UNAVAILABLE';
   const returnedModel = String(prepared?.model?.id || '').trim();
   const returnedDifferentModel = Boolean(prepared?.ok && modelName && returnedModel && returnedModel !== modelName);
   let resetSavedModel = false;

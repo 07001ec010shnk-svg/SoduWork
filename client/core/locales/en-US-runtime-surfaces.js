@@ -1,5 +1,15 @@
 (function (global) {
   const messages = {
+    "文件读取记录": "File read history",
+    "按路径筛选": "Filter by path",
+    "当前记录中没有匹配的读取，文件状态尚待核验。": "No matching read in the loaded history. The file status is unverified.",
+    "显示更多记录": "Show more records",
+    "读取状态待核验": "Read status unverified",
+    "读取成功": "Read succeeded",
+    "读取失败": "Read failed",
+    "正在读取": "Reading",
+    "已取消": "Cancelled",
+    "会话工作目录": "Chat working directory",
     "还没有可用于对话的模型。": "No chat model is available yet.",
     "打开模型目录": "Open model catalog",
     "当前模型不可用，请选择可用模型。": "This model is unavailable. Choose an available model.",
