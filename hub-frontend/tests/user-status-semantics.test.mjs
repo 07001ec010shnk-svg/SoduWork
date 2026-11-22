@@ -25,98 +25,137 @@ const accounts = page => page.nodes(node => node.type === 'td' && node.props.cla
 
 const statusDot = page => page.nodes(node => node.type === 'span' && node.props.className?.startsWith('status-dot'))
 
-// The harness walks the element tree without invoking function components, so
-// the stub keeps its props reachable on the element itself.
-const FilterSelectStub = (props) => React.createElement('select', {
-  'aria-label': props['aria-label'], value: props.value,
-  className: props.className, onChange: (event) => props.onChange(event),
-}, React.Children.toArray(props.children))
-
-const mount = async (t, list = fixture) => {
-  const api = { users: async () => list, orgs: async () => orgs, roles: async () => roles }
+async function mount(t, { list = fixture, batchUpdateUsers = async () => ({ updated: 0 }) } = {}) {
+  const history = { state: {}, replaceState(next) { this.state = next } }
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: { history } })
+  t.after(() => previousWindow ? Object.defineProperty(globalThis, 'window', previousWindow) : delete globalThis.window)
+  const api = { users: () => list, orgs: () => orgs, roles: () => roles, batchUpdateUsers }
   const page = await createComponentHarness(source, {
     dependencies: {
-      '../api.js': { api },
-      '../viewport-height.js': { useViewportHeight: () => undefined },
+      '../api.js': { api, getUser: () => ({ id: 'actor', username: 'admin' }) },
       './admin-access-pages.css': {},
-      '../FilterControls.jsx': {
-        FilterInput: () => null,
-        FilterSelect: FilterSelectStub,
-      },
-      // Users resolves three catalogs synchronously; the selector keys on the
-      // api call inside each useAsync closure.
-      '../ui.jsx': {
-        useAsync: (fn) => {
-          const src = fn.toString()
-          const data = src.includes('api.users()') ? list : src.includes('api.orgs()') ? orgs : roles
-          return { data, loading: false, error: null, reload: () => {} }
-        },
-        Loading: () => null, Icon: () => null, Modal: () => null,
-        Confirm: () => null, SelectMenu: () => null, toast: () => {},
-      },
+      '../FilterControls.jsx': { FilterInput: 'FilterInput', FilterSelect: 'FilterSelect' },
+      '../ui.jsx': { useAsync: fn => ({ data: fn(), reload: async () => true }), Icon: 'Icon',
+        Loading: 'Loading', Modal: 'Modal', Confirm: 'Confirm', SelectMenu: 'SelectMenu', toast() {} },
     },
   })
   page.render()
-  await page.flush()
   t.after(() => page.unmount())
   return page
 }
 
-function setStatus(page, value) {
-  const select = page.nodes(node => node.type === FilterSelectStub && node.props['aria-label'] === tx('状态'))[0]
-  assert.ok(select, 'the filter bar exposes a status select')
-  page.act(() => select.props.onChange({ target: { value } }))
-  page.flush()
-}
+const byLabel = (page, label) => page.nodes(node => node.props['aria-label'] === label)[0]
+const button = (page, key) => page.nodes(node => node.type === 'button' && textOf(node) === tx(key))[0]
+const confirm = page => page.nodes(node => node.type === 'Confirm')[0]
+const setValue = (page, key, value) => page.act(() => byLabel(page, tx(key)).props.onChange({ target: { value } }))
+const check = (page, label, checked) => page.act(() => byLabel(page, label).props.onChange({ target: { checked } }))
+const selectAll = page => check(page, tx('全选筛选结果'), true)
+const toggleTests = page => page.act(() => page.nodes(node => node.type === 'label' && textOf(node) === tx('测试及疑似账号'))[0].props.children[0].props.onChange({ target: { checked: true } }))
 
-test('user states distinguish never-activated from disabled accounts', async t => {
-  const page = await mount(t)
-  const labels = statusDot(page).map(node => textOf(node).trim())
-  assert.deepEqual(labels, [tx('启用'), tx('未激活'), tx('已停用'), tx('启用')])
-})
-
-test('state tooltips explain what stopping an account means', async t => {
+test('account availability and login history produce three disjoint statuses and matching totals', async t => {
   const page = await mount(t)
   const dots = statusDot(page)
-  assert.equal(dots[0].props.title, undefined, 'active accounts need no hint')
-  assert.equal(dots[1].props.title, tx('从未登录，账号不可用'))
-  assert.equal(dots[2].props.title, tx('登录过之后被停用，账号不可用'))
+  assert.deepEqual(dots.map(textOf), [tx('启用'), tx('未激活'), tx('已停用'), tx('启用')])
+  assert.deepEqual(dots.map(node => node.props.title), [undefined, tx('停用且无登录记录'), tx('停用且有登录记录'), undefined])
+  const cards = page.nodes(node => node.props.className === 'stat')
+  assert.deepEqual(cards.map(textOf), ['4' + tx('用户总数'), '2' + tx('启用中'), '1' + tx('未激活'), '1' + tx('已停用')])
+  setValue(page, '状态', 'inactive')
+  assert.deepEqual(accounts(page), ['testorg' + tx('疑似测试账号')])
+  setValue(page, '状态', 'disabled')
+  assert.deepEqual(accounts(page), ['bob'])
 })
 
-test('the disabled summary explains the shared stop semantics', async t => {
-  const page = await mount(t)
-  const stat = page.nodes(node => node.props.className?.split(/\s+/).includes('stat')
-    && node.props.title === tx('停用账号不可登录；从未登录的为未激活账号'))[0]
-  assert.ok(stat, 'the disabled stat carries the semantics hint')
+test('explicit account markers take precedence over conservative legacy name hints', async t => {
+  const list = [
+    { ...fixture[0], username: 'contest' },
+    { ...fixture[1], isTestAccount: false },
+    { ...fixture[2], isTestAccount: true },
+    fixture[3],
+  ]
+  const page = await mount(t, { list })
+  assert.deepEqual(accounts(page), ['contest', 'testorg', 'bob' + tx('测试账号'), 'qatest001' + tx('疑似测试账号')])
+  toggleTests(page)
+  assert.deepEqual(accounts(page), ['bob' + tx('测试账号'), 'qatest001' + tx('疑似测试账号')])
+  assert.equal(button(page, '批量停用'), undefined, 'filtering test candidates selects nobody')
 })
 
-test('test accounts are flagged by the username heuristic and plain users stay unflagged', async t => {
-  const page = await mount(t)
-  const flagged = accounts(page)
-  assert.ok(flagged[1].includes(tx('测试')) && flagged[1].includes('testorg'), 'testorg is flagged')
-  assert.ok(flagged[3].includes(tx('测试')) && flagged[3].includes('qatest001'), 'qatest001 is flagged')
-  assert.ok(!flagged[0].includes(tx('测试')) && flagged[0].includes('alice'), 'alice stays unflagged')
-  assert.ok(!flagged[2].includes(tx('测试')) && flagged[2].includes('bob'), 'bob stays unflagged')
+test('all filters intersect and a change clears both visible and hidden selections', async t => {
+  const list = [...fixture,
+    { ...fixture[3], id: 'department-miss', orgId: 'other' },
+    { ...fixture[3], id: 'role-miss', roleId: 'other' },
+    { ...fixture[3], id: 'status-miss', isActive: false },
+    { ...fixture[3], id: 'query-miss', username: 'testuser9', displayName: 'Other member' },
+    { ...fixture[3], id: 'kind-miss', isTestAccount: false }]
+  const page = await mount(t, { list })
+  setValue(page, '搜索姓名或账号', 'qa')
+  setValue(page, '所属部门', 'team')
+  setValue(page, '角色', 'member')
+  setValue(page, '状态', 'active')
+  toggleTests(page)
+  assert.deepEqual(accounts(page), ['qatest001' + tx('疑似测试账号')])
+  selectAll(page)
+  assert.ok(button(page, '批量停用'))
+  setValue(page, '角色', 'other')
+  assert.equal(button(page, '批量停用'), undefined)
+  setValue(page, '角色', 'member')
+  assert.equal(byLabel(page, tx('选择账号 {0}', ['qatest001'])).props.checked, false)
 })
 
-test('the status filter narrows the list to the selected state', async t => {
-  const page = await mount(t)
-  setStatus(page, 'inactive')
-  assert.deepEqual(accounts(page).map(a => a.trim().replace(tx('测试'), '').trim()), ['testorg'])
-  setStatus(page, 'disabled')
-  assert.deepEqual(accounts(page).map(a => a.trim()), ['bob'])
-  setStatus(page, '')
-  assert.equal(accounts(page).length, fixture.length, 'clearing the filter restores every row')
+test('selection, cancellation, confirmation and failure preserve the exact batch request', async t => {
+  const calls = []
+  let rejected = true
+  const page = await mount(t, { batchUpdateUsers: async body => {
+    calls.push(body)
+    if (rejected) throw Error('Synthetic validation failure')
+    return { updated: 1 }
+  } })
+  check(page, tx('选择账号 {0}', ['testorg']), true)
+  check(page, tx('选择账号 {0}', ['bob']), true)
+  page.act(() => button(page, '批量启用').props.onClick())
+  const prompt = textOf(confirm(page).props.text)
+  assert.ok(prompt.includes(tx('已选 {0} 个账号', [2])) && prompt.includes('testorg') && prompt.includes('bob'))
+  page.act(() => confirm(page).props.onClose())
+  assert.deepEqual(calls, [])
+  page.act(() => button(page, '批量停用').props.onClick())
+  assert.equal(confirm(page).props.danger, true)
+  await confirm(page).props.onConfirm()
+  assert.deepEqual(calls[0], { ids: ['u-inactive', 'u-disabled'], isActive: false })
+  assert.ok(textOf(page.nodes(node => node.props.role === 'alert')[0]).includes('Synthetic validation failure'))
+  assert.ok(byLabel(page, tx('选择账号 {0}', ['testorg'])).props.checked)
+  rejected = false
+  setValue(page, '目标部门', 'team')
+  page.act(() => button(page, '批量更改部门').props.onClick())
+  assert.ok(textOf(confirm(page).props.text).includes(orgs[0].name))
+  await confirm(page).props.onConfirm()
+  assert.deepEqual(calls[1], { ids: ['u-inactive', 'u-disabled'], orgId: 'team' })
+  assert.equal(button(page, '批量启用'), undefined)
+  assert.equal(textOf(page.nodes(node => node.props.role === 'status')[0]), tx('已更新 {0} 个账号', [1]))
 })
 
-test('the test-accounts filter narrows the list to flagged accounts', async t => {
-  const page = await mount(t)
-  const checkbox = page.nodes(node => node.type === 'input' && node.props.type === 'checkbox')[0]
-  assert.ok(checkbox, 'the filter bar exposes a test-accounts toggle')
-  page.act(() => checkbox.props.onChange({ target: { checked: true } }))
-  page.flush()
-  assert.deepEqual(accounts(page).map(a => a.trim().replace(tx('测试'), '').trim()).sort(), ['qatest001', 'testorg'])
-  page.act(() => checkbox.props.onChange({ target: { checked: false } }))
-  page.flush()
-  assert.equal(accounts(page).length, fixture.length, 'clearing the toggle restores every row')
+test('the current account and a super administrator cannot be bulk-disabled', async t => {
+  const page = await mount(t, { list: [
+    { ...fixture[0], id: 'actor' },
+    { ...fixture[1], isSuper: true },
+    fixture[2],
+  ] })
+  for (const username of ['alice', 'testorg']) {
+    check(page, tx('选择账号 {0}', [username]), true)
+    assert.equal(button(page, '批量停用').props.disabled, true)
+    assert.equal(button(page, '批量启用').props.disabled, false)
+    check(page, tx('选择账号 {0}', [username]), false)
+  }
+  check(page, tx('选择账号 {0}', ['bob']), true)
+  assert.equal(button(page, '批量停用').props.disabled, false)
+})
+
+test('select-all keeps the entire match set and visibly blocks a batch above 200', async t => {
+  const list = Array.from({ length: 201 }, (_, i) => ({ ...fixture[0], id: 'account-' + i, username: 'member' + i }))
+  const page = await mount(t, { list })
+  selectAll(page)
+  assert.equal(byLabel(page, tx('全选筛选结果')).props.checked, true)
+  assert.equal(button(page, '批量启用').props.disabled, true)
+  assert.ok(textOf(page.nodes(node => node.props.role === 'status')[0]).includes('200'))
+  check(page, tx('选择账号 {0}', ['member200']), false)
+  assert.equal(button(page, '批量启用').props.disabled, false)
 })

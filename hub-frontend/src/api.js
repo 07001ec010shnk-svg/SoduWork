@@ -202,6 +202,7 @@ export const api = {
   deleteRole: (id) => call('DELETE', '/admin/roles/' + id),
   // Users.
   users: () => call('GET', '/admin/users'),
+  batchUpdateUsers: (b) => call('POST', '/admin/users/batch', b),
   createUser: (b) => call('POST', '/admin/users', b),
   updateUser: (id, b) => call('PATCH', '/admin/users/' + id, b),
   // Occupational profiles describe work without granting permissions; scenarios link intent, capabilities, workflows, and delivery criteria.

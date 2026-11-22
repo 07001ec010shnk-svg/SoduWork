@@ -260,6 +260,7 @@ _WANT_COLUMNS = {
         ("competencies", "{json}"),
     ],
     "app_user": [
+        ("is_test_account", "BOOLEAN"),
         ("auth_version", "INTEGER DEFAULT 1"),
         ("positions", "{json}"),
         ("domains", "{json}"),

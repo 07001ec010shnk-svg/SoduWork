@@ -37,6 +37,7 @@ from ..schemas import (
     OrgUpdate,
     RoleCreate,
     RoleUpdate,
+    UserBatchUpdate,
     UserCreate,
     UserUpdate,
     attachment_to_api,
@@ -326,6 +327,8 @@ async def create_user(
         raise HTTPException(status_code=403, detail="请由额度管理员调整用户额度")
     if not body.orgId:
         raise HTTPException(status_code=400, detail="请为用户指定所属部门")
+    await _lock_user_targets(session, user, [])
+    await rbac.lock_org_tree(session, shared=True)
     await _assert_org_in_scope(session, user, body.orgId)
     if body.roleId and await rbac.lock_role_reference(session, body.roleId) is None:
         raise HTTPException(status_code=400, detail="角色不存在")
@@ -349,12 +352,96 @@ async def create_user(
         created = await rbac.create_user(
             session, body.username, body.password, body.displayName,
             body.orgId, body.roleId, position_ids, body.domains,
+            is_test_account=body.isTestAccount,
             token_quota=body.tokenQuota.model_dump() if body.tokenQuota is not None else None)
     except client_access.ClientAccessError as exc:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     await audit.log(session, user, "user.create", "user", created.get("id"), created.get("displayName") or body.username,
                     {"orgId": body.orgId, "roleId": body.roleId})
     return created
+
+
+async def _lock_user_targets(session: AsyncSession, actor: User, ids: list[str]) -> list[User]:
+    # A target can also be the actor of an overlapping batch. Lock both sets in ID order.
+    authority = (actor.auth_version, actor.is_active, actor.is_super, actor.org_id, actor.role_id)
+    selected = set(ids)
+    if session.get_bind().dialect.name == "sqlite":
+        await session.execute(update(User).where(False).values(display_name=User.display_name))
+    rows = list(await session.scalars(select(User).where(User.id.in_(selected | {actor.id}))
+        .order_by(User.id).with_for_update().execution_options(populate_existing=True)))
+    current = next((row for row in rows if row.id == actor.id), None)
+    if (current is None or current.account_deleted_at or not current.is_active or authority !=
+            (current.auth_version, current.is_active, current.is_super, current.org_id, current.role_id)):
+        raise HTTPException(status_code=409, detail="登录账号已变更，请刷新后重试")
+    targets = [row for row in rows if row.id in selected]
+    if len(targets) != len(selected):
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return targets
+
+
+def _check_deactivation(actor: User, target: User, active: bool | None) -> None:
+    if active is False and target.is_super:
+        raise HTTPException(status_code=400, detail="不能停用超级管理员")
+    if active is False and target.id == actor.id:
+        raise HTTPException(status_code=400, detail="不能停用自己的账号")
+
+
+async def _revoke_user_devices(session: AsyncSession, disabled_ids: list[str]) -> list[str]:
+    if not disabled_ids:
+        return []
+    # Keep historical ownership and explicit device bans; live channels close after commit.
+    return list(await session.scalars(update(Client).where(
+        Client.user_ref.in_(disabled_ids), Client.auth_state != "revoked",
+    ).values(auth_state="pending", auth_version=Client.auth_version + 1,
+             activated_at=None, revoked_at=None).returning(Client.id)
+        .execution_options(synchronize_session=False)))
+
+
+@router.post("/users/batch")
+async def batch_update_users(
+    body: UserBatchUpdate, user: User = Depends(require_perm("user.manage")),
+    session: AsyncSession = Depends(get_session),
+):
+    if (body.isActive is None) == (body.orgId is None):
+        raise HTTPException(status_code=422, detail="请选择一项批量操作")
+    targets = await _lock_user_targets(session, user, body.ids)
+    if not user.is_super or body.orgId is not None:
+        await rbac.lock_org_tree(session, shared=True)
+    scope = await rbac.scope_org_ids(session, user)
+    visible_positions = set()
+    if body.orgId is not None:
+        if scope is not None and body.orgId not in scope:
+            raise HTTPException(status_code=403, detail="只能在自己管辖的部门内操作")
+        await _require_existing_org(session, body.orgId)
+        visible_positions = {row.id for row in await work_catalog.profession_rows(session, body.orgId)}
+
+    changes = []
+    for target in targets:
+        if scope is not None and (target.org_id not in scope or target.is_super):
+            raise HTTPException(status_code=403, detail="无权管理该用户")
+        if target.account_deleted_at:
+            raise HTTPException(status_code=400, detail="不能修改已注销的账号")
+        _check_deactivation(user, target, body.isActive)
+        if body.isActive is not None and target.is_active != body.isActive:
+            changes.append((target, {"isActive": body.isActive}))
+        if body.orgId is not None and target.org_id != body.orgId:
+            try:
+                positions = work_catalog.check_profession_ids(target.positions, visible_positions)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            changes.append((target, {"orgId": body.orgId, "positions": positions}))
+
+    disabled = [target.id for target, _ in changes] if body.isActive is False else []
+    client_ids = await _revoke_user_devices(session, disabled)
+    for target, patch in changes:
+        audit.add(session, user, "user.update", "user", target.id, target.display_name or target.username,
+                  {"fields": list(patch), "pwChanged": False})
+    for target, patch in changes:
+        rbac.apply_user_patch(target, patch)
+    await session.commit()
+    if client_ids:
+        await device_connections.disconnect_many(client_ids)
+    return {"updated": len(changes)}
 
 
 @router.patch("/users/{uid}")
@@ -364,9 +451,9 @@ async def update_user(
     user: User = Depends(require_perm("user.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    target = await session.get(User, uid, with_for_update=True, populate_existing=True)
-    if target is None:
-        raise HTTPException(status_code=404, detail="用户不存在")
+    target, = await _lock_user_targets(session, user, [uid])
+    if not user.is_super or body.orgId is not None:
+        await rbac.lock_org_tree(session, shared=True)
     await _assert_user_in_scope(session, user, target)
     if body.password is not None:
         if len(body.password) < 8:
@@ -387,13 +474,14 @@ async def update_user(
         missing = sorted(domain_ids - found)
         if missing:
             raise HTTPException(status_code=400, detail="业务域不存在：" + ", ".join(missing))
-    if target.is_super and body.isActive is False:
-        raise HTTPException(status_code=400, detail="不能停用超级管理员")
+    _check_deactivation(user, target, body.isActive)
     was_active = bool(target.is_active)
     patch = body.model_dump(exclude_none=True)
     # Explicit null clears the role; omitting the field preserves it.
     if "roleId" in body.model_fields_set:
         patch["roleId"] = body.roleId
+    if "isTestAccount" in body.model_fields_set:
+        patch["isTestAccount"] = body.isTestAccount
     target_org_id = body.orgId if body.orgId is not None else target.org_id
     try:
         await rbac.validate_user_domains(session, body.domains)
@@ -403,15 +491,7 @@ async def update_user(
                 body.positions if body.positions is not None else target.positions)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    client_ids = []
-    if was_active and patch.get("isActive") is False:
-        # End this account's sessions while preserving device identity/history
-        # and explicit administrator bans. rbac.update_user commits both changes.
-        client_ids = list((await session.scalars(update(Client).where(
-            Client.user_ref == uid, Client.auth_state != "revoked",
-        ).values(auth_state="pending", auth_version=Client.auth_version + 1,
-                 activated_at=None, revoked_at=None).returning(Client.id)
-            .execution_options(synchronize_session=False))).all())
+    client_ids = await _revoke_user_devices(session, [uid] if was_active and body.isActive is False else [])
     try:
         updated = await rbac.update_user(session, uid, patch)
     except client_access.ClientAccessError as exc:
