@@ -1,4 +1,5 @@
 """Exercise list and write contracts on the Hub HTTP routes against isolated SQLite."""
+from datetime import datetime, timezone
 import os
 import unittest
 from unittest.mock import AsyncMock, patch
@@ -7,7 +8,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from fastapi import Depends, FastAPI
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app import automation_models, models
@@ -146,6 +147,60 @@ class HubContractTests(unittest.IsolatedAsyncioTestCase):
         self.user.is_super = False
         limited = await self.request("GET", "admin/users?limit=1")
         self.assertEqual(([user["id"] for user in limited["items"]], limited["total"]), (["row-0"], 1))
+
+    async def test_receipt_pages_use_task_visibility_and_stable_event_order(self):
+        stamp = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        async with self.sessions() as session:
+            session.add(models.Client(id="unassigned-device", user_ref=None))
+            await session.flush()
+            session.add_all([
+                models.Task(id="unassigned", owner_client_id="unassigned-device", title="Unassigned device"),
+                models.Task(id="own", owner_client_id="row-0", title="Current task", status="done"),
+                models.Task(id="other", owner_client_id="row-1", title="Other task"),
+            ])
+            await session.flush()
+            session.add_all([
+                models.TaskEvent(id="0", task_id="unassigned", kind="receipt", at=stamp),
+                models.TaskEvent(id="a", task_id="own", kind="receipt", detail={"title": "Snapshot"}, at=stamp),
+                models.TaskEvent(id="b", task_id="other", kind="receipt", at=stamp),
+                models.TaskEvent(id="c", task_id="own", kind="receipt", at=stamp),
+                models.TaskEvent(id="d", task_id="deleted", kind="receipt", at=stamp),
+                models.TaskEvent(id="e", task_id="own", kind="comment", at=stamp),
+            ])
+            await session.commit()
+
+        path = "admin/receipts"
+        unrestricted = await self.request("GET", path)
+        self.assertEqual([row["id"] for row in unrestricted], ["d", "c", "b", "a", "0"])
+        self.assertEqual(unrestricted[0]["status"], "")
+
+        self.user.is_super = False
+        first = await self.request("GET", path, params={"limit": 1})
+        second = await self.request("GET", path, params={"limit": 1, "offset": 1})
+        self.assertEqual([(row["id"], row["title"], row["status"]) for row in first + second],
+                         [("c", "Current task", "done"), ("a", "Snapshot", "done")])
+        self.assertEqual([r["id"] for r in await self.request("GET", path, params={"offset": 2})], ["0"])
+        self.assertEqual(await self.request("GET", path, params={"limit": 0}), [])
+        for params in ({"limit": -1}, {"offset": -1}, {"offset": 2**63}):
+            await self.request("GET", path, 422, params=params)
+
+    async def test_receipt_queries_clamp_large_limits_in_the_database(self):
+        async with self.sessions() as session:
+            session.add_all(models.TaskEvent(id=f"r-{i}", task_id="removed", kind="receipt")
+                            for i in range(205))
+            await session.commit()
+        statements = []
+
+        def capture(conn, cursor, statement, parameters, context, executemany):
+            if "FROM task_event" in statement:
+                statements.append(statement)
+
+        event.listen(self.engine.sync_engine, "before_cursor_execute", capture)
+        self.addCleanup(event.remove, self.engine.sync_engine, "before_cursor_execute", capture)
+        self.assertEqual(len(await self.request("GET", "admin/receipts")), 50)
+        self.assertEqual(len(await self.request("GET", "admin/receipts?limit=1000")), 200)
+        self.assertEqual(len(statements), 2)
+        self.assertTrue(all("LIMIT" in statement for statement in statements))
 
     async def test_device_search_treats_keywords_as_literal_substrings(self):
         async with self.sessions() as session:
