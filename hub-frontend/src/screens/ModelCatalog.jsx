@@ -66,6 +66,7 @@ export default function ModelCatalog({ me }) {
   const [del, setDel] = useState(null)         // {kind:'p'|'m', id, name}
   const [discover, setDiscover] = useState(null)  // provider whose upstream list to import
   const [defaultOpen, setDefaultOpen] = useState(false)
+  const [defaultDirty, setDefaultDirty] = useState(false)
   // Details do not resize or reorder the service grid.
   const [viewProviderId, setViewProviderId] = useState(null)
   const [capabilityTargets, setCapabilityTargets] = useState({})
@@ -189,7 +190,8 @@ export default function ModelCatalog({ me }) {
   }
 
   const dialogs = <>
-      {defaultOpen && <Modal title={tx("组织默认调用（旧版兼容）")} icon="key" wide onClose={() => setDefaultOpen(false)}><LlmSettings embedded /></Modal>}
+      {defaultOpen && <Modal title={tx("组织默认调用（旧版兼容）")} icon="key" wide dirty={defaultDirty}
+        onClose={() => { setDefaultOpen(false); setDefaultDirty(false) }}><LlmSettings embedded onDirtyChange={setDefaultDirty} /></Modal>}
       {editP && <ProviderForm initial={editP === 'new' ? null : editP}
         onClose={() => setEditP(null)} onSaved={(providerId) => {
           if (editP === 'new') { setNewProviderId(providerId); pendingProviderFocus.current = providerId }
@@ -450,8 +452,8 @@ function ProviderForm({ initial, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={editing ? tx("配置「{0}」", [initial.name]) : tx("接一个模型服务")} icon="plug" onClose={onClose}
-      foot={<><button className="btn btn-ghost" onClick={onClose}>{tx("取消")}</button>
+    <Modal draft={{ id, name, kind, baseUrl, note, apiKey }} title={editing ? tx("配置「{0}」", [initial.name]) : tx("接一个模型服务")} icon="plug" onClose={onClose}
+      foot={dismiss => <><button className="btn btn-ghost" onClick={dismiss}>{tx("取消")}</button>
         <button className="btn" disabled={busy || connection?.pending} onClick={testConnection}>
           {connection?.pending ? tx("测试中…") : tx("测试连接")}</button>
         <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? tx("保存中…") : tx("保存")}</button></>}>
@@ -616,9 +618,10 @@ function ModelForm({ providerId, initial, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={editing ? tx("配置模型") : tx("加一个模型")} icon={editing ? 'pencil' : 'plus'}
+    <Modal draft={{ name, label, modality, endpointPath, statusPath, resultPath, defaultsText, thinkingMode,
+        thinkingFormat, imageRouting, capabilities, ctxWindow, maxOutputTokens, supportsReasoningEffort }} title={editing ? tx("配置模型") : tx("加一个模型")} icon={editing ? 'pencil' : 'plus'}
       wide onClose={onClose}
-      foot={<><button className="btn btn-ghost" onClick={onClose}>{tx("取消")}</button>
+      foot={dismiss => <><button className="btn btn-ghost" onClick={dismiss}>{tx("取消")}</button>
         <button className="btn btn-primary" disabled={busy} onClick={save}>{busy ? tx("保存中…") : tx("保存")}</button></>}>
       <div className="model-config-form"><div><label className="f-lbl">{tx("模型标识（发给网关的那个名字）")}</label>
         <input className="f-in" value={name} disabled={editing}
@@ -749,8 +752,8 @@ function DiscoverForm({ provider, onClose, onSaved }) {
   }
 
   return (
-    <Modal title={tx("从服务发现模型")} icon="search" onClose={onClose}
-      foot={<><button className="btn btn-ghost" onClick={onClose}>{tx("关闭")}</button>
+    <Modal dirty={rows.some(row => row.checked)} title={tx("从服务发现模型")} icon="search" onClose={onClose}
+      foot={dismiss => <><button className="btn btn-ghost" onClick={dismiss}>{tx("关闭")}</button>
         {phase === 'ready' && <button className="btn btn-primary" disabled={busy || checkedCount === 0}
           onClick={importSelected}>{busy ? tx("添加中…") : tx("添加选中的 {0} 个", [checkedCount])}</button>}</>}>
       <div className="model-config-form">
