@@ -108,6 +108,7 @@ export default function ClientReleases() {
   const [attempts, setAttempts] = useState([])
   const [counts, setCounts] = useState({})
   const [attemptsLoading, setAttemptsLoading] = useState(true)
+  const [attemptsError, setAttemptsError] = useState('')
   const [releaseFilter, setReleaseFilter] = useState('')
   const [stateFilter, setStateFilter] = useState('all')
   const manage = can('client.update')
@@ -135,10 +136,12 @@ export default function ClientReleases() {
       const data = await api.clientUpdateAttempts({ releaseId: releaseFilter, state: stateFilter })
       setAttempts(Array.isArray(data && data.attempts) ? data.attempts : [])
       setCounts((data && data.counts) || {})
+      setAttemptsError('')
     } catch (e) {
-      // Update-activity failure must not block the release list.
-      setAttempts([])
-      setCounts({})
+      // Update-activity failure must not block the release list, but it must
+      // also not masquerade as "no records": keep the last good data and show
+      // an explicit error instead of an empty list.
+      setAttemptsError(tx(e.message || '更新活动加载失败'))
     }
     setAttemptsLoading(false)
   }, [releaseFilter, stateFilter])
@@ -303,6 +306,7 @@ function AttemptsPanel({ releases, attempts, counts, loading,
           {row.label} {row.n}
         </span>)}
     </div>}
+    {attemptsError && <div className="plugin-sync-alert" role="alert"><b>{tx("更新活动暂时没有加载成功")}</b><span>{attemptsError}</span></div>}
     {attempts.length ? <div className="cr-attempts-list" role="rowgroup">
       <div className="cr-table-head cr-attempt-head" role="row">
         <span>{tx("设备")}</span><span>{tx("平台")}</span><span>{tx("版本")}</span>
