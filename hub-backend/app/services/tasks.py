@@ -522,8 +522,8 @@ async def create_task(
     status = str(data.get("status") or "todo")
     if status not in task_status.VALID:
         raise HTTPException(status_code=400, detail="需求状态不正确")
-    title = str(data.get("title") or "").strip()
-    if not title:
+    title = str(data.get("title") or "")
+    if not title.strip():
         raise HTTPException(status_code=400, detail="请填写需求标题")
     identity = {"id": task_id} if task_id else {}
     t = models.Task(
