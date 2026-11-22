@@ -911,6 +911,7 @@ class User(Base):
     role_id: Mapped[str | None] = mapped_column(String(36), default=None)
     is_super: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_test_account: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     auth_version: Mapped[int] = mapped_column(Integer, default=1)
     # Professional positions are independent of permissions; multiple positions support workflow routing.
     positions: Mapped[list] = mapped_column(JSON, default=list)   # List of Position IDs.

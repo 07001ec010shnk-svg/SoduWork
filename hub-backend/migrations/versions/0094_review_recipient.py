@@ -2,8 +2,8 @@
 from alembic import op
 import sqlalchemy as sa
 
-revision = "0093_review_recipient"
-down_revision = "0092_task_text_storage"
+revision = "0094_review_recipient"
+down_revision = "0093_user_test_account"
 branch_labels = None
 depends_on = None
 

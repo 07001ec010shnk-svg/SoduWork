@@ -353,6 +353,7 @@ class UserCreate(BaseModel):
     username: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
     password: Annotated[str, StringConstraints(min_length=8, max_length=128)]
     displayName: str = ""
+    isTestAccount: Optional[bool] = None
     orgId: Optional[str] = None
     roleId: Optional[str] = None
     positions: Optional[list] = None
@@ -363,6 +364,7 @@ class UserCreate(BaseModel):
 class UserUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
     displayName: Optional[str] = None
+    isTestAccount: Optional[bool] = None
     orgId: Optional[str] = None
     roleId: Optional[str] = None
     isActive: Optional[bool] = None
@@ -370,6 +372,14 @@ class UserUpdate(BaseModel):
     positions: Optional[list] = None
     domains: Optional[list[str]] = None
     tokenQuota: Optional[UserTokenQuota] = None
+
+
+class UserBatchUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    ids: list[Annotated[str, StringConstraints(min_length=1, max_length=36)]] = Field(
+        min_length=1, max_length=200)
+    isActive: bool | None = None
+    orgId: Annotated[str, StringConstraints(min_length=1, max_length=36)] | None = None
 
 
 class AssignUserBody(BaseModel):
