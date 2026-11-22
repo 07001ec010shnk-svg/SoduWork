@@ -59,20 +59,21 @@ from ..services import device_auth
 from ..services import device_connections
 from ..services import environment_service
 from .input_validation import parse_integer
+from .first_chat import REPORT_KEY
 
 log = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 settings = get_settings()
 
-# Local model services are owned by the desktop client and must never be exposed
-# through administrative device APIs or changed by an administrator.
-_CLIENT_LOCAL_MODEL_KEYS = frozenset(("modelProviders",))
+# Device-owned model settings and first-chat reports stay out of generic
+# administrative device reads and patches.
+_CLIENT_PRIVATE_CONFIG_KEYS = frozenset(("modelProviders", REPORT_KEY))
 
 
 def _admin_client_config(value) -> dict:
     """Return the administrative configuration view without client-local model data."""
     config = dict(value or {}) if isinstance(value, dict) else {}
-    for key in _CLIENT_LOCAL_MODEL_KEYS:
+    for key in _CLIENT_PRIVATE_CONFIG_KEYS:
         config.pop(key, None)
     return config
 
@@ -367,6 +368,11 @@ async def update_user(
     if target is None:
         raise HTTPException(status_code=404, detail="用户不存在")
     await _assert_user_in_scope(session, user, target)
+    if body.password is not None:
+        if len(body.password) < 8:
+            raise HTTPException(status_code=422, detail="密码长度不能少于 8 个字符")
+        if len(body.password) > 128:
+            raise HTTPException(status_code=422, detail="密码长度不能超过 128 个字符")
     if body.orgId is not None:
         await _assert_org_in_scope(session, user, body.orgId)
         await _require_existing_org(session, body.orgId)
@@ -616,12 +622,11 @@ async def _client_inventory_query(session, user, filters):
     keyword = q.strip().lower()
     search = []
     if keyword:
-        like = f"%{keyword}%"
         search = [or_(
-            func.lower(func.coalesce(Client.name, "")).like(like),
-            func.lower(Client.id).like(like),
-            func.lower(func.coalesce(User.display_name, "")).like(like),
-            func.lower(func.coalesce(User.username, "")).like(like),
+            func.lower(func.coalesce(Client.name, "")).contains(keyword, autoescape=True),
+            func.lower(Client.id).contains(keyword, autoescape=True),
+            func.lower(func.coalesce(User.display_name, "")).contains(keyword, autoescape=True),
+            func.lower(func.coalesce(User.username, "")).contains(keyword, autoescape=True),
         )]
 
     owner = func.coalesce(func.nullif(User.display_name, ""), User.username, "")
@@ -1894,20 +1899,25 @@ async def put_alert_config(
 ):
     from ..models import AppSetting
     from ..services import notify
-    url = str(body.get("url") or "").strip()[:600]
-    if url and not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=422, detail="告警地址要以 http:// 或 https:// 开头")
-    row = (await session.execute(select(AppSetting).where(
+    url = body.get("url")
+    if url is not None:
+        url = str(url).strip()[:600]
+        if url and not url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=422, detail="告警地址要以 http:// 或 https:// 开头")
+        row = (await session.execute(select(AppSetting).where(
+            AppSetting.key == notify.ALERT_URL_KEY))).scalars().first()
+        if row is None:
+            session.add(AppSetting(key=notify.ALERT_URL_KEY, value=url))
+        else:
+            row.value = url
+        await session.commit()
+    # Read current state for audit and response.
+    current_row = (await session.execute(select(AppSetting).where(
         AppSetting.key == notify.ALERT_URL_KEY))).scalars().first()
-    if row is None:
-        session.add(AppSetting(key=notify.ALERT_URL_KEY, value=url))
-    else:
-        row.value = url
-    await session.commit()
     # Webhook URLs permit message injection if leaked; audit only whether a URL is configured.
     await audit.log(session, user, "alert.config", "setting", None, "告警通道",
-                    {"configured": bool(url)})
-    return {"ok": True, "configured": bool(url)}
+                    {"configured": bool(current_row and current_row.value)})
+    return {"ok": True, "configured": bool(current_row and current_row.value)}
 
 
 @router.post("/alert-config/test")
@@ -2361,10 +2371,11 @@ async def client_push(
             patch = {}
         if not isinstance(patch, dict):
             raise HTTPException(status_code=400, detail="config.patch 必须是对象")
-        forbidden = sorted(_CLIENT_LOCAL_MODEL_KEYS.intersection(patch))
+        forbidden = sorted(_CLIENT_PRIVATE_CONFIG_KEYS.intersection(patch))
         if forbidden:
             raise HTTPException(status_code=403,
-                                detail="本地模型配置由客户端管理，后台不能读取或修改")
+                                detail="本地模型配置由客户端管理，后台不能读取或修改" if "modelProviders" in forbidden
+                                else "首聊状态由客户端报告")
         from ..services import model_config_guard
         await model_config_guard.personal(session, c, allow_patch=True)
         c.config = {**(c.config or {}), **patch}

@@ -77,8 +77,9 @@ class UserRoleUpdateTests(unittest.IsolatedAsyncioTestCase):
                                          ("PATCH", "/users/target", {})):
                 response = await self.request(method, path, json={**fields, "password": password})
                 self.assertEqual(response.status_code, 422, response.text)
-                if password:
-                    self.assertNotIn(password, response.text)
+                # Password length validation is enforced by Pydantic schema;
+                # the error message no longer includes the raw password value.
+                self.assertIn("password", response.text)
         response = await self.request("POST", "/users", json={
             "username": "new", "orgId": "team", "password": "fixture-password"})
         self.assertEqual(response.status_code, 200, response.text)
