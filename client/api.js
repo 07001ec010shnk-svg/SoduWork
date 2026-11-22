@@ -2871,6 +2871,10 @@
         { method: 'POST', body: JSON.stringify({ note: note || '' }) });
       mark(true); return acceptTaskResult(r);
     },
+    async setReviewRecipient(tid, userId) {
+      return jfetch('/tasks/' + encodeURIComponent(tid) + '/review-recipient',
+        {method:'PUT', body:JSON.stringify({userId}), taskScope:taskStorageKey('ops')});
+    },
     /* Evaluate the frozen delivery evidence under server-side reviewer permissions and quality gates. */
     async autoReviewTask(tid, note) {
       var r = await jfetch('/tasks/' + encodeURIComponent(tid) + '/auto-review', {

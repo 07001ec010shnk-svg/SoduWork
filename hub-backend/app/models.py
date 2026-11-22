@@ -186,6 +186,7 @@ class Task(Base):
     tags: Mapped[list] = mapped_column(JSON, default=list)
     created_by: Mapped[str | None] = mapped_column(String(36), default=None)        # Creator user ID.
     created_by_name: Mapped[str] = mapped_column(String(64), default="")            # Creator display-name snapshot.
+    review_recipient_user_id: Mapped[str | None] = mapped_column(String(36), default=None)
     assignee_user_id: Mapped[str | None] = mapped_column(String(36), default=None)  # Assigned or responsible user.
     # Requester identity used to send completion receipts to the person who raised the work.
     # Internal requesters use requester_user_id and receive direct client notifications.
