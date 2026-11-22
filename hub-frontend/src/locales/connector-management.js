@@ -1,4 +1,7 @@
 export default {
+  "已配置机器人地址。输入新地址可替换，清除可关闭外部告警。": "A webhook is configured. Enter a new URL to replace it, or clear it to turn off external alerts.",
+  "尚未配置机器人地址。": "No webhook is configured.",
+  "清除地址": "Clear URL",
   "参数（英文逗号分隔）": "Arguments (comma-separated)",
   "用英文逗号 , 分隔参数；含逗号的参数请用双引号包裹，例如 \"a,b\"。换行不会拆分参数。": "Separate arguments with English commas (,). Enclose arguments containing commas in double quotes, for example \"a,b\". Line breaks do not separate arguments.",
   "参数的双引号后只能填写英文逗号或空白": "Only a comma or whitespace can follow a closing quote.",
@@ -48,6 +51,9 @@ export default {
 }
 
 export const ja = {
+  "已配置机器人地址。输入新地址可替换，清除可关闭外部告警。": "Webhook は設定済みです。新しい URL を入力すると置き換えられます。削除すると外部通知が停止します。",
+  "尚未配置机器人地址。": "Webhook は未設定です。",
+  "清除地址": "URL を削除",
   "参数（英文逗号分隔）": "引数（半角カンマ区切り）",
   "用英文逗号 , 分隔参数；含逗号的参数请用双引号包裹，例如 \"a,b\"。换行不会拆分参数。": "引数は半角カンマ（,）で区切ります。カンマを含む引数は \"a,b\" のように二重引用符で囲んでください。改行では分割されません。",
   "参数的双引号后只能填写英文逗号或空白": "閉じ引用符の後には半角カンマまたは空白のみ入力できます。",
@@ -99,6 +105,9 @@ export const ja = {
 }
 
 export const ko = {
+  "已配置机器人地址。输入新地址可替换，清除可关闭外部告警。": "웹훅이 설정되어 있습니다. 새 URL을 입력하여 교체하거나 지워서 외부 알림을 끄세요.",
+  "尚未配置机器人地址。": "설정된 웹훅이 없습니다.",
+  "清除地址": "URL 지우기",
   "参数（英文逗号分隔）": "인수 (쉼표로 구분)",
   "用英文逗号 , 分隔参数；含逗号的参数请用双引号包裹，例如 \"a,b\"。换行不会拆分参数。": "인수는 영문 쉼표(,)로 구분하세요. 쉼표가 포함된 인수는 \"a,b\"처럼 큰따옴표로 감싸세요. 줄바꿈으로는 인수를 나누지 않습니다.",
   "参数的双引号后只能填写英文逗号或空白": "닫는 큰따옴표 뒤에는 영문 쉼표나 공백만 입력할 수 있습니다.",
