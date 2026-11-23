@@ -624,6 +624,7 @@ async def bootstrap(session: AsyncSession) -> None:
     n = await session.scalar(select(func.count()).select_from(models.User))
     if not n:
         s = get_settings()
+        password = client_access.validate_password(s.admin_pass, new_account=True)
         root = None
         if not await session.scalar(select(func.count()).select_from(models.OrgUnit)):
             root = models.OrgUnit(name="总部")
@@ -635,7 +636,7 @@ async def bootstrap(session: AsyncSession) -> None:
             session.add(models.Role(name="系统管理员", permissions=list(ALL_KEYS), is_system=True))
             session.add(models.Role(name="部门管理员", permissions=list(_DEPT_ADMIN_PERMS), is_system=True))
         session.add(models.User(
-            username=s.admin_user, password_hash=hash_password(s.admin_pass),
+            username=s.admin_user, password_hash=hash_password(password),
             display_name="超级管理员", org_id=root.id, is_super=True, is_active=True,
         ))
         await session.commit()
