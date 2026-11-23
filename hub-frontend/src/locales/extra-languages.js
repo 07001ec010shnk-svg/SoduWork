@@ -19,6 +19,7 @@ import { ja as quotaJa, ko as quotaKo } from './quota-management.js'
 import { ja as accessCatalogJa, ko as accessCatalogKo } from './access-catalog.js'
 import { ja as operationsJa, ko as operationsKo } from './operations-overview.js'
 const ja = {
+  '升级动态加载失败': '更新状況を読み込めませんでした',
   'Anthropic 服务根地址': 'Anthropic サービスのルート URL',
   '连接成功，本次读取到 {0} 个模型。': '接続に成功しました。モデルを {0} 件取得しました。',
   '示例：{0}。': '例：{0}。',
@@ -67,6 +68,7 @@ const ja = {
 };
 
 const ko = {
+  '升级动态加载失败': '업데이트 활동을 불러오지 못했습니다',
   'Anthropic 服务根地址': 'Anthropic 서비스 루트 URL',
   '连接成功，本次读取到 {0} 个模型。': '연결했습니다. 모델 {0}개를 가져왔습니다. ',
   '示例：{0}。': '예: {0}. ',
