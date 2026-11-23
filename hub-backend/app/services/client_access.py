@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth import ACCOUNT_PASSWORD_MAX, ACCOUNT_PASSWORD_MIN
 from ..models import AIUsageDaily, AIUsageEvent, AppSetting, OrgUnit, Role, User
 
-
 POLICY_KEY = "client_auth_policy_v1"
 USER_QUOTA_PREFIX = "client_token_quota:"
 MAX_TOKEN_LIMIT = 10_000_000_000_000
