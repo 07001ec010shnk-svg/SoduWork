@@ -143,6 +143,7 @@ RELEASE_SMOKES = tuple(sorted((
     "smoke/smoke_automation_templates.py",
     "test_automation_templates.py",
     "test_quality_gate_cleanup.py",  # Native ownership, bounded cleanup and timeout diagnostics.
+    "test_changed_lint.py",  # New findings on top of an existing Ruff baseline.
     "smoke/smoke_builtin_delivery_e2e.py",
     "smoke/smoke_capabilities.py",
     "smoke/smoke_change_hygiene.py",
