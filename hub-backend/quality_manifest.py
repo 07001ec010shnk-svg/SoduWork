@@ -10,6 +10,9 @@ from public_source import INTERNAL_SMOKES, is_public_snapshot
 
 # Release checks are offline, deterministic and safe to run against isolated data.
 RELEASE_SMOKES = tuple(sorted((
+    "test_plugin_import_rollback.py",
+    "test_repository_deployment_target_integrity.py",
+    "test_org_sort_validation.py",
     "test_template_catalog_revision.py",
     "test_local_process_cleanup.py",
     "test_library_integrity.py",
@@ -240,6 +243,7 @@ RELEASE_SMOKES = tuple(sorted((
     "smoke/smoke_office_plugins.py",
     "smoke/smoke_officecli_detection.py",
     "smoke/smoke_operations.py",
+    "test_operations_approvals.py",
     "smoke/smoke_operations_insights.py",
     "smoke/smoke_personal_automation.py",
     "smoke/smoke_plugin_admin_guard.py",

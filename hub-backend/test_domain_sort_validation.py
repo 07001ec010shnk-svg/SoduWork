@@ -66,11 +66,15 @@ class DomainSortValidationTests(unittest.IsolatedAsyncioTestCase):
             await session.commit()
 
         body = {"username": "new-user", "password": "isolated-fixture", "orgId": "team"}
+        bad_role = await self.request("POST", "/users", json={**body, "roleId": "missing-role"})
+        self.assertEqual(bad_role.status_code, 400, bad_role.text)
         invalid = await self.request("POST", "/users", json={**body, "domains": ["missing"]})
         self.assertEqual(invalid.status_code, 400, invalid.text)
         created = await self.request("POST", "/users", json={**body, "domains": ["existing"]})
         self.assertEqual(created.status_code, 200, created.text)
         user_path = "/users/" + created.json()["id"]
+        bad_role = await self.request("PATCH", user_path, json={"roleId": "missing-role"})
+        self.assertEqual(bad_role.status_code, 400, bad_role.text)
         bad_patch = await self.request("PATCH", user_path, json={"domains": ["existing", "missing"]})
         self.assertEqual(bad_patch.status_code, 400, bad_patch.text)
         renamed = await self.request("PATCH", user_path, json={"displayName": "Renamed"})
@@ -86,6 +90,18 @@ class DomainSortValidationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(deleted.status_code, 200, deleted.text)
         stale = await self.request("PATCH", user_path, json={"domains": ["existing"]})
         self.assertEqual(stale.status_code, 400, stale.text)
+
+    async def test_domain_names_are_required_bounded_and_unique_on_both_write_paths(self):
+        for value in (None, "", "   ", "x" * 65, {"name": "bad"}):
+            response = await self.request("POST", json={} if value is None else {"name": value})
+            self.assertEqual(response.status_code, 422, response.text)
+            response = await self.request("PATCH", "/domains/existing", json={"name": value})
+            self.assertEqual(response.status_code, 422, response.text)
+        new = await self.request("POST", json={"name": "  Another  "})
+        self.assertEqual(new.json()["name"], "Another")
+        for method, path in (("POST", "/domains"), ("PATCH", "/domains/existing")):
+            response = await self.request(method, path, json={"name": " another "})
+            self.assertEqual(response.status_code, 409, response.text)
 
     async def assert_unchanged(self):
         async with self.sessions() as session:
@@ -124,9 +140,9 @@ class DomainSortValidationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(actions.count("domain.update"), len(cases))
 
     async def test_omitted_null_and_create_empty_string_keep_existing_defaults(self):
-        for extra in ({}, {"sort": None}, {"sort": ""}):
+        for index, extra in enumerate(({}, {"sort": None}, {"sort": ""})):
             with self.subTest(extra=extra):
-                response = await self.request("POST", json={"name": "Synthetic default", **extra})
+                response = await self.request("POST", json={"name": f"Synthetic default {index}", **extra})
                 self.assertEqual(response.status_code, 200, response.text)
                 self.assertEqual(response.json()["sort"], 0)
         for extra in ({}, {"sort": None}):

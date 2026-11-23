@@ -14,7 +14,7 @@ from ..db import get_session
 from ..deps import current_ai_client, authenticated_client, current_client, enforce_client_access, enforce_client_quota
 from ..models import Client, Task, User
 from ..realtime import hub
-from ..schemas import BatchUpdate, TaskCreate, TaskSyncCreate, TaskUpdate, task_to_api
+from ..schemas import BatchUpdate, ReviewRecipient, TaskCreate, TaskSyncCreate, TaskUpdate, task_to_api
 from ..services import audit, task_access
 from ..services import task_access as _task_access
 from ..services import tasks as svc
@@ -163,7 +163,16 @@ async def get_task(
 ):
     r = await svc.get_task(session, client.id, tid, include_related=True)
     if r is None:
+        from ..services import requirement_review_access
+        if await requirement_review_access.pending_task_ids(session, client.user_ref, [tid]):
+            task = await session.get(Task, tid)
+            return {**requirement_review_access.review_summary(task), "requirementStage": "reviewing", "canReview": True}
         raise HTTPException(status_code=404, detail="需求不存在")
+    if r.get("requirementStage") == "delivering" and r.get("status") == "doing":
+        task = await session.get(Task, tid)
+        can_assign = _can_assign_review_recipient(task, await _actor_user(session, client))
+        if can_assign or r.get("canViewExecution"):
+            r["reviewSubmission"] = await _review_submission(session, task, can_assign)
     return r
 
 
@@ -999,6 +1008,35 @@ async def get_milestones(
     return out
 
 
+async def _milestone_selections(session, client, task, items):
+    """Check the entire edit against the same catalogs shown to the execution owner."""
+    from ..services import task_execution_options
+    edits = [item for item in items if isinstance(item, dict) and str(item.get("title") or "").strip()]
+    repos = {str(item.get("repoId") or "").strip() for item in edits} - {""}
+    if repos:
+        _, visible = await task_execution_options._visible_repos(session, client)
+        allowed = {repo["id"] for repo in visible if not task.project_id or repo["projectId"] == task.project_id}
+        if repos - allowed:
+            raise HTTPException(status_code=404, detail="里程碑引用的代码仓库不存在或不在当前项目范围内")
+    choices = None
+    for item in edits:
+        kind = str(item.get("agentType") or "").strip()
+        if kind not in {"", "agent", "squad"}:
+            raise HTTPException(status_code=422, detail="里程碑执行类型无效")
+        agent = str(item.get("agentId") or "").strip()
+        model = str(item.get("model") or "").strip()
+        if not (agent or model):
+            continue
+        if choices is None:
+            choices = await list_ai_agents(client, session)
+        if agent and not any(row.get("id") == agent for row in choices["squads" if kind == "squad" else "agents"]):
+            raise HTTPException(status_code=422, detail="所选里程碑执行者不可用")
+        if model and model not in [choices["defaultModel"], *choices["models"]]:
+            raise HTTPException(status_code=422, detail="所选里程碑模型不可用")
+        if len(agent) > 64 or len(model) > 120:
+            raise HTTPException(status_code=422, detail="里程碑执行者或模型标识过长")
+
+
 @router.put("/tasks/{tid}/milestones")
 async def put_milestones(
     tid: str,
@@ -1017,6 +1055,7 @@ async def put_milestones(
         raise HTTPException(status_code=400, detail="items 要是一个列表")
     if len(items) > 30:
         raise HTTPException(status_code=400, detail="里程碑太多了（最多 30 个），先拆成几条需求吧")
+    await _milestone_selections(session, client, t, items)
     old = {m.id: m for m in await _load_milestones(session, tid)}
     keep: set[str] = set()
     for i, it in enumerate(items):
@@ -1033,12 +1072,12 @@ async def put_milestones(
         m.seq = i
         m.title = title
         m.accept = str(it.get("accept") or "").strip()[:2000]
-        m.repo_id = str(it.get("repoId") or "")[:36]
+        m.repo_id = str(it.get("repoId") or "").strip()
         m.parallel_ok = bool(it.get("parallelOk"))
         # Each stage may override its executor and model.
-        m.agent_id = str(it.get("agentId") or "")[:64]
-        m.agent_type = str(it.get("agentType") or "")[:16]
-        m.model = str(it.get("model") or "")[:120]
+        m.agent_id = str(it.get("agentId") or "").strip()
+        m.agent_type = str(it.get("agentType") or "").strip()
+        m.model = str(it.get("model") or "").strip()
         st = str(it.get("status") or "").strip()
         # #664: skipped里程碑不可验收
         # #665: skipped里程碑不可重新规划为doing/done
@@ -1670,6 +1709,19 @@ async def ai_remind_task(
     return {"ok": True}
 
 
+async def _task_review_actor(session, client, task):
+    """Task actions return execution details. Other gate assignees use their approval inbox."""
+    from ..services import requirement_review_access
+    actor = await _actor_user(session, client)
+    if not actor or not actor.is_active or not await task_access.can_view(session, client, task):
+        raise HTTPException(403, "本次验收未分配给你")
+    if actor.id == task.created_by and not task.review_recipient_user_id:
+        return actor  # Direct reviews can predate an approval request.
+    if await requirement_review_access.pending_task_ids(session, actor.id, [task.id]):
+        return actor
+    raise HTTPException(403, "本次验收未分配给你")
+
+
 @router.post("/tasks/{tid}/reject-artifact")
 async def reject_task_artifact(
     tid: str,
@@ -1690,14 +1742,7 @@ async def reject_task_artifact(
     t = await session.get(Task, tid)
     if t is None:
         raise HTTPException(status_code=404, detail="需求不存在")
-    me = await _actor_user(session, client)
-    if me is None:
-        raise HTTPException(status_code=403, detail="本 SoduWork 未绑定用户，无法审核")
-    creator = getattr(t, "created_by", None)
-    if not creator:
-        raise HTTPException(status_code=400, detail="这条需求没有记录创建人，无法判定审核权")
-    if creator != me.id:
-        raise HTTPException(status_code=403, detail="只有这项需求的创建人能打回产出")
+    me = await _task_review_actor(session, client, t)
     who = me.display_name or me.username
     # Store rework reference materials separately from deliverables and require upload by the same creator.
     # Reference exact attachment IDs in rework instructions to avoid ambiguous filename matches.
@@ -1792,9 +1837,7 @@ async def upload_task_rework_material(
         raise HTTPException(status_code=404, detail="需求不存在")
     if t.status != "done" or getattr(t, "reviewed_at", None):
         raise HTTPException(status_code=409, detail="当前需求没有待验收的交付结果")
-    me = await _actor_user(session, client)
-    if me is None or str(getattr(t, "created_by", "") or "") != str(me.id):
-        raise HTTPException(status_code=403, detail="只有需求创建人可以添加返修资料")
+    me = await _task_review_actor(session, client, t)
     data = await file.read()
     limit = get_settings().attach_max_mb * 1024 * 1024
     if not data:
@@ -1829,7 +1872,7 @@ async def review_task_artifact(
     client: Client = Depends(current_client),
     session: AsyncSession = Depends(get_session),
 ):
-    """Allow the task creator to review the current fixed output version. Let the shared completion
+    """Allow the assigned reviewer to review the current fixed output version. Let the shared completion
     gate close direct work or continue code/workflow tasks through remaining stages.
     """
     from ..services import code_delivery as _cd
@@ -1838,14 +1881,7 @@ async def review_task_artifact(
     t = await session.get(Task, tid)
     if t is None:
         raise HTTPException(status_code=404, detail="需求不存在")
-    me = await _actor_user(session, client)
-    if me is None:
-        raise HTTPException(status_code=403, detail="本 SoduWork 未绑定用户，无法审核")
-    creator = getattr(t, "created_by", None)
-    if not creator:
-        raise HTTPException(status_code=400, detail="这条需求没有记录创建人，无法判定审核权")
-    if creator != me.id:
-        raise HTTPException(status_code=403, detail="只有这项需求的创建人能审核产出")
+    me = await _task_review_actor(session, client, t)
     who = me.display_name or me.username
     note = str(body.get("note") or "").strip()
     # Refresh code candidates or snapshot current artifacts; bind review to an immutable version ID.
@@ -1949,6 +1985,52 @@ async def prepare_task_execution(
 
 
 
+def _can_assign_review_recipient(task, actor):
+    return bool(actor and actor.is_active and (actor.is_super or task.created_by == actor.id))
+
+
+async def _review_submission(session, task, can_assign):
+    from ..services import release_control
+    preview = await release_control.preview_review_routing(session, task)
+    return {"ok": preview["ok"], "candidates": preview["candidates"],
+            "reason": preview["reason"], "canAssign": can_assign,
+            "designatedUserId": task.review_recipient_user_id if can_assign else None}
+
+
+@router.put("/tasks/{tid}/review-recipient")
+async def set_review_recipient(
+    tid: str, body: ReviewRecipient,
+    client: Client = Depends(current_client), session: AsyncSession = Depends(get_session),
+):
+    from ..services import approval_routing, artifact_version_guard, task_events, task_notifications, task_requirements
+    try:
+        await artifact_version_guard.lock_task(session, tid)
+    except ValueError as exc:
+        raise HTTPException(404, "需求不存在") from exc
+    task = await session.get(Task, tid, populate_existing=True)
+    if not await task_requirements.can_read(session, client, task):
+        raise HTTPException(404, "需求不存在")
+    actor = await _actor_user(session, client)
+    if not _can_assign_review_recipient(task, actor):
+        raise HTTPException(403, "只有需求创建人或管理员可以指定验收人")
+    if task.status != "doing" or (await svc.task_to_api_live(session, task)).get("requirementStage") != "delivering":
+        raise HTTPException(409, "只能在提交验收前更改验收人")
+    target = await session.get(User, body.userId) if body.userId else None
+    if body.userId and not await approval_routing.can_designate_reviewer(session, task, target):
+        raise HTTPException(409, "请选择组织范围内已启用、未负责本次执行的成员作为验收人")
+    if task.review_recipient_user_id != body.userId:
+        task.review_recipient_user_id = body.userId
+        task_events.record(session, tid, "review.recipient_designated",
+                           {"userId": body.userId, "userName": (target.display_name or target.username) if target else "",
+                            "assignedBy": actor.id}, actor=_actor_label(actor, client))
+        task_notifications.enqueue(session, task, "task.updated")
+    preview = await _review_submission(session, task, True)
+    if body.userId and not preview["ok"]:
+        raise HTTPException(409, preview["reason"])
+    await session.commit()
+    return preview
+
+
 @router.post("/tasks/{tid}/submit-review")
 async def submit_task_for_review(
     tid: str,
@@ -1969,8 +2051,12 @@ async def submit_task_for_review(
     from ..services import task_notifications
     from ..services import task_events as ev
 
-    # Serialize manual submission with execution starts and approval decisions.
-    await session.get(Task, tid, with_for_update=True, populate_existing=True)
+    # Share the task write lock with designation and decisions, including on SQLite.
+    from ..services import artifact_version_guard
+    try:
+        await artifact_version_guard.lock_task(session, tid)
+    except ValueError as exc:
+        raise HTTPException(404, "需求不存在") from exc
     task = await _view_task(session, client, tid)
     if not task_requirements.is_review_submitter(task, client):
         raise HTTPException(status_code=403, detail="只有执行者可以提交验收")
@@ -2013,7 +2099,7 @@ async def submit_task_for_review(
               {"requestId": request.id, "versionId": artifact.id, "note": note}, actor=who)
     # Commit the notification with the review, but deliver it outside this HTTP
     # request. Slow devices must not turn an accepted submission into a timeout.
-    task_notifications.enqueue(session, task, "task.updated")
+    task_notifications.enqueue(session, task, "task.updated", review_request_id=request.id)
     await session.commit()
     await session.refresh(task)
     api = await svc.task_to_api_live(session, task)

@@ -442,7 +442,7 @@ def prepare(state: Path, log: Path) -> tuple[Path, Path]:
         if (source / name).is_dir():
             files.extend(source_files(source / name))
     files.extend((ROOT / "client" / name) for name in (
-        "core/connector-brand.js", "components/panels/connector-config.js",
+        "core/connector-brand.js", "core/locales/builtin-skills.js", "components/panels/connector-config.js",
         "components/client-auth/legal-html.js", "components/client-auth/legal-html.css"))
     files.extend(source_files(ROOT / "client/assets/connector-brands"))
     wanted = digest_files(files, ROOT)

@@ -78,6 +78,12 @@ async def list_repository_catalog(
         include_inactive=includeInactive)}
 
 
+@router.get("/integrations/{integration_id}/repositories/sync",
+            dependencies=[Depends(require_perm("integration.manage"))])
+async def repository_sync_status(integration_id: str, session: AsyncSession = Depends(get_session)):
+    return {"stage": await catalog.sync_stage(session, integration_id)}
+
+
 @router.post("/integrations/{integration_id}/repositories/sync")
 async def sync_repositories(
     integration_id: str, body: dict = Body(default_factory=dict),

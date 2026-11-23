@@ -9,6 +9,8 @@ FastAPI + SQLAlchemy(async) + PostgreSQL（本地开发可回退 SQLite）。
 
 模块职责与状态归属见[首版范围](../docs/release-scope.md)。
 
+首次对话清单根据可用模型目录和当前管理员最近一次桌面端报告显示进度。设备上报底座和模型选择是否就绪。五分钟内未收到新报告时，Hub 会将这两步显示为等待桌面端报告。
+
 ## 快速开始（本地 SQLite，零配置）
 
 ```bash
@@ -256,7 +258,7 @@ python3 e2e_runner_tls.py --output /absolute/evidence/directory
   - `GET/POST /api/v1/tasks`、`GET/PATCH/DELETE /api/v1/tasks/{id}`
   - `POST /api/v1/tasks/batch-update`、`POST /api/v1/tasks/clear-done`（只清 done）
   - `POST /api/v1/tasks/{id}/agent/{run|retry|takeover}`
-  - `GET/PUT /api/v1/config`
+  - `GET /api/v1/config?withRevision=true` 返回当前设备设置、可写字段 `_configKeys` 和版本 `_configRevision`。向 `PUT /api/v1/config` 提交改动字段及读取时的版本。未知字段或无效值返回 422，版本过期返回 409，覆盖已有值但缺少版本返回 428。
   - `POST /api/v1/clients/enroll`（登记/心跳，激活后签发短期会话）
   - `WS /api/v1/ws?device=<设备ID>&session=<短期会话>`（实时推送）
 - 管理端
@@ -351,3 +353,7 @@ python3 e2e_dsh_private_probe.py \
 ```
 
 此显式检查使用生产私有探测作业和 ACP 桥接、实际安装的适配器与运行时，以及合成本机回环模型。先重现旧安装路径错误，再要求修正路径后出现真实模型请求并由 Agent 返回预期响应。检查使用可清理的用户目录、状态和临时目录，阻止 Node 连接非回环地址，并清理自身子进程；不会安装或更新依赖，也不使用真实凭据，不覆盖桌面界面、生产 Hub 或模型服务行为。由于需要已有原生安装，请在离线质量门禁之外单独运行。
+
+## 删除模型服务
+
+持有 `integration.manage` 权限时，通过 `GET /api/v1/admin/model-providers/{id}/deletion-impact` 获取服务版本、影响清单版本、子模型及可见的已保存模型选择。成员名称需要 `user.manage`，需求标题需要 `task.view`，两者均遵守部门可见范围。调用已有的 `DELETE /api/v1/admin/model-providers/{id}` 时，以 `expectedRevision`、`expectedImpact` 传入预览返回的版本，另以 `confirmId` 传入完整服务 ID。旧版请求未预览会返回 HTTP 428。遇到 HTTP 409 时，应重新获取清单并再次确认。内置服务禁止删除。

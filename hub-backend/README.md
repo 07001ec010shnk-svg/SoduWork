@@ -6,6 +6,8 @@ Command examples use `sh start.sh` on macOS/Linux. On Windows, use `.\start.cmd`
 
 Hub provides identity, authorization, execution governance, plugins, shared materials, and desktop connectivity. It uses FastAPI and asynchronous SQLAlchemy with PostgreSQL; local development can use SQLite.
 
+The first-chat checklist combines the available model catalog with the signed-in administrator’s latest desktop report. The device sends two readiness flags for its runtime and model selection. After five minutes without a fresh report, the Hub shows those steps as awaiting the desktop.
+
 ## Start locally
 
 For a first session, use `sh start.sh` from the repository root; it creates an isolated database, environment, and administrator.
@@ -342,7 +344,7 @@ The check verifies the packaged native verifier, real TLS with a disposable trus
 
 - Devices enroll with `POST /api/v1/clients/enroll`, then use a short-lived device session. Device long-term keys remain in the Electron main process; Hub stores only their digest.
 - Business requests use `Authorization: Device <session>`. WebSocket connectivity uses the same short-lived session at `/api/v1/ws`.
-- Tasks use `/api/v1/tasks`, task-specific operations, batch updates, completed-task clearing, and agent run/retry/takeover routes. Configuration uses `/api/v1/config`.
+- Tasks use `/api/v1/tasks`, task-specific operations, batch updates, completed-task clearing, and agent run/retry/takeover routes. Device preferences use `GET /api/v1/config?withRevision=true`. Send edited fields and the returned `_configRevision` to `PUT /api/v1/config`. The versioned response lists writable fields in `_configKeys`. Unknown fields and invalid values return 422, a stale revision returns 409, and replacing a previously saved value without a revision returns 428.
 - Administrators sign in at `/api/v1/admin/login` and use bearer tokens for administrator APIs, including clients, tasks, and dispatch. After 10 failed sign-ins for one account or 30 from one IP address within a five-minute window, the Hub returns HTTP 429 with the remaining wait in the `Retry-After` header (seconds). The database stores the counters across Hub workers. Failed attempts appear in the audit log as `admin.login.failed`.
 - Long-term device keys must not enter renderers, logs, or URLs. Server state is authoritative; offline client caches must not overwrite it.
 
@@ -438,3 +440,7 @@ python3 e2e_dsh_private_probe.py \
 ```
 
 This explicit check uses the production private-probe job and ACP bridge, the installed adapter and host, and a synthetic loopback model. It first reproduces the old incorrect installation path, then requires a real model request and the expected Agent response with the corrected path. It uses disposable home, state and temporary directories, blocks non-loopback Node connections and cleans up its subprocesses. It does not install or update dependencies, use real credentials, or verify desktop UI, production Hub or provider behavior. Run it separately from the offline quality gate because it requires an existing native installation.
+
+## Model provider deletion
+
+With `integration.manage`, request `GET /api/v1/admin/model-providers/{id}/deletion-impact`. The result includes the provider and impact revisions, child models, and visible saved model selections. Member names require `user.manage` and issue titles require `task.view`; department visibility still applies. Submit the revisions as `expectedRevision` and `expectedImpact` plus the exact ID as `confirmId` to the existing `DELETE /api/v1/admin/model-providers/{id}`. Older delete requests without the preview return HTTP 428. On HTTP 409, retrieve a fresh preview and confirm again. Built-in services cannot be deleted.

@@ -8,12 +8,17 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, Request, UploadFile
+from fastapi.responses import StreamingResponse
+from pydantic import AwareDatetime
 from sqlalchemy import case, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models
 from ..auth import sign_token, verify_password
 from ..config import get_settings
+from ..csv_export import csv_chunks
+from ..timestamps import iso_utc
+from ..services.catalog_names import DuplicateName
 from ..pagination import PageQuery
 from ..db import get_session
 from ..deps import current_user, has_perm, require_perm
@@ -32,6 +37,7 @@ from ..schemas import (
     OrgUpdate,
     RoleCreate,
     RoleUpdate,
+    UserBatchUpdate,
     UserCreate,
     UserUpdate,
     attachment_to_api,
@@ -54,20 +60,21 @@ from ..services import device_auth
 from ..services import device_connections
 from ..services import environment_service
 from .input_validation import parse_integer
+from .first_chat import REPORT_KEY
 
 log = logging.getLogger("uvicorn.error")
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 settings = get_settings()
 
-# Local model services are owned by the desktop client and must never be exposed
-# through administrative device APIs or changed by an administrator.
-_CLIENT_LOCAL_MODEL_KEYS = frozenset(("modelProviders",))
+# Device-owned model settings and first-chat reports stay out of generic
+# administrative device reads and patches.
+_CLIENT_PRIVATE_CONFIG_KEYS = frozenset(("modelProviders", REPORT_KEY))
 
 
 def _admin_client_config(value) -> dict:
     """Return the administrative configuration view without client-local model data."""
     config = dict(value or {}) if isinstance(value, dict) else {}
-    for key in _CLIENT_LOCAL_MODEL_KEYS:
+    for key in _CLIENT_PRIVATE_CONFIG_KEYS:
         config.pop(key, None)
     return config
 
@@ -127,14 +134,20 @@ async def permissions():
 
 # Visibility scope helpers.
 
+async def _client_scope(session: AsyncSession, user: User):
+    """Restrict devices to scoped owners plus unassigned devices in the query itself."""
+    orgs = await rbac.scope_org_ids(session, user)
+    if orgs is None:
+        return ()
+    owners = select(User.id).where(User.org_id.in_(orgs)).correlate(None)
+    return (or_(Client.user_ref.is_(None), Client.user_ref.in_(owners)),)
+
+
 async def _visible_client_ids(session: AsyncSession, user: User) -> set[str] | None:
-    """Return visible client IDs: scoped owners plus unassigned devices, or None for superusers."""
-    scope = await rbac.scope_org_ids(session, user)
-    if scope is None:
+    scope = await _client_scope(session, user)
+    if not scope:
         return None
-    uids = await rbac.scoped_user_ids(session, scope) or set()
-    res = await session.execute(select(Client.id, Client.user_ref))
-    return {cid for cid, uref in res.all() if (uref in uids) or (uref is None)}
+    return set(await session.scalars(select(Client.id).where(*scope)))
 
 
 async def _assert_org_in_scope(session: AsyncSession, user: User, org_id: str | None):
@@ -143,6 +156,11 @@ async def _assert_org_in_scope(session: AsyncSession, user: User, org_id: str | 
     scope = await rbac.scope_org_ids(session, user)
     if scope is not None and org_id not in scope:
         raise HTTPException(status_code=403, detail="只能在自己管辖的部门内操作")
+
+
+async def _require_existing_org(session: AsyncSession, org_id: str):
+    if org_id and await session.get(models.OrgUnit, org_id) is None:
+        raise HTTPException(status_code=400, detail="部门不存在")
 
 
 async def _assert_user_in_scope(session: AsyncSession, user: User, target: User):
@@ -229,7 +247,7 @@ async def delete_org(
     if not r["ok"]:
         msg = {"has_children": "该部门下还有子部门", "has_users": "该部门下还有用户", "not_found": "部门不存在"}
         reason = r["reason"]
-        raise HTTPException(status_code=400, detail=msg.get(reason, "无法删除"),
+        raise HTTPException(status_code=404 if reason == "not_found" else 400, detail=msg.get(reason, "无法删除"),
                             headers={"X-Error-Code": f"org.delete.{reason}"})
     await audit.log(session, user, "org.delete", "org", oid, r.get("name", ""), {})
     return r
@@ -249,6 +267,8 @@ async def create_role(body: RoleCreate,
                       session: AsyncSession = Depends(get_session)):
     try:
         result = await rbac.create_role(session, body.name, body.permissions)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     await audit.log(session, user, "role.create", "role", result.get("id"),
@@ -262,6 +282,8 @@ async def update_role(rid: str, body: RoleUpdate,
                       session: AsyncSession = Depends(get_session)):
     try:
         r = await rbac.update_role(session, rid, body.name, body.permissions)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if r is None:
@@ -281,7 +303,7 @@ async def delete_role(rid: str,
     if not r["ok"]:
         msg = {"system_role": "系统内置角色不可删", "in_use": "仍有用户在用该角色", "not_found": "角色不存在"}
         reason = r["reason"]
-        raise HTTPException(status_code=400, detail=msg.get(reason, "无法删除"),
+        raise HTTPException(status_code=404 if reason == "not_found" else 400, detail=msg.get(reason, "无法删除"),
                             headers={"X-Error-Code": f"role.delete.{reason}"})
     await audit.log(session, user, "role.delete", "role", rid, label, {})
     return r
@@ -305,8 +327,10 @@ async def create_user(
         raise HTTPException(status_code=403, detail="请由额度管理员调整用户额度")
     if not body.orgId:
         raise HTTPException(status_code=400, detail="请为用户指定所属部门")
+    await _lock_user_targets(session, user, [])
+    await rbac.lock_org_tree(session, shared=True)
     await _assert_org_in_scope(session, user, body.orgId)
-    if body.roleId and await session.get(Role, body.roleId) is None:
+    if body.roleId and await rbac.lock_role_reference(session, body.roleId) is None:
         raise HTTPException(status_code=400, detail="角色不存在")
     if body.domains:
         domain_ids = {str(value) for value in body.domains}
@@ -315,6 +339,7 @@ async def create_user(
         missing = sorted(domain_ids - found)
         if missing:
             raise HTTPException(status_code=400, detail="业务域不存在：" + ", ".join(missing))
+    await _require_existing_org(session, body.orgId)
     if await rbac.get_user_by_username(session, body.username):
         raise HTTPException(status_code=400, detail="用户名已存在")
     try:
@@ -323,13 +348,100 @@ async def create_user(
         await rbac.validate_user_domains(session, body.domains)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    created = await rbac.create_user(
-        session, body.username, body.password, body.displayName,
-        body.orgId, body.roleId, position_ids, body.domains,
-        token_quota=body.tokenQuota.model_dump() if body.tokenQuota is not None else None)
+    try:
+        created = await rbac.create_user(
+            session, body.username, body.password, body.displayName,
+            body.orgId, body.roleId, position_ids, body.domains,
+            is_test_account=body.isTestAccount,
+            token_quota=body.tokenQuota.model_dump() if body.tokenQuota is not None else None)
+    except client_access.ClientAccessError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     await audit.log(session, user, "user.create", "user", created.get("id"), created.get("displayName") or body.username,
                     {"orgId": body.orgId, "roleId": body.roleId})
     return created
+
+
+async def _lock_user_targets(session: AsyncSession, actor: User, ids: list[str]) -> list[User]:
+    # A target can also be the actor of an overlapping batch. Lock both sets in ID order.
+    authority = (actor.auth_version, actor.is_active, actor.is_super, actor.org_id, actor.role_id)
+    selected = set(ids)
+    if session.get_bind().dialect.name == "sqlite":
+        await session.execute(update(User).where(False).values(display_name=User.display_name))
+    rows = list(await session.scalars(select(User).where(User.id.in_(selected | {actor.id}))
+        .order_by(User.id).with_for_update().execution_options(populate_existing=True)))
+    current = next((row for row in rows if row.id == actor.id), None)
+    if (current is None or current.account_deleted_at or not current.is_active or authority !=
+            (current.auth_version, current.is_active, current.is_super, current.org_id, current.role_id)):
+        raise HTTPException(status_code=409, detail="登录账号已变更，请刷新后重试")
+    targets = [row for row in rows if row.id in selected]
+    if len(targets) != len(selected):
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return targets
+
+
+def _check_deactivation(actor: User, target: User, active: bool | None) -> None:
+    if active is False and target.is_super:
+        raise HTTPException(status_code=400, detail="不能停用超级管理员")
+    if active is False and target.id == actor.id:
+        raise HTTPException(status_code=400, detail="不能停用自己的账号")
+
+
+async def _revoke_user_devices(session: AsyncSession, disabled_ids: list[str]) -> list[str]:
+    if not disabled_ids:
+        return []
+    # Keep historical ownership and explicit device bans; live channels close after commit.
+    return list(await session.scalars(update(Client).where(
+        Client.user_ref.in_(disabled_ids), Client.auth_state != "revoked",
+    ).values(auth_state="pending", auth_version=Client.auth_version + 1,
+             activated_at=None, revoked_at=None).returning(Client.id)
+        .execution_options(synchronize_session=False)))
+
+
+@router.post("/users/batch")
+async def batch_update_users(
+    body: UserBatchUpdate, user: User = Depends(require_perm("user.manage")),
+    session: AsyncSession = Depends(get_session),
+):
+    if (body.isActive is None) == (body.orgId is None):
+        raise HTTPException(status_code=422, detail="请选择一项批量操作")
+    targets = await _lock_user_targets(session, user, body.ids)
+    if not user.is_super or body.orgId is not None:
+        await rbac.lock_org_tree(session, shared=True)
+    scope = await rbac.scope_org_ids(session, user)
+    visible_positions = set()
+    if body.orgId is not None:
+        if scope is not None and body.orgId not in scope:
+            raise HTTPException(status_code=403, detail="只能在自己管辖的部门内操作")
+        await _require_existing_org(session, body.orgId)
+        visible_positions = {row.id for row in await work_catalog.profession_rows(session, body.orgId)}
+
+    changes = []
+    for target in targets:
+        if scope is not None and (target.org_id not in scope or target.is_super):
+            raise HTTPException(status_code=403, detail="无权管理该用户")
+        if target.account_deleted_at:
+            raise HTTPException(status_code=400, detail="不能修改已注销的账号")
+        _check_deactivation(user, target, body.isActive)
+        if body.isActive is not None and target.is_active != body.isActive:
+            changes.append((target, {"isActive": body.isActive}))
+        if body.orgId is not None and target.org_id != body.orgId:
+            try:
+                positions = work_catalog.check_profession_ids(target.positions, visible_positions)
+            except ValueError as error:
+                raise HTTPException(status_code=400, detail=str(error)) from error
+            changes.append((target, {"orgId": body.orgId, "positions": positions}))
+
+    disabled = [target.id for target, _ in changes] if body.isActive is False else []
+    client_ids = await _revoke_user_devices(session, disabled)
+    for target, patch in changes:
+        audit.add(session, user, "user.update", "user", target.id, target.display_name or target.username,
+                  {"fields": list(patch), "pwChanged": False})
+    for target, patch in changes:
+        rbac.apply_user_patch(target, patch)
+    await session.commit()
+    if client_ids:
+        await device_connections.disconnect_many(client_ids)
+    return {"updated": len(changes)}
 
 
 @router.patch("/users/{uid}")
@@ -339,15 +451,21 @@ async def update_user(
     user: User = Depends(require_perm("user.manage")),
     session: AsyncSession = Depends(get_session),
 ):
-    target = await session.get(User, uid, with_for_update=True, populate_existing=True)
-    if target is None:
-        raise HTTPException(status_code=404, detail="用户不存在")
+    target, = await _lock_user_targets(session, user, [uid])
+    if not user.is_super or body.orgId is not None:
+        await rbac.lock_org_tree(session, shared=True)
     await _assert_user_in_scope(session, user, target)
+    if body.password is not None:
+        if len(body.password) < 8:
+            raise HTTPException(status_code=422, detail="密码长度不能少于 8 个字符")
+        if len(body.password) > 128:
+            raise HTTPException(status_code=422, detail="密码长度不能超过 128 个字符")
     if body.orgId is not None:
         await _assert_org_in_scope(session, user, body.orgId)
+        await _require_existing_org(session, body.orgId)
     # An empty roleId is the legacy form used by clients to clear a role.
     # Validate non-empty assignments while preserving that clearing behavior.
-    if body.roleId and await session.get(Role, body.roleId) is None:
+    if body.roleId and await rbac.lock_role_reference(session, body.roleId) is None:
         raise HTTPException(status_code=400, detail="角色不存在")
     if body.domains is not None:
         domain_ids = {str(value) for value in body.domains}
@@ -356,13 +474,14 @@ async def update_user(
         missing = sorted(domain_ids - found)
         if missing:
             raise HTTPException(status_code=400, detail="业务域不存在：" + ", ".join(missing))
-    if target.is_super and body.isActive is False:
-        raise HTTPException(status_code=400, detail="不能停用超级管理员")
+    _check_deactivation(user, target, body.isActive)
     was_active = bool(target.is_active)
     patch = body.model_dump(exclude_none=True)
     # Explicit null clears the role; omitting the field preserves it.
     if "roleId" in body.model_fields_set:
         patch["roleId"] = body.roleId
+    if "isTestAccount" in body.model_fields_set:
+        patch["isTestAccount"] = body.isTestAccount
     target_org_id = body.orgId if body.orgId is not None else target.org_id
     try:
         await rbac.validate_user_domains(session, body.domains)
@@ -372,16 +491,11 @@ async def update_user(
                 body.positions if body.positions is not None else target.positions)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
-    client_ids = []
-    if was_active and patch.get("isActive") is False:
-        # End this account's sessions while preserving device identity/history
-        # and explicit administrator bans. rbac.update_user commits both changes.
-        client_ids = list((await session.scalars(update(Client).where(
-            Client.user_ref == uid, Client.auth_state != "revoked",
-        ).values(auth_state="pending", auth_version=Client.auth_version + 1,
-                 activated_at=None, revoked_at=None).returning(Client.id)
-            .execution_options(synchronize_session=False))).all())
-    updated = await rbac.update_user(session, uid, patch)
+    client_ids = await _revoke_user_devices(session, [uid] if was_active and body.isActive is False else [])
+    try:
+        updated = await rbac.update_user(session, uid, patch)
+    except client_access.ClientAccessError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     if client_ids:
         await device_connections.disconnect_many(client_ids)
     await audit.log(session, user, "user.update", "user", uid, target.display_name or target.username,
@@ -410,6 +524,7 @@ async def create_position(
     if not org_id:
         raise HTTPException(status_code=400, detail="请先选择所属组织")
     await _assert_org_in_scope(session, user, org_id)
+    await _require_existing_org(session, org_id)
     try:
         row = await work_catalog.save_profession(session, body, org_id)
     except ValueError as error:
@@ -477,7 +592,12 @@ async def create_domain(
     session: AsyncSession = Depends(get_session),
 ):
     sort = parse_integer(body.get("sort"), field="sort", default=0)
-    r = await rbac.create_domain(session, (body.get("name") or "").strip(), sort)
+    try:
+        r = await rbac.create_domain(session, body.get("name"), sort)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="领域名称必须为 1 到 64 个字符") from exc
     await audit.log(session, user, "domain.create", "domain", r["id"], r["name"], {})
     return r
 
@@ -494,7 +614,14 @@ async def update_domain(
     sort = body.get("sort")
     if sort is not None:
         sort = parse_integer(sort, field="sort")
-    r = await rbac.update_domain(session, did, body.get("name"), sort)
+    if "name" in body and body["name"] is None:
+        raise HTTPException(status_code=422, detail="领域名称必须为 1 到 64 个字符")
+    try:
+        r = await rbac.update_domain(session, did, body.get("name"), sort)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="领域名称必须为 1 到 64 个字符") from exc
     if r is None:
         raise HTTPException(status_code=404, detail="领域不存在")
     await audit.log(session, user, "domain.update", "domain", did, r["name"], {})
@@ -522,10 +649,15 @@ async def delete_domain(
 class ClientListFilters:
     def __init__(self, q: str = Query(default="", max_length=120),
                  state: str = Query(default="all", pattern="^(all|online|offline|pending)$"),
-                 form: str = Query(default="all", pattern="^(all|desktop|mobile)$")):
+                 form: str = Query(default="all", pattern="^(all|desktop|mobile)$"),
+                 sort_by: str | None = Query(default=None, alias="sortBy",
+                                             pattern="^(name|owner|online|auth|platform|lastSeen)$"),
+                 sort_dir: str = Query(default="asc", alias="sortDir", pattern="^(asc|desc)$")):
         self.q = q
         self.state = state
         self.form = form
+        self.sort_by = sort_by
+        self.sort_dir = sort_dir
 
 
 ClientFilters = Annotated[ClientListFilters, Depends()]
@@ -550,27 +682,12 @@ async def list_clients(
     return [client_to_api(c, settings.offline_after_seconds) for c in await session.scalars(query)]
 
 
-@router.get("/client-inventory")
-async def paged_clients(
-    filters: ClientFilters, page: ClientPageNumber = None, page_size: ClientPageSize = None,
-    window: PageQuery = None, user: User = Depends(require_perm("client.view")),
-    session: AsyncSession = Depends(get_session),
-):
-    """Return items, total and counts for every request, including an empty page."""
-    vis = await _visible_client_ids(session, user)
-    if window:
-        if page is not None or page_size is not None:
-            raise HTTPException(status_code=422, detail="请选择一种分页方式：limit/offset 或 page/pageSize",
-                                headers={"X-Error-Code": "hub.input.pages"})
-        offset, page_size = window.offset, window.limit
-        page = offset // page_size + 1
-    else:
-        page, page_size = page or 1, page_size or 25
-        offset = (page - 1) * page_size
+async def _client_inventory_query(session, user, filters):
     state, form, q = filters.state, filters.form, filters.q
 
     cutoff = datetime.now(timezone.utc) - timedelta(seconds=settings.offline_after_seconds)
-    scope = [] if vis is None else [Client.id.in_(vis)]
+    online = case((Client.last_seen_at >= cutoff, 1), else_=0)
+    scope = await _client_scope(session, user)
     state_where = {
         "online": [Client.last_seen_at.is_not(None), Client.last_seen_at >= cutoff],
         "offline": [or_(Client.last_seen_at.is_(None), Client.last_seen_at < cutoff)],
@@ -585,22 +702,64 @@ async def paged_clients(
     keyword = q.strip().lower()
     search = []
     if keyword:
-        like = f"%{keyword}%"
         search = [or_(
-            func.lower(func.coalesce(Client.name, "")).like(like),
-            func.lower(Client.id).like(like),
-            func.lower(func.coalesce(User.display_name, "")).like(like),
-            func.lower(func.coalesce(User.username, "")).like(like),
+            func.lower(func.coalesce(Client.name, "")).contains(keyword, autoescape=True),
+            func.lower(Client.id).contains(keyword, autoescape=True),
+            func.lower(func.coalesce(User.display_name, "")).contains(keyword, autoescape=True),
+            func.lower(func.coalesce(User.username, "")).contains(keyword, autoescape=True),
         )]
 
-    total = int(await session.scalar(
-        select(func.count()).select_from(Client).outerjoin(User, User.id == Client.user_ref)
-        .where(*scope, *state_where, *form_where, *search)
-    ) or 0)
+    owner = func.coalesce(func.nullif(User.display_name, ""), User.username, "")
+    query = (select(Client, owner.label("owner_name"), online.label("online"))
+             .outerjoin(User, User.id == Client.user_ref)
+             .where(*scope, *state_where, *form_where, *search))
+    if filters.sort_by is None:
+        order = (online.desc(), Client.created_at.desc())
+    else:
+        # Match the normalized platform labels displayed in the terminal table.
+        platform_name = case(
+            (platform_lc.like("win%"), "windows"),
+            (or_(platform_lc.like("darwin%"), platform_lc.like("mac%")), "macos"),
+            (platform_lc.like("linux%"), "linux"), (platform_lc.like("ios%"), "ios"),
+            (platform_lc.like("android%"), "android"), (platform_lc.like("harmony%"), "harmonyos"),
+            else_=platform_lc,
+        )
+        columns = {
+            "name": (func.lower(func.coalesce(Client.name, "")),),
+            "owner": (func.lower(owner),),
+            "online": (1 - online,),  # Ascending groups online devices first.
+            "auth": (case((Client.auth_state.in_(("active", "revoked")), Client.auth_state),
+                          else_="pending"),),
+            "platform": (platform_name, func.lower(func.coalesce(Client.app_version, ""))),
+            "lastSeen": (Client.last_seen_at,),
+        }[filters.sort_by]
+        order = tuple((col.desc() if filters.sort_dir == "desc" else col.asc()).nulls_last()
+                      for col in columns)
+    return query.order_by(*order, Client.id), scope, online, is_mobile
+
+
+@router.get("/client-inventory")
+async def paged_clients(
+    filters: ClientFilters, page: ClientPageNumber = None, page_size: ClientPageSize = None,
+    window: PageQuery = None, user: User = Depends(require_perm("client.view")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Return items, total and counts for every request, including an empty page."""
+    if window:
+        if page is not None or page_size is not None:
+            raise HTTPException(status_code=422, detail="请选择一种分页方式：limit/offset 或 page/pageSize",
+                                headers={"X-Error-Code": "hub.input.pages"})
+        offset, page_size = window.offset, window.limit
+        page = offset // page_size + 1
+    else:
+        page, page_size = page or 1, page_size or 25
+        offset = (page - 1) * page_size
+    query, scope, online, is_mobile = await _client_inventory_query(session, user, filters)
+    total = await session.scalar(query.order_by(None).with_only_columns(func.count()))
     summary = (await session.execute(
         select(
             func.count(),
-            func.sum(case((Client.last_seen_at >= cutoff, 1), else_=0)),
+            func.sum(online),
             func.sum(case((Client.auth_state != "active", 1), else_=0)),
             func.sum(case((is_mobile, 1), else_=0)),
         ).select_from(Client).where(*scope)
@@ -609,21 +768,11 @@ async def paged_clients(
     online_count, pending_count = int(summary[1] or 0), int(summary[2] or 0)
     mobile_count = int(summary[3] or 0)
 
-    query = (
-        select(Client, User.display_name, User.username)
-        .outerjoin(User, User.id == Client.user_ref)
-        .where(*scope, *state_where, *form_where, *search)
-        .order_by(
-            case((Client.last_seen_at >= cutoff, 1), else_=0).desc(),
-            Client.created_at.desc(), Client.id,
-        )
-        .offset(offset).limit(page_size)
-    )
-    rows = await session.execute(query)
+    rows = await session.execute(query.offset(offset).limit(page_size))
     items = []
-    for client, display_name, username in rows.all():
+    for client, owner, online_at_query in rows:
         item = client_to_api(client, settings.offline_after_seconds)
-        item["ownerName"] = display_name or username or ""
+        item.update(ownerName=owner, online=bool(online_at_query))
         items.append(item)
     return {
         "items": items, "total": total, "page": page, "pageSize": page_size, "offset": offset,
@@ -633,6 +782,32 @@ async def paged_clients(
             "mobile": mobile_count,
         },
     }
+
+
+@router.get("/client-inventory/export.csv")
+async def export_client_inventory(
+    filters: ClientFilters, user: User = Depends(require_perm("client.view")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Export the complete filtered inventory with the same scope and ordering as the table."""
+    query, _, _, _ = await _client_inventory_query(session, user, filters)
+    query = query.with_only_columns(
+        Client.id, Client.name, query.selected_columns.owner_name, query.selected_columns.online,
+        Client.auth_state, Client.platform, Client.app_version, Client.last_seen_at,
+    )
+    rows = await session.stream(query.execution_options(yield_per=400))
+    fields = ("id", "name", "ownerName", "connectionState", "authState", "platform", "version", "lastSeen")
+
+    def values(row):
+        device_id, name, owner, online, auth, platform, version, heartbeat = row
+        return (device_id, name, owner, "online" if online else "offline",
+                auth if auth in ("active", "revoked") else "pending", platform, version, iso_utc(heartbeat))
+
+    return StreamingResponse(csv_chunks(rows, fields, values), media_type="text/csv", headers={
+        "Content-Disposition": 'attachment; filename="soduwork-clients.csv"',
+        "Cache-Control": "no-store",
+    })
+
 
 @router.post("/clients/{cid}/assign")
 async def assign_client(
@@ -1364,12 +1539,32 @@ async def put_model_provider(
     return {"ok": True, "keyChanged": bool(new_key)}
 
 
+async def _provider_deletion_impact(session, user, provider):
+    from ..services import model_provider_impact
+    vis = await _visible_client_ids(session, user) if not user.is_super and has_perm(user, "task.view") else None
+    return await model_provider_impact.preview(session, user, provider, vis)
+
+
+@router.get("/model-providers/{pid}/deletion-impact")
+async def model_provider_deletion_impact(
+    pid: str, user: User = Depends(require_perm("integration.manage")),
+    session: AsyncSession = Depends(get_session),
+):
+    provider = await session.get(models.ModelProvider, pid)
+    if provider is None:
+        raise HTTPException(404, detail="没有这个模型服务")
+    if provider.builtin:
+        raise HTTPException(400, detail="内置的服务不能删——不想用就停用它")
+    return await _provider_deletion_impact(session, user, provider)
+
+
 @router.delete("/model-providers/{pid}")
 async def del_model_provider(
     pid: str,
     expectedRevision: str | None = None,
     user: User = Depends(require_perm("integration.manage")),
     session: AsyncSession = Depends(get_session),
+    confirmId: str | None = None, expectedImpact: str | None = None,
 ):
     from sqlalchemy import delete as _del
 
@@ -1380,6 +1575,13 @@ async def del_model_provider(
         raise HTTPException(status_code=404, detail="没有这个模型服务")
     if p.builtin:
         raise HTTPException(status_code=400, detail="内置的服务不能删——不想用就停用它")
+    if confirmId is None or not expectedImpact:
+        raise HTTPException(428, detail="请刷新管理端，预览删除影响并输入服务 ID 后再删除")
+    if confirmId != pid:
+        raise HTTPException(400, detail="输入的服务 ID 不匹配")
+    impact = await _provider_deletion_impact(session, user, p)
+    if impact["impactRevision"] != expectedImpact:
+        raise HTTPException(409, detail="删除影响已变化，请重新核对清单后确认")
     await session.execute(_del(ModelDef).where(ModelDef.provider_id == pid))
     await session.delete(p)
     await session.commit()
@@ -1387,6 +1589,25 @@ async def del_model_provider(
     await models_changed(session)
     await audit.log(session, user, "model.provider.del", "setting", pid, p.name, {})
     return {"ok": True}
+
+
+@router.post("/model-providers/test-connection", dependencies=[Depends(require_perm("integration.manage"))])
+async def test_model_provider_connection(body: dict = Body(default_factory=dict),
+                                         session: AsyncSession = Depends(get_session)):
+    """List models using draft settings without persisting a provider or its credentials."""
+    from ..models import ModelProvider
+    from ..services import model_discovery
+    base = str(body.get("baseUrl") or "").strip()
+    kind = str(body.get("kind") or "openai-compat")
+    key = str(body.get("apiKey") or "").strip()
+    if not key and body.get("providerId"):
+        provider = await session.get(ModelProvider, str(body["providerId"]))
+        if provider and provider.api_key:
+            if base.rstrip("/") != provider.base_url.rstrip("/") or kind != provider.kind:
+                return {"ok": False, "models": [], "code": "model.discovery.reenter-key",
+                        "detail": "服务地址或协议已更改，请输入用于测试的密钥"}
+            key = provider.api_key
+    return await model_discovery.discover(base, key, kind, allow_empty=True)
 
 
 @router.post("/model-providers/{pid}/discover")
@@ -1785,20 +2006,25 @@ async def put_alert_config(
 ):
     from ..models import AppSetting
     from ..services import notify
-    url = str(body.get("url") or "").strip()[:600]
-    if url and not url.startswith(("http://", "https://")):
-        raise HTTPException(status_code=422, detail="告警地址要以 http:// 或 https:// 开头")
-    row = (await session.execute(select(AppSetting).where(
+    url = body.get("url")
+    if url is not None:
+        url = str(url).strip()[:600]
+        if url and not url.startswith(("http://", "https://")):
+            raise HTTPException(status_code=422, detail="告警地址要以 http:// 或 https:// 开头")
+        row = (await session.execute(select(AppSetting).where(
+            AppSetting.key == notify.ALERT_URL_KEY))).scalars().first()
+        if row is None:
+            session.add(AppSetting(key=notify.ALERT_URL_KEY, value=url))
+        else:
+            row.value = url
+        await session.commit()
+    # Read current state for audit and response.
+    current_row = (await session.execute(select(AppSetting).where(
         AppSetting.key == notify.ALERT_URL_KEY))).scalars().first()
-    if row is None:
-        session.add(AppSetting(key=notify.ALERT_URL_KEY, value=url))
-    else:
-        row.value = url
-    await session.commit()
     # Webhook URLs permit message injection if leaked; audit only whether a URL is configured.
     await audit.log(session, user, "alert.config", "setting", None, "告警通道",
-                    {"configured": bool(url)})
-    return {"ok": True, "configured": bool(url)}
+                    {"configured": bool(current_row and current_row.value)})
+    return {"ok": True, "configured": bool(current_row and current_row.value)}
 
 
 @router.post("/alert-config/test")
@@ -1960,6 +2186,8 @@ async def create_integration(body: IntegrationCreate,
     from ..services import scm_support
     try:
         result = await agg.create_integration(session, body.name, body.type, body.config)
+    except DuplicateName as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except scm_support.RetiredScmError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except ValueError as exc:
@@ -2045,19 +2273,49 @@ async def delete_integration(iid: str, user: User = Depends(require_perm("integr
 
 # Audit log.
 
+def _audit_filters(action: str | None = None, actor: str | None = None,
+                   since: AwareDatetime | None = None, until: AwareDatetime | None = None):
+    # SQLite stores UTC without an offset; compare the same instants on both databases.
+    try:
+        since = since.astimezone(timezone.utc) if since is not None else None
+        until = until.astimezone(timezone.utc) if until is not None else None
+    except OverflowError:
+        raise HTTPException(422, "时间超出支持范围") from None
+    if since is not None and until is not None and since >= until:
+        raise HTTPException(422, "开始时间必须早于结束时间")
+    return {"action": action, "actor": actor, "since": since, "until": until}
+
+
 @router.get("/audit")
 async def list_audit(
-    action: str | None = None, limit: int = 50, offset: int = 0,
+    filters: dict = Depends(_audit_filters),
+    limit: Annotated[int, Query(ge=0)] = 50, offset: Annotated[int, Query(le=2**63-1)] = 0,
     user: User = Depends(require_perm("audit.view")),
     session: AsyncSession = Depends(get_session),
 ):
     """List audit events for actors in the department subtree; superusers see all events."""
-    return await audit.list_audit(session, user, action=action, limit=min(limit, 200), offset=max(offset, 0))
+    result = await audit.list_audit(session, user, limit=min(limit, 200), offset=max(offset, 0), **filters)
+    return {**result, "environment": settings.soduwork_env.strip().lower()}
+
+
+@router.get("/audit/export.csv")
+async def export_audit(
+    filters: dict = Depends(_audit_filters),
+    user: User = Depends(require_perm("audit.view")),
+    session: AsyncSession = Depends(get_session),
+):
+    """Download every matching event in the same order and scope as the audit list."""
+    chunks = await audit.export_csv(session, user, settings.soduwork_env.strip().lower(), **filters)
+    return StreamingResponse(chunks, media_type="text/csv", headers={
+        "Content-Disposition": 'attachment; filename="audit-log.csv"',
+        "Cache-Control": "no-store",
+    })
 
 
 @router.get("/receipts")
 async def list_receipts(
-    limit: int = 50, offset: int = 0,
+    limit: Annotated[int, Query(ge=0)] = 50,
+    offset: Annotated[int, Query(ge=0, le=2**63-1)] = 0,
     user: User = Depends(require_perm("task.view")),
     session: AsyncSession = Depends(get_session),
 ):
@@ -2065,34 +2323,31 @@ async def list_receipts(
     trace requests through resolution.
     """
     from ..schemas import _ms
-    vis = await _visible_client_ids(session, user)   # None leaves superusers unrestricted.
-    rows = (await session.execute(
-        select(TaskEvent).where(TaskEvent.kind == "receipt").order_by(TaskEvent.at.desc())
-    )).scalars().all()
-    # Scope linked tasks and include their titles, owning devices, and completion times.
-    tmap = {}
-    tids = list({e.task_id for e in rows})
-    if tids:
-        tres = (await session.execute(select(Task).where(Task.id.in_(tids)))).scalars().all()
-        tmap = {t.id: t for t in tres}
+    query = (select(TaskEvent, Task.title, Task.status)
+             .outerjoin(Task, Task.id == TaskEvent.task_id)
+             .where(TaskEvent.kind == "receipt"))
+    scope = await rbac.scope_org_ids(session, user)
+    if scope is not None:
+        owners = select(User.id).where(User.org_id.in_(scope))
+        query = (query.join(Client, Client.id == Task.owner_client_id)
+                 .where(or_(Client.user_ref.is_(None), Client.user_ref.in_(owners))))
+    query = query.order_by(TaskEvent.at.desc(), TaskEvent.id.desc()).limit(min(limit, 200)).offset(offset)
+    rows = await session.execute(query)
     out = []
-    for e in rows:
-        t = tmap.get(e.task_id)
-        if vis is not None and (t is None or t.owner_client_id not in vis):
-            continue  # Outside the visible scope.
+    for e, title, status in rows:
         d = e.detail or {}
         out.append({
             "id": e.id,
             "taskId": e.task_id,
-            "title": d.get("title") or (t.title if t else ""),
+            "title": d.get("title") or title or "",
             "requesterName": d.get("to") or "",
             "contact": d.get("contact") or "",
             "external": bool(d.get("external")),
             "via": d.get("via") or "",           # box: notify requester; self: self-completion; relay: notify registrar; recorded: retain only.
-            "status": (t.status if t else ""),
+            "status": status or "",
             "at": _ms(e.at),
         })
-    return out[offset:offset + min(limit, 200)]
+    return out
 
 
 @router.get("/bindings")
@@ -2221,10 +2476,13 @@ async def client_push(
             patch = {}
         if not isinstance(patch, dict):
             raise HTTPException(status_code=400, detail="config.patch 必须是对象")
-        forbidden = sorted(_CLIENT_LOCAL_MODEL_KEYS.intersection(patch))
+        forbidden = sorted(_CLIENT_PRIVATE_CONFIG_KEYS.intersection(patch))
         if forbidden:
             raise HTTPException(status_code=403,
-                                detail="本地模型配置由客户端管理，后台不能读取或修改")
+                                detail="本地模型配置由客户端管理，后台不能读取或修改" if "modelProviders" in forbidden
+                                else "首聊状态由客户端报告")
+        from ..services import model_config_guard
+        await model_config_guard.personal(session, c, allow_patch=True)
         c.config = {**(c.config or {}), **patch}
         await session.commit()
         from ..services.client_domain_events import device_changed

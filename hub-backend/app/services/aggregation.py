@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .. import models, automation_models, repository_issue_models  # register subscription ownership metadata
 from ..realtime import hub
+from . import catalog_names
 from .task_access import publish_owner
 from ..schemas import binding_to_api, integration_to_api, task_to_api
 
@@ -53,6 +54,8 @@ async def create_integration(
     from . import scm_support
     normalized_type, normalized_config = _validate_integration_config(type_, config)
     scm_support.require_active(normalized_type)
+    name = name.strip()
+    await catalog_names.require_available(session, models.Integration, name, "集成名已存在")
     integ = models.Integration(
         name=name,
         type=normalized_type,
