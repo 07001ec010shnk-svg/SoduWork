@@ -1,3 +1,4 @@
+import { ja as firstChatJa, ko as firstChatKo } from './first-chat.js'
 import { ja as auditJa, ko as auditKo } from './audit.js'
 import { ja as automationTemplatesJa, ko as automationTemplatesKo } from './automation-templates.js'
 import { ja as capabilityCatalogJa, ko as capabilityCatalogKo } from './capability-catalog.js'
@@ -9,6 +10,7 @@ import { ja as legalJa, ko as legalKo } from './legal-documents.js'
 import { ja as governanceJa, ko as governanceKo } from './governance-overview.js'
 import { ja as insightsMetricsJa, ko as insightsMetricsKo } from './insights-metrics.js'
 import { ja as usageCenterJa, ko as usageCenterKo } from './usage-center.js'
+import { ja as modelProviderDeletionJa, ko as modelProviderDeletionKo } from './model-provider-deletion.js'
 import { ja as modelRuntimeOverviewJa, ko as modelRuntimeOverviewKo } from './model-runtime-overview.js'
 import { ja as connectorJa, ko as connectorKo } from './connector-management.js'
 import { ja as cloudRunnerJa, ko as cloudRunnerKo } from './cloud-runner-management.js'
@@ -117,6 +119,6 @@ const ko = {
 const shellMessages = locale => Object.fromEntries(Object.entries(dictionary['zh-CN']).map(([key, source]) => [source, dictionary[locale][key]]))
 
 export const messagesByLocale = Object.freeze({
-  'ja-JP': Object.freeze({ ...shellMessages('ja-JP'), ...auditJa, ...automationTemplatesJa, ...ja, ...connectorJa, ...cloudRunnerJa, ...modelJa, ...quotaJa, ...accessCatalogJa, ...operationsJa, ...governanceJa, ...insightsMetricsJa, ...usageCenterJa, ...modelRuntimeOverviewJa, ...capabilityCatalogJa, ...legalJa }),
-  'ko-KR': Object.freeze({ ...shellMessages('ko-KR'), ...auditKo, ...automationTemplatesKo, ...ko, ...connectorKo, ...cloudRunnerKo, ...modelKo, ...quotaKo, ...accessCatalogKo, ...operationsKo, ...governanceKo, ...insightsMetricsKo, ...usageCenterKo, ...modelRuntimeOverviewKo, ...capabilityCatalogKo, ...legalKo }),
+  'ja-JP': Object.freeze({ ...shellMessages('ja-JP'), ...firstChatJa, ...auditJa, ...automationTemplatesJa, ...ja, ...connectorJa, ...cloudRunnerJa, ...modelJa, ...quotaJa, ...accessCatalogJa, ...operationsJa, ...governanceJa, ...insightsMetricsJa, ...usageCenterJa, ...modelRuntimeOverviewJa, ...modelProviderDeletionJa, ...capabilityCatalogJa, ...legalJa }),
+  'ko-KR': Object.freeze({ ...shellMessages('ko-KR'), ...firstChatKo, ...auditKo, ...automationTemplatesKo, ...ko, ...connectorKo, ...cloudRunnerKo, ...modelKo, ...quotaKo, ...accessCatalogKo, ...operationsKo, ...governanceKo, ...insightsMetricsKo, ...usageCenterKo, ...modelRuntimeOverviewKo, ...modelProviderDeletionKo, ...capabilityCatalogKo, ...legalKo }),
 });

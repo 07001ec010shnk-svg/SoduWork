@@ -6,6 +6,8 @@ Command examples use `sh start.sh` on macOS/Linux. On Windows, use `.\start.cmd`
 
 Hub provides identity, authorization, execution governance, plugins, shared materials, and desktop connectivity. It uses FastAPI and asynchronous SQLAlchemy with PostgreSQL; local development can use SQLite.
 
+The first-chat checklist combines the available model catalog with the signed-in administrator’s latest desktop report. The device sends two readiness flags for its runtime and model selection. After five minutes without a fresh report, the Hub shows those steps as awaiting the desktop.
+
 ## Start locally
 
 For a first session, use `sh start.sh` from the repository root; it creates an isolated database, environment, and administrator.
@@ -438,3 +440,7 @@ python3 e2e_dsh_private_probe.py \
 ```
 
 This explicit check uses the production private-probe job and ACP bridge, the installed adapter and host, and a synthetic loopback model. It first reproduces the old incorrect installation path, then requires a real model request and the expected Agent response with the corrected path. It uses disposable home, state and temporary directories, blocks non-loopback Node connections and cleans up its subprocesses. It does not install or update dependencies, use real credentials, or verify desktop UI, production Hub or provider behavior. Run it separately from the offline quality gate because it requires an existing native installation.
+
+## Model provider deletion
+
+With `integration.manage`, request `GET /api/v1/admin/model-providers/{id}/deletion-impact`. The result includes the provider and impact revisions, child models, and visible saved model selections. Member names require `user.manage` and issue titles require `task.view`; department visibility still applies. Submit the revisions as `expectedRevision` and `expectedImpact` plus the exact ID as `confirmId` to the existing `DELETE /api/v1/admin/model-providers/{id}`. Older delete requests without the preview return HTTP 428. On HTTP 409, retrieve a fresh preview and confirm again. Built-in services cannot be deleted.

@@ -198,6 +198,36 @@ async def approval_audits(client, actor, headers):
     return verified
 
 
+async def batch_user_audits(client, actor, headers):
+    path = "/api/v1/admin/users/batch"
+    ids = ["batch-audit-a", "batch-audit-b"]
+    targets = set(ids)
+    async with SessionLocal() as session:
+        session.add_all([models.User(id=uid, username=uid, is_active=True) for uid in ids])
+        await session.commit()
+
+    first_audit_ids = set()
+    for expected_updates in (2, 0):
+        response = await client.post(path, headers=headers, json={"ids": ids, "isActive": False})
+        async with SessionLocal() as session:
+            rows = (await session.scalars(select(models.AuditLog).where(
+                models.AuditLog.target_id.in_(ids)))).all()
+            disabled = set(await session.scalars(select(models.User.id).where(
+                models.User.id.in_(ids), models.User.is_active.is_(False))))
+        audit_ids = {row.id for row in rows}
+        audited = (response.status_code == 200 and response.json() == {"updated": expected_updates}
+                   and disabled == targets and len(rows) == len(ids)
+                   and {row.target_id for row in rows} == targets
+                   and all(row.actor_id == actor and row.action == "user.update" and row.target_type == "user"
+                           and row.detail == {"fields": ["isActive"], "pwChanged": False} for row in rows)
+                   and (not first_audit_ids or audit_ids == first_audit_ids))
+        check(f"bulk update ({expected_updates} changed) preserves one audit per changed user", audited)
+        if not audited:
+            return set()
+        first_audit_ids = audit_ids
+    return {("POST", path)}
+
+
 def audit_contract(verified) -> None:
     missing = []
     seen_exemptions = set()
@@ -339,7 +369,9 @@ async def main() -> None:
     async with httpx.AsyncClient(
         transport=transport, base_url="http://soduwork.test"
     ) as client:
-        audit_contract(await approval_audits(client, super_user.id, super_headers))
+        verified = await approval_audits(client, super_user.id, super_headers)
+        verified.update(await batch_user_audits(client, super_user.id, super_headers))
+        audit_contract(verified)
         denied = await client.post(
             "/api/v1/admin/orgs", headers=ordinary_headers,
             json={"name": "越权新部门", "parentId": "org-security-a"})

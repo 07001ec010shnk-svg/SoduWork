@@ -138,6 +138,8 @@ async def bulk_import_plugins(
                                ("enterprise-rights-confirmed" if rightsConfirmed else "")),
             })
         except (ValueError, RuntimeError) as exc:
+            await session.rollback()
+            await session.refresh(user)
             results.append({"filename": filename, "ok": False,
                             "error": str(exc)[:500]})
     imported = sum(1 for item in results if item["ok"])
