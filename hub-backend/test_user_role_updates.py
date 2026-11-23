@@ -81,6 +81,21 @@ class AdminUserTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class UserRoleUpdateTests(AdminUserTestCase):
+    async def test_user_names_reject_controls_on_create_and_edit(self):
+        fields = {"orgId": "team", "username": "member", "password": secrets.token_urlsafe(24)}
+        for invalid in ({"displayName": "Jo\x1bAnn"}, {"username": "له\u2066نا"}):
+            response = await self.request("POST", "/users", json={**fields, **invalid})
+            self.assertEqual(response.status_code, 422, response.text)
+        created = await self.request("POST", "/users", json=fields)
+        self.assertEqual(created.status_code, 200, created.text)
+        self.assertEqual(created.json()["displayName"], "member")
+        path = "/users/" + created.json()["id"]
+        for name, expected in (("研发 · ليلى", 200), ("First\nLast", 422)):
+            response = await self.request("PATCH", path, json={"displayName": name})
+            self.assertEqual(response.status_code, expected, response.text)
+        async with self.sessions() as session:
+            self.assertEqual((await session.get(models.User, created.json()["id"])).display_name, "研发 · ليلى")
+
     async def test_admin_password_policy_applies_to_create_and_reset(self):
         from app.auth import verify_password
         from app.services import client_access

@@ -1,10 +1,18 @@
 """Pydantic API contracts for tasks and clients, using camelCase fields and millisecond timestamps.
 
 """
+import re
 from datetime import datetime, timezone
 from typing import Annotated, Any, Literal, Optional
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+)
 from pydantic_core import PydanticCustomError
 
 from .auth import ACCOUNT_PASSWORD_MAX, ACCOUNT_PASSWORD_MIN
@@ -269,7 +277,18 @@ class Envelope(BaseModel):
     reporter: Optional[str] = None        # Requester who receives the completion notification.
 
 
-AdminName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+_NAME_CONTROLS = re.compile(r"[\x00-\x1f\x7f-\x9f\u061c\u200e\u200f\u2028-\u202e\u2066-\u2069]")
+
+
+def validate_name_characters(value: str) -> str:
+    if _NAME_CONTROLS.search(value):
+        raise ValueError("Name must be a single line without control or bidirectional formatting characters")
+    return value
+
+
+SingleLineName = Annotated[str, AfterValidator(validate_name_characters)]
+AdminName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+                      AfterValidator(validate_name_characters)]
 
 
 class IntegrationCreate(BaseModel):
@@ -355,9 +374,9 @@ AccountPassword = Annotated[str, StringConstraints(
 
 class UserCreate(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    username: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+    username: AdminName
     password: AccountPassword
-    displayName: str = ""
+    displayName: SingleLineName = ""
     isTestAccount: Optional[bool] = None
     orgId: Optional[str] = None
     roleId: Optional[str] = None
@@ -368,7 +387,7 @@ class UserCreate(BaseModel):
 
 class UserUpdate(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    displayName: Optional[str] = None
+    displayName: Optional[SingleLineName] = None
     isTestAccount: Optional[bool] = None
     orgId: Optional[str] = None
     roleId: Optional[str] = None
