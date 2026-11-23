@@ -9,13 +9,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
-from contextlib import closing
-from datetime import datetime, timezone
 import hashlib
 import io
 import json
 import os
-from pathlib import Path, PurePosixPath, PureWindowsPath
 import re
 import secrets
 import shutil
@@ -23,6 +20,9 @@ import sqlite3
 import struct
 import tarfile
 import tempfile
+from contextlib import closing
+from datetime import datetime, timezone
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterable
 
 from cryptography.exceptions import InvalidTag
@@ -31,8 +31,12 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from .data_backup import BackupError, backup_database, manifest_byte_count, verify_backup
-
+from .data_backup import (
+    BackupError,
+    backup_database,
+    manifest_byte_count,
+    verify_backup,
+)
 
 MAGIC = b"SODUWORKFB01"
 NONCE_SIZE = 12
