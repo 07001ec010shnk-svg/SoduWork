@@ -11,7 +11,7 @@ function fixture(decision = 'full') {
     disabled: false, closest: () => card, getBoundingClientRect: () => ({ left: 5, top: 8, width: 60, height: 30 }) };
   return { window, controls: window.AccessControls, button, card, error };
 }
-test('command approval offers three decisions and no session-grant entry', () => {
+test('legacy requests without a scoped option keep their original decisions', () => {
   const f = fixture(); const request = { requestId: 'command-a', policyRevision: 2,
     action: 'command.execute', tool: 'bash', arguments: { command: 'echo sample' } };
   const html = f.controls.render(request, value => String(value ?? ''), { ref: 'chat-a', fullRevision: 3 });
@@ -21,6 +21,19 @@ test('command approval offers three decisions and no session-grant entry', () =>
   assert.match(html, /role="group"/);
   assert.doesNotMatch(html, /data-ui-value="session"|记住这条命令|记住同一目标/);
   assert.doesNotMatch(f.controls.render(request, String), /data-ui-value="full"/);
+});
+test('only explicitly supported and complete requests offer a matching-operation grant', async () => {
+  const f = fixture('session');
+  const request = { requestId: 'request-a', policyRevision: 2, action: 'command.execute',
+    allowSession: true, choices: ['deny', 'session', 'once'], arguments: { command: 'echo sample' } };
+  assert.match(f.controls.render(request, String), /data-ui-value="session"/);
+  for (const override of [{ allowSession: false }, { choices: ['once', 'deny'] },
+    { arguments: { inputIncomplete: true } }, { arguments: { input: null } }]) {
+    assert.doesNotMatch(f.controls.render({ ...request, ...override }, String), /data-ui-value="session"/);
+  }
+  let reply;
+  await f.controls.answer(f.button, { answerUi: async (ref, value) => { reply = value; return { ok: true }; } }, 'chat-a');
+  assert.deepEqual({ ...reply }, { requestId: 'request-a', policyRevision: 2, decision: 'session' });
 });
 test('full access uses the versioned session change API rather than granting a tool reply', async () => {
   const f = fixture(); let calls = 0;

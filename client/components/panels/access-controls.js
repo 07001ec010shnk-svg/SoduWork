@@ -44,8 +44,12 @@
     const target = commandPreview || (files.length ? [...new Set(files)].join('\n') : request.target) || '';
     const missingInput = payload.inputUnavailable === true || payload.input === null;
     const detail = missingInput ? '' : typeof payload === 'string' ? payload : JSON.stringify(payload, null, 2);
-    const scopeNote = Number.isInteger(options.fullRevision)
-      ? text('始终允许') + '：' + text('仅对此会话生效，可随时调整') : text('仅允许这一次操作。');
+    const canRemember = request.allowSession === true && Array.isArray(request.choices) && request.choices.includes('session') &&
+      !missingInput && !payload.inputIncomplete;
+    const canElevate = Number.isInteger(options.fullRevision);
+    const scopeNote = canRemember
+      ? text(command ? '记住这条命令；命令或目录改变后仍需确认。' : '本会话允许相同操作')
+      : canElevate ? text('始终允许') + '：' + text('仅对此会话生效，可随时调整') : text('仅允许这一次操作。');
     const button = (decision, label, className = '') =>
       '<button type="button" class="nask-btn ' + className +
       '" data-ui-answer="permission" data-ui-value="' + decision + '" data-permission-request="' + esc(request.requestId) +
@@ -63,8 +67,9 @@
       (request.tool || request.agent ? '<code data-user-content>' + esc(request.tool || request.agent) + '</code>' : '') +
       '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="m6 8 4 4 4-4"/></svg></summary><pre data-user-content>' + esc(detail.slice(0, 20000)) + '</pre></details>' : '') +
       '</div>' +
-      '<footer><div class="nask-btns" role="group" aria-label="' + attribute('权限确认') + '">' + button('deny', '拒绝') + button('once', '允许一次') +
-      (Number.isInteger(options.fullRevision) ? button('full', '始终允许', 'access-full') : '') + '</div>' +
+      '<footer><div class="nask-btns' + (canRemember && canElevate ? ' access-four-choices' : '') + '" role="group" aria-label="' + attribute('权限确认') + '">' + button('deny', '拒绝') + button('once', '允许一次') +
+      (canRemember ? button('session', '本会话允许') : '') +
+      (canElevate ? button('full', canRemember ? '完全访问' : '始终允许', 'access-full') : '') + '</div>' +
       '<small>' + scopeNote + '</small><p class="access-error" role="alert" hidden></p></footer></section>';
   }
   function sync(el, ref, snapshot, escape, onAnswer) {
@@ -170,7 +175,7 @@
       snapshot.accessControl.modes?.includes('full') && policy?.mode !== 'full' && Number.isInteger(policy?.revision)
       ? policy.revision : undefined;
     const key = JSON.stringify([ref, request.requestId, request.policyRevision, request.action, request.tool,
-      request.agent, request.target, request.arguments, request.title, request.options, request.allowSession, request.sessionScope, fullRevision]);
+      request.agent, request.target, request.arguments, request.title, request.options, request.allowSession, request.choices, request.sessionScope, fullRevision]);
     if (state.key !== key) {
       state.layer.innerHTML = render(request, escape, { ref, fullRevision }); state.key = key;
     }
@@ -222,10 +227,13 @@
       if (full) {
         if (typeof api.setAccessMode !== 'function') throw Error('Unsupported access change');
         const rect = button.getBoundingClientRect();
-        result = await withTimeout(api.setAccessMode(ref, 'full', Number(button.dataset.accessRevision), { anchor: {
-          left: rect.left, top: rect.top, width: rect.width, height: rect.height,
-          screenX: Number(global.screenX) + rect.left, screenY: Number(global.screenY) + rect.top,
-        } }), timeout);
+        result = await withTimeout(api.setAccessMode(ref, 'full', Number(button.dataset.accessRevision), {
+          approval: { requestId: response.requestId, policyRevision: response.policyRevision, expiresAt: Date.now() + timeout },
+          anchor: {
+            left: rect.left, top: rect.top, width: rect.width, height: rect.height,
+            screenX: Number(global.screenX) + rect.left, screenY: Number(global.screenY) + rect.top,
+          },
+        }), timeout);
       } else result = await withTimeout(api.answerUi(ref, response), timeout);
       accepted = result?.ok === true && result.effective !== 'next-turn';
       if (accepted) card.hidden = true;
@@ -238,7 +246,10 @@
       return result || { ok: false, reason: '权限确认失败，请重试' };
     } catch (failure) {
       const message = failure?.code === 'APPROVAL_TIMEOUT' ? '权限确认超时，请重试' : '权限确认失败，请重试';
-      if (error) { error.hidden = false; error.textContent = message; }
+      if (error) {
+        error.hidden = false; error.classList.toggle('access-feedback', false);
+        error.textContent = global.SoduWorkI18n?.t?.(message) || message;
+      }
       return { ok: false, reason: message };
     } finally {
       if (!accepted && card.isConnected) {

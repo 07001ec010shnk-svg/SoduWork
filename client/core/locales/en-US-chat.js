@@ -190,6 +190,7 @@
     "等待权限确认": "Waiting for approval",
     "这条权限请求已失效，请使用当前请求": "This approval request has expired. Use the current request.",
     "权限请求已失效": "Approval request expired",
+    "权限确认超时，请重试": "Approval timed out. Please try again.",
     "权限确认失败，请重试": "Approval failed. Try again.",
     "请在当前会话窗口确认权限": "Approve access in the current chat window",
     "当前底座暂不支持新权限模式，请选择兼容权限或其他底座": "This runtime does not support the new access modes. Choose compatibility access or another runtime.",
