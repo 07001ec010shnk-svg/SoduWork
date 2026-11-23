@@ -267,6 +267,49 @@ try {
     await click(q('#plugin-catalog-tab-app'))
     check(all('.plugin-card').length === 1, 'application matches combined search and recommendation filters')
     await click(q('.filter-clear[aria-label="清空搜索插件"]'))
+  } else if (view === 'bulk-import') {
+    const files = ['正常包.zip', '待检查.zip'].map(name => new File(['样本文本'], name))
+    let rejectSingle
+    api.importPlugin = () => new Promise((resolve, reject) => { rejectSingle = reject })
+    const nativeClick = HTMLInputElement.prototype.click
+    try {
+      HTMLInputElement.prototype.click = function () {
+        if (this.type !== 'file') return nativeClick.call(this)
+        const transfer = new DataTransfer()
+        for (const file of files) transfer.items.add(file)
+        this.files = transfer.files
+        this.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+      await click(button('导入并送审'))
+      await until(() => Boolean(rejectSingle))
+      await click(q('.plugin-admin-more summary'))
+      await click(all('.plugin-admin-more button').find(item => item.textContent.includes('批量导入')))
+    } finally {
+      HTMLInputElement.prototype.click = nativeClick
+    }
+    let finishImport
+    api.bulkImportPlugins = () => new Promise(resolve => { finishImport = resolve })
+    await click(q('.plugin-bulk-rights input'))
+    await click(button('提交 2 个包审核'))
+    await until(() => Boolean(finishImport))
+    rejectSingle(new Error('测试单包未通过校验'))
+    await until(() => button('导入并送审'))
+    check(Boolean(button('正在校验并导入…')), 'The bulk import still shows validation in progress after the single import finishes')
+    await click(button('取消'))
+    const discard = button('放弃改动')
+    if (discard) await click(discard)
+    check(Boolean(q('.plugin-bulk-import')), 'Cancelling during submission retains the packages in the batch')
+    await escape()
+    finishImport({ imported: 1, failed: 1, items: [
+      { filename: files[0].name, ok: true }, { filename: files[1].name, ok: false, error: '样本未通过校验' },
+    ] })
+    await until(() => q('.plugin-bulk-result .bad'))
+    check(!button('放弃改动'), 'A completed report dismisses the pending discard confirmation')
+    check(q('.plugin-bulk-result .bad').textContent.includes('样本未通过校验'), 'The report retains the failed file and its validation error')
+    check(q('.plugin-bulk-rights input').checked, 'The report keeps the authorization choice submitted with the batch')
+    await click(button('关闭', q('.plugin-page .modal-foot')))
+    check(!q('.plugin-bulk-import'), 'The completed report can be closed')
+    await until(() => document.activeElement === q('.plugin-admin-more summary'))
   } else if (view === 'recommend') {
     const card=q('.plugin-card-shell')
     await open(plugins[0].id)
