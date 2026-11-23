@@ -342,6 +342,8 @@ The check verifies the packaged native verifier, real TLS with a disposable trus
 
 ## API and trust boundaries
 
+When posting usage to `POST /api/v1/usage/events`, omit `occurredAt` to use the time the Hub receives the event. Supply an ISO 8601 timestamp to report an earlier instant. The Hub interprets a timestamp without an offset as UTC. If an event has an invalid timestamp, the Hub returns HTTP 422 before recording any event in the batch.
+
 - Devices enroll with `POST /api/v1/clients/enroll`, then use a short-lived device session. Device long-term keys remain in the Electron main process; Hub stores only their digest.
 - Business requests use `Authorization: Device <session>`. WebSocket connectivity uses the same short-lived session at `/api/v1/ws`.
 - Tasks use `/api/v1/tasks`, task-specific operations, batch updates, completed-task clearing, and agent run/retry/takeover routes. Device preferences use `GET /api/v1/config?withRevision=true`. Send edited fields and the returned `_configRevision` to `PUT /api/v1/config`. The versioned response lists writable fields in `_configKeys`. Unknown fields and invalid values return 422, a stale revision returns 409, and replacing a previously saved value without a revision returns 428.

@@ -254,6 +254,8 @@ python3 e2e_runner_tls.py --output /absolute/evidence/directory
 
 ## API 概览
 
+通过 `POST /api/v1/usage/events` 上报用量时，省略 `occurredAt` 表示使用 Hub 收到事件的时间。上报历史事件时可填写 ISO 8601 时间戳。没有时区偏移的时间戳按 UTC 解释。如果任一事件的时间戳无效，Hub 返回 HTTP 422，整批事件均不入账。
+
 - 客户端契约（设备登记 → 管理员激活 → 短期 `Device` 会话；长期设备密钥在 Hub 只存摘要）
   - `GET/POST /api/v1/tasks`、`GET/PATCH/DELETE /api/v1/tasks/{id}`
   - `POST /api/v1/tasks/batch-update`、`POST /api/v1/tasks/clear-done`（只清 done）
