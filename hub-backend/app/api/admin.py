@@ -612,15 +612,18 @@ async def update_domain(
     if "name" in body and body["name"] is None:
         raise HTTPException(status_code=422, detail="领域名称必须为 1 到 64 个字符")
     try:
-        r = await rbac.update_domain(session, did, body.get("name"), sort)
+        change = await rbac.update_domain(session, did, body.get("name"), sort)
     except DuplicateName as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="领域名称必须为 1 到 64 个字符") from exc
-    if r is None:
+    if change is None:
         raise HTTPException(status_code=404, detail="领域不存在")
-    await audit.log(session, user, "domain.update", "domain", did, r["name"], {})
-    return r
+    before, after = change
+    audit.add(session, user, "domain.update", "domain", did, after["name"],
+              {"before": before, "after": after})
+    await session.commit()
+    return after
 
 
 @router.delete("/domains/{did}")
