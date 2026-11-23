@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import ast
 import errno
 import io
 import json
@@ -1436,19 +1437,39 @@ class LocalStartupTests(unittest.TestCase):
     def test_prepare_passes_isolated_caches_to_every_install_command(self):
         state = Path(self.temp.name) / 'prepare-state'
         state.mkdir()
-        with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
+        settings = {'PYTHONHOME': '/host/python', 'PYTHONPATH': '/host/site-packages',
+                    'PIP_NO_INDEX': '1', 'PIP_FIND_LINKS': str(state / 'wheels')}
+        with patch.dict(os.environ, settings), \
+                patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
                 patch.object(build, 'sync_source'), patch.object(build, 'shutil'), \
                 patch.object(build, 'source_files', return_value=[]), \
                 patch.object(build, 'digest_files', return_value='digest'), \
                 patch.object(build, 'read_stamp', return_value=None), \
                 patch.object(build, 'run', side_effect=self.fake_venv_run(state)) as run:
+            cache_env = build.prepare_environment(state)
             build.prepare(state, state / 'startup.log')
         installs = run.call_args_list
         self.assertEqual(len(installs), 5)  # venv, pip, Runner probe, npm ci, build
         self.assertTrue(any('pip' in call.args[0] for call in installs))
         for call in installs:
-            self.assertTrue(call.kwargs.get('env') == build.prepare_environment(state),
-                            'Every preparation child must receive the isolated environment')
+            command = call.args[0]
+            expected = cache_env.copy()
+            if command[0] != 'npm':
+                self.assertEqual(command[1], '-I', command)
+                expected.pop('PYTHONHOME', None)
+                expected.pop('PYTHONPATH', None)
+                for key in ('PIP_FIND_LINKS', 'PIP_NO_INDEX'):
+                    self.assertEqual(call.kwargs['env'].get(key), settings[key])
+            self.assertTrue(call.kwargs['env'] == expected, 'Unexpected environment for ' + str(command[:3]))
+
+    def test_isolated_runner_readiness_imports_native_tls_dependency(self):
+        with patch.object(build, 'run') as run:
+            build.verify_runner_environment(Path(sys.executable), self.state, self.state / 'startup.log', env={})
+        command = run.call_args.args[0]
+        self.assertEqual(command[1:3], ['-I', '-c'])
+        imports = {module.name for statement in ast.parse(command[3]).body
+                   if isinstance(statement, ast.Import) for module in statement.names}
+        self.assertIn('truststore', imports)
 
     def test_cached_runner_disk_full_is_not_retried_as_a_dependency_repair(self):
         with patch.object(build, 'check_dependencies', return_value=('node', 'npm')), \
@@ -1681,7 +1702,7 @@ class LocalStartupTests(unittest.TestCase):
         for name in build.BACKEND_FILES:
             put("hub-backend/" + name)
         for name in ("hub-backend/app/api.py", "tools/dev/local_server.py", "skills/example/SKILL.md",
-                     "client/core/connector-brand.js", "client/components/panels/connector-config.js",
+                     "client/core/connector-brand.js", "client/core/locales/builtin-skills.js", "client/components/panels/connector-config.js",
                      "client/components/client-auth/legal-html.js", "client/components/client-auth/legal-html.css",
                      "client/assets/connector-brands/fixture.svg", "third-party/manifest.json", "LICENSE",
                      "hub-frontend/src/index.jsx", "hub-frontend/package.json", "hub-frontend/package-lock.json",
@@ -1727,17 +1748,18 @@ class LocalStartupTests(unittest.TestCase):
             self.assertEqual((self.state / "application/client/assets/connector-brands/fixture.svg").read_text(), "updated artwork")
             for file in generated:
                 self.assertEqual(file.read_bytes(), b'generated runtime fixture')
-            for relative in ('client/components/client-auth/legal-html.js',
+            for relative in ('client/core/locales/builtin-skills.js',
+                             'client/components/client-auth/legal-html.js',
                              'client/components/client-auth/legal-html.css'):
                 with self.subTest(shared_frontend_source=relative):
                     calls.clear()
-                    put(relative, 'updated shared legal document resource')
+                    put(relative, 'updated shared frontend resource')
                     build.prepare(self.state, self.state / 'startup.log')
                     self.assertEqual(calls, [
                         '[Runner] 检查本地运行环境 / Checking the local Runner environment',
                         '[4/4] 构建管理页面 / Building the management UI'])
                     self.assertEqual((self.state / 'application' / relative).read_text(),
-                                     'updated shared legal document resource')
+                                     'updated shared frontend resource')
             calls.clear()
             build.prepare(self.state, self.state / 'startup.log')
             self.assertEqual(calls, ['[Runner] 检查本地运行环境 / Checking the local Runner environment'])

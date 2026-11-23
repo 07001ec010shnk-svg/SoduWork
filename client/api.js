@@ -47,7 +47,7 @@
   'use strict';
   var TASK_STORAGE_BASE = {
     tasks: 'soduwork_work_tasks_v5', ops: 'soduwork_work_task_ops_v1', shadow: 'soduwork_work_task_shadow_v1',
-    notices: 'soduwork_work_notices_v1'
+    notices: 'soduwork_work_notices_v1', 'config-edit-base': 'soduwork_work_cfg_edit_base_v1'
   };
   var LS_CFG = 'soduwork_work_cfg_v5';
   // An unscoped legacy credential has no trustworthy destination. Quarantine it
@@ -580,20 +580,38 @@
     return h;
   }
 
+  function hubInputMessage(key, fallback, params) {
+    const i18n = global.SoduWorkI18n;
+    if (!i18n || !Object.hasOwn(global.SoduWorkLocaleMessages?.[i18n.getLocale()] || {}, key)) return fallback;
+    return i18n.t(key, fallback, params);
+  }
+
+  function validationMessage(item) {
+    const fallback = item?.msg || item?.message || String(item || '');
+    if (item?.type === 'hub.input.due') return hubInputMessage('hub.input.due', fallback);
+    const [source, field] = Array.isArray(item?.loc) ? item.loc : [];
+    if (source !== 'query' || !['limit', 'offset', 'page', 'pageSize', 'days'].includes(field)) return fallback;
+    const lower = item.type === 'greater_than_equal';
+    const bound = lower ? item.ctx?.ge : item.ctx?.le;
+    if ((!lower && item.type !== 'less_than_equal') || !Number.isFinite(bound)) return fallback;
+    return hubInputMessage(lower ? 'hub.input.minimum' : 'hub.input.maximum', fallback, { field, bound });
+  }
+
   function httpError(res, text) {
     var data = null;
     try { data = text ? JSON.parse(text) : null; } catch (e) { data = null; }
     var detail = data && data.detail;
     var meta = detail && !Array.isArray(detail) && typeof detail === 'object' ? detail : null;
-    if (Array.isArray(detail)) detail = detail.map(function (item) {
-      return item && (item.msg || item.message) || String(item || '');
-    }).filter(Boolean).join('；');
+    if (Array.isArray(detail)) detail = detail.map(validationMessage).filter(Boolean).join('；');
     else if (detail && typeof detail === 'object') detail = detail.message || detail.msg || '';
     detail = String(detail || '').trim().slice(0, 500);
-    var error = new Error(detail || ('HTTP ' + res.status));
+    var inputCode = res.headers?.get?.('X-Error-Code') || '';
+    if (!inputCode.startsWith('hub.input.')) inputCode = '';
+    var message = inputCode ? hubInputMessage(inputCode, detail) : detail;
+    var error = new Error(message || ('HTTP ' + res.status));
     error.status = Number(res.status) || 0;
     error.detail = detail;
-    error.code = String(meta && meta.code || '');
+    error.code = String(meta && meta.code || inputCode);
     error.phase = String(meta && meta.phase || '');
     error.phaseName = String(meta && meta.phaseName || '');
     error.retryable = meta && typeof meta.retryable === 'boolean' ? meta.retryable : null;
@@ -888,6 +906,29 @@
     return path;
   }
 
+  // Keep the revision tied to the authenticated scope and the snapshot the editor actually saw.
+  var configSnapshot = null, configWriteGeneration = 0;
+  function activeConfigSnapshot(scope) {
+    if (configSnapshot && sameDomainScope(configSnapshot.scope)) return configSnapshot;
+    try {
+      var saved = JSON.parse(localStorage.getItem(taskStorageKey('config-edit-base')) || 'null');
+      return saved && sameDomainScope(saved.scope) ? saved : null;
+    } catch (_) { return null; }
+  }
+  function rememberConfig(scope, value, local, persist = true) {
+    if (!value || !sameDomainScope(scope)) return {};
+    var cfg = Object.assign({}, value), revision = cfg._configRevision;
+    var keys = cfg._configKeys;
+    delete cfg._configRevision;
+    delete cfg._configKeys;
+    if (revision && persist) {
+      var base = local && Array.isArray(keys)
+        ? Object.fromEntries(Object.entries(local).filter(([key]) => keys.includes(key))) : local;
+      configSnapshot = { scope, revision, cfg: base || cfg, remote: cfg, keys };
+      try { localStorage.setItem(taskStorageKey('config-edit-base'), JSON.stringify(configSnapshot)); } catch (_) {}
+    }
+    return cfg;
+  }
   function domainScope() {
     return { hub: base().replace(/\/+$/, ''), clientId: device(), userId: String(_clientUser?.id || '') };
   }
@@ -895,11 +936,11 @@
     var current = domainScope();
     return value && value.hub === current.hub && value.clientId === current.clientId && value.userId === current.userId;
   }
-  async function domainRead(domain, path) {
+  async function domainRead(domain, path, fresh = false) {
     var bridge = global.soduWorkAPI, scope = domainScope();
     if (!bridge?.clientDomainRead || !scope.userId) return jfetch(path);
     var auth = requestAuth();
-    var result = await bridge.clientDomainRead(domain, scope);
+    var result = await bridge.clientDomainRead(domain, scope, fresh);
     if (!sameDomainScope(scope)) throw staleTaskScope();
     if (result?.code === 'DOMAIN_POLL_FALLBACK') return jfetch(path);
     // A local snapshot or replayed backoff error does not prove current reachability.
@@ -1258,6 +1299,12 @@
     connectHub: connectHub,
     normalizeHub: normalizeHub,
     taskStorageKey: taskStorageKey,
+    async reportFirstChatReadiness(scope, runtimeReady, modelReady) {
+      if (!hasValidDeviceSession() || !_clientUser || scope !== taskStorageKey('ops')) return false;
+      await jfetch('/first-chat-readiness', { method: 'PUT', taskScope: scope, sessionRead: true,
+        body: JSON.stringify({ runtimeReady, modelReady }) });
+      return true;
+    },
     adoptVerifiedTaskOperations: adoptVerifiedTaskOperations,
 
     /*
@@ -1323,8 +1370,13 @@
       }
       return task;
     },
-    async getConfig() {
-      try { var c = await domainRead('config', '/config'); return c || {}; }
+    async getConfig(acceptBase) {
+      var scope = domainScope(), generation = configWriteGeneration;
+      try {
+        var result = await domainRead('config', '/config?withRevision=true');
+        return rememberConfig(scope, result, null,
+          generation === configWriteGeneration && (!acceptBase || acceptBase()));
+      }
       catch (e) { markFromError(e); return lsCfg(); }
     },
 
@@ -1391,9 +1443,8 @@
       var res = await hubFetch(apiUrl('/team/tasks'),
         { method: 'POST', headers: authHeaders(true), body: JSON.stringify(body || {}), signal: _abortSignal(DEFAULT_TIMEOUT) });
       var txt = await res.text();
-      var data = parseJSON(txt);
-      if (!res.ok) { markFromError(new Error('HTTP ' + res.status)); throw new Error((data && data.detail) || ('HTTP ' + res.status)); }
-      mark(true); return data;
+      if (!res.ok) { markFromError(new Error('HTTP ' + res.status)); throw httpError(res, txt); }
+      mark(true); return parseJSON(txt);
     },
 
     /* Atomic coworker assignment: create on the recipient device, never create locally then hand off. */
@@ -1453,9 +1504,9 @@
     async addTaskComment(tid, body, mentions) {
       var res = await hubFetch(apiUrl('/tasks/' + encodeURIComponent(tid) + '/comments'),
         { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ body: body, mentions: mentions || [] }), signal: _abortSignal(DEFAULT_TIMEOUT) });
-      var txt = await res.text(); var data = parseJSON(txt);
-      if (!res.ok) { markFromError(new Error('HTTP ' + res.status)); throw new Error((data && data.detail) || ('HTTP ' + res.status)); }
-      mark(true); return data;
+      var txt = await res.text();
+      if (!res.ok) { markFromError(new Error('HTTP ' + res.status)); throw httpError(res, txt); }
+      mark(true); return parseJSON(txt);
     },
 
     /* Derive task fields from instructions and materials. Preserve input for manual editing when the API rejects or fails. */
@@ -1634,7 +1685,8 @@
       localCatalog = localCatalog || { providers: [], usable: [], myModels: [], mediaUsable: {} };
       var r, managedCatalogUnavailable = false;
       try {
-        r = await domainRead('models', '/my-models');
+        if (!sameDomainScope(scope)) throw staleTaskScope();
+        r = await domainRead('models', '/my-models', options?.fresh === true);
         if (r?.ok === false) throw new Error('Hub 模型目录暂时无法读取');
         managedCatalogUnavailable = !Array.isArray(r?.usable);
       }
@@ -1932,7 +1984,8 @@
           (savedModel && !models.some(row => row.name === savedModel));
         // Use the first available model only when no valid preference remains.
         // Resolve from the displayed local-first catalog without rewriting it.
-        var automatic = agent.modelPick === true && firstModel && (!savedModel || missing);
+        var pinnedHubModel = !selected?.configured && Boolean(agent.modelProviderId);
+        var automatic = !pinnedHubModel && agent.modelPick === true && firstModel && (!savedModel || missing);
         if (automatic && (firstModel.localOnly !== true ||
             localDefaults && global.soduWorkAPI?.localAgentModels?.probe)) {
           selected = { configured: true, modelName: firstModel.name, unavailable: false,
@@ -1950,7 +2003,7 @@
         var readiness = modelOnly ? { state: state, setupState: state, displayState: state,
           ...(selected.unavailable ? { why: '原本地默认模型已删除或不可用，请重新选择' }
             : modelMissing ? { why: '' } : {}) } : {};
-        return { ...agent, model: savedModel, modelEffective: selected.modelName,
+        return { ...agent, model: savedModel, modelEffective: selected.modelName, modelProviderId: '',
           ...(selected.automatic ? { modelAutomatic: true } : {}),
           modelGone: selected.unavailable, localModelDefault: selected.localOnly !== false,
           ...(selected.localOnly !== false ? { configRevision: 'local:' + String(localCatalog?.revision ?? 'unavailable') } : {}),
@@ -1997,12 +2050,13 @@
         var inheritedModel = !model;
         if (isCurrentRunner && inheritedModel) {
           if (agent?.modelGone || preferred?.unavailable && !agent?.modelAutomatic) {
-            throw new Error('原本地默认模型已删除或不可用，请重新选择');
+            throw new Error(agent?.modelProviderId ? '请主动选择可用模型后再执行，不会自动切换模型'
+              : '原本地默认模型已删除或不可用，请重新选择');
           }
           model = agent?.modelEffective || preferred?.modelName || '';
           if (agent) {
             // Bind test evidence to the freshly resolved model and runtime.
-            probeAgent = Object.fromEntries(['key', 'version', 'bin', 'model', 'modelEffective',
+            probeAgent = Object.fromEntries(['key', 'version', 'bin', 'model', 'modelEffective', 'modelProviderId',
               'modelGone', 'configRevision', 'runtimeRevision'].map(field => [field, agent[field]]));
           }
         }
@@ -2023,7 +2077,7 @@
       mark(true); return r;
     },
 
-    async setAgentModel(key, model) {
+    async setAgentModel(key, model, providerId) {
       var scope = domainScope(), requestScope = taskStorageKey('ops');
       var defaults = await localAgentDefaults(scope);
       if (isLocalModelChoice(model)) {
@@ -2035,7 +2089,8 @@
         return localResult;
       }
       var r = await jfetch('/agent-setup/model', {
-        method: 'PUT', taskScope: requestScope, body: JSON.stringify({ key: key, model: model || '' })
+        method: 'PUT', taskScope: requestScope, body: JSON.stringify({ key: key, model: model || '',
+          ...(providerId ? { providerId } : {}) })
       });
       if (!sameDomainScope(scope)) throw staleTaskScope();
       if (defaults?.selections?.[key]?.configured) {
@@ -2819,6 +2874,10 @@
         { method: 'POST', body: JSON.stringify({ note: note || '' }) });
       mark(true); return acceptTaskResult(r);
     },
+    async setReviewRecipient(tid, userId) {
+      return jfetch('/tasks/' + encodeURIComponent(tid) + '/review-recipient',
+        {method:'PUT', body:JSON.stringify({userId}), taskScope:taskStorageKey('ops')});
+    },
     /* Evaluate the frozen delivery evidence under server-side reviewer permissions and quality gates. */
     async autoReviewTask(tid, note) {
       var r = await jfetch('/tasks/' + encodeURIComponent(tid) + '/auto-review', {
@@ -3556,10 +3615,56 @@
     },
     /* Synchronize configuration through saveCfg(). */
     async syncConfig(cfg) {
-      var scope = domainScope();
-      try { await jfetch('/config', { method: 'PUT', body: JSON.stringify(cfg || {}) });
+      var scope = domainScope(), taskScope = taskStorageKey('ops');
+      configWriteGeneration++;
+      try {
+        var patch = Object.assign({}, cfg);
+        var initial = activeConfigSnapshot(scope);
+        if (!initial) {
+          var snapshot = await jfetch('/config?withRevision=true', { taskScope });
+          if (!sameDomainScope(scope)) return false;
+          // Without an editing base, only a new or unchanged field can be written unconditionally.
+          if (Array.isArray(snapshot?._configKeys)) {
+            for (var key of Object.keys(patch)) if (!snapshot._configKeys.includes(key)) delete patch[key];
+          }
+        }
+        if (initial) {
+          for (var key of Object.keys(patch)) {
+            if ((Array.isArray(initial.keys) && !initial.keys.includes(key)) ||
+                JSON.stringify(patch[key]) === JSON.stringify(initial.cfg[key])) delete patch[key];
+          }
+          patch._configRevision = initial.revision;
+        }
+        var saved = await jfetch('/config?withRevision=true', { method: 'PUT', taskScope, body: JSON.stringify(patch) });
+        configWriteGeneration++;
+        rememberConfig(scope, saved, Object.assign({}, cfg));
         await invalidateDomain('config', scope); mark(true); return true; }
-      catch (e) { markFromError(e); return false; }
+      catch (e) {
+        markFromError(e);
+        if (e?.status === 409 || e?.status === 428) {
+          // Return the actual conflict to the store. It can reconcile its live copy and
+          // keep unrelated local edits rather than repeatedly uploading an obsolete snapshot.
+          var latest = await jfetch('/config?withRevision=true', { taskScope });
+          if (!sameDomainScope(scope) || !latest?._configRevision) return false;
+          var remote = rememberConfig(scope, latest, null, false);
+          var previous = initial?.remote || {};
+          var agreed = {};
+          for (var key of Object.keys(remote)) {
+            if (!Object.prototype.hasOwnProperty.call(patch || {}, key) ||
+                JSON.stringify(previous[key]) !== JSON.stringify(remote[key])) agreed[key] = remote[key];
+          }
+          return { conflict: true, current: agreed, accept(local) {
+            if (!sameDomainScope(scope)) return;
+            // Advance only after the store applied this response to the same edit. Local-only
+            // preferences (e.g. an explicit locale) must not replay over the winning Hub value.
+            var base = Object.assign({}, remote);
+            for (var key of Object.keys(agreed)) base[key] = local[key];
+            configWriteGeneration++;
+            rememberConfig(scope, latest, base);
+          } };
+        }
+        return false;
+      }
     },
 
     /*

@@ -105,10 +105,11 @@
   }
 
   function fullUrl(item) {
+    const url = String(item?.url || '');
+    if (/^https?:\/\//i.test(url)) return url;
     if (window.SoduWorkAPI && typeof SoduWorkAPI.attachmentUrl === 'function') return SoduWorkAPI.attachmentUrl(item);
     const base = typeof window.SoduWorkAPI?.hubBase === 'function' ? SoduWorkAPI.hubBase() : window.SoduWorkAPI?.hubBase || '';
-    const url = String((item || {}).url || '');
-    return /^https?:/i.test(url) ? url : base.replace(/\/$/, '') + url;
+    return base.replace(/\/$/, '') + url;
   }
 
   function fileSize(value) {
@@ -381,11 +382,15 @@
       if (kind === 'file') {
         // Artifact fingerprints describe a bundle; they are not downloadable
         // attachment IDs. Do not offer a link that can only return a 404.
-        const downloadable = Boolean(item.url || item.attachmentId || /^[a-f0-9]{8}-[a-f0-9-]{27}$/i.test(String(item.id || '')));
-        const nativeDownload = item.attachmentId && item.url
-          ? ' data-tfd-evidence-filename="' + esc(title) + '"' : '';
-        const label = downloadable ? '<a href="' + esc(fullUrl(item)) + '" target="_blank" rel="noreferrer"' +
-          nativeDownload + '>' + esc(title) + '</a>' : '<span>' + esc(title) + '</span>';
+        const id = item.attachmentId || item.id;
+        const legacyId = !item.url && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id) ? id : '';
+        let label = '<span>' + esc(title) + '</span>';
+        if (item.url || legacyId) {
+          const href = fullUrl(legacyId ? { ...item, url: '/api/v1/attachments/' + legacyId } : item);
+          const filename = item.attachmentId || legacyId ? ' data-tfd-evidence-filename="' + esc(title) + '"' : '';
+          const source = legacyId ? ' data-tfd-attachment-id="' + esc(legacyId) + '"' : '';
+          label = '<a href="' + esc(href) + '" target="_blank" rel="noreferrer"' + filename + source + '>' + esc(title) + '</a>';
+        }
         return '<li class="is-file"><i></i>' + label + '<small>' + esc([fileSize(item.size || item.value), item.mime,
             ((item.producer || {}).name || '')].filter(Boolean).join(' · ')) + '</small></li>';
       }
@@ -792,8 +797,8 @@
     const filename = link.dataset?.tfdEvidenceFilename;
     if (filename && typeof bridge?.downloadAttachment === 'function') {
       try {
-        // The native downloader can renew access to this exact Hub attachment.
-        const result = await bridge.downloadAttachment({ url: href, filename });
+        const attachmentId = link.dataset.tfdAttachmentId;
+        const result = await bridge.downloadAttachment(attachmentId ? { attachmentId, filename } : { url: href, filename });
         if (result?.ok === false && !result.canceled) throw new Error(result.error || '');
       } catch (error) {
         const fallback = '证据文件暂时没能保存';

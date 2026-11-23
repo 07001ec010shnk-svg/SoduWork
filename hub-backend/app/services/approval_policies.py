@@ -16,7 +16,11 @@ _DIRECT = {"requester", "task_creator", "task_assignee", "owner_client", "projec
 _CATALOG = {"user", "role", "position", "permission"}
 
 
-class InvalidApprovalActions(ValueError):
+class InvalidPolicyInput(ValueError):
+    """A supplied approval policy field cannot be saved."""
+
+
+class InvalidApprovalActions(InvalidPolicyInput):
     """The approval action list has an invalid input type."""
 
 
@@ -101,6 +105,14 @@ async def list_visible(session: AsyncSession, org_ids: set[str] | None) -> list[
     return [api(x) for x in (await session.execute(q)).scalars().all()]
 
 
+async def for_environment(session: AsyncSession, policy_id: str,
+                          org_id: str | None) -> am.ApprovalPolicy | None:
+    policy = await session.get(am.ApprovalPolicy, policy_id)
+    if policy is None or (policy.org_id is not None and policy.org_id != org_id):
+        return None
+    return policy
+
+
 async def save(session: AsyncSession, body: dict, row: am.ApprovalPolicy | None = None
                ) -> am.ApprovalPolicy:
     creating = row is None
@@ -112,16 +124,19 @@ async def save(session: AsyncSession, body: dict, row: am.ApprovalPolicy | None 
         am.ApprovalPolicy.key == key, am.ApprovalPolicy.org_id == org_id,
         am.ApprovalPolicy.id != (row.id if row else "__new__")))
     if duplicate:
-        raise ValueError("策略标识已经存在")
-    rules = _rules(body.get("rules") if creating else body.get("rules", row.rules))
+        from .catalog_names import DuplicateName
+        raise DuplicateName("策略标识已经存在")
+    name = _text(body.get("name"), 100)
+    if not creating and "name" in body and (not isinstance(body["name"], str) or not name):
+        raise InvalidPolicyInput("审批职责名称必须是非空文本")
+    rules = _rules(body.get("rules")) if creating or "rules" in body else row.rules
     if creating:
-        row = am.ApprovalPolicy(org_id=org_id, key=key,
-                                name=_text(body.get("name"), 100) or key)
+        row = am.ApprovalPolicy(org_id=org_id, key=key, name=name or key)
         session.add(row)
     else:
         row.key = key
         if "name" in body:
-            row.name = _text(body.get("name"), 100) or row.name
+            row.name = name
     row.rules = rules
     if "description" in body:
         row.description = _text(body.get("description"), 400)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 
 _SCP_REMOTE = re.compile(r"^[^@\s/:]+@[^\s/:]+:[^\s]+$")
@@ -33,3 +33,32 @@ def validate_git_url(value) -> str:
     if len(remote) > 512:
         raise ValueError("gitUrl 长度不能超过 512 个字符")
     return remote
+
+
+def git_probe_url(value: str) -> str:
+    """Return a credential-free remote for device selection, including legacy stored URLs."""
+    remote = (value or "").strip()
+    if not remote or len(remote) > 512 or any(ord(c) < 32 or c.isspace() for c in remote) or "\\" in remote:
+        return ""
+    # SCP-form SSH uses a login name for routing, not HTTP userinfo.
+    if _SCP_REMOTE.fullmatch(remote):
+        if "?" in remote or "#" in remote or remote.startswith("-"):
+            return ""
+        return remote
+    try:
+        parts = urlsplit(remote)
+        if parts.scheme not in _HTTP_SCHEMES or not parts.hostname:
+            return ""
+        host = parts.hostname
+        if any(c in host for c in "%@/"):
+            return ""
+        if ":" in host:
+            host = f"[{host}]"
+        if parts.port is not None:
+            host += f":{parts.port}"
+        if parts.scheme == "ssh" and parts.username == "git":
+            host = "git@" + host
+        # Query strings and fragments of historical remotes may also contain credentials.
+        return validate_git_url(urlunsplit((parts.scheme, host, parts.path, "", "")))
+    except ValueError:
+        return ""

@@ -12,6 +12,7 @@ _tmp = tempfile.TemporaryDirectory(prefix="soduwork-smoke-work-catalog-")
 os.environ["DATABASE_URL"] = (
     "sqlite+aiosqlite:///" + (Path(_tmp.name) / "catalog.db").as_posix())
 
+from starlette.requests import Request  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 
 from app import automation_models as am, models  # noqa: E402
@@ -69,7 +70,8 @@ async def main() -> None:
         await work_catalog.bootstrap(session)
 
         logged_in = await admin_api.login(
-            AdminLogin(user="developer", pw="smoke-pass"), session)
+            AdminLogin(user="developer", pw="smoke-pass"),
+            Request({"type": "http", "client": ("127.0.0.1", 0)}), session)
         ok(logged_in["user"]["id"] == user.id and logged_in.get("token"),
            "admin login runtime dependencies are broken")
 

@@ -6,6 +6,8 @@ Command examples use `sh start.sh` on macOS/Linux. On Windows, use `.\start.cmd`
 
 Hub provides identity, authorization, execution governance, plugins, shared materials, and desktop connectivity. It uses FastAPI and asynchronous SQLAlchemy with PostgreSQL; local development can use SQLite.
 
+The first-chat checklist combines the available model catalog with the signed-in administrator’s latest desktop report. The device sends two readiness flags for its runtime and model selection. After five minutes without a fresh report, the Hub shows those steps as awaiting the desktop.
+
 ## Start locally
 
 For a first session, use `sh start.sh` from the repository root; it creates an isolated database, environment, and administrator.
@@ -342,8 +344,8 @@ The check verifies the packaged native verifier, real TLS with a disposable trus
 
 - Devices enroll with `POST /api/v1/clients/enroll`, then use a short-lived device session. Device long-term keys remain in the Electron main process; Hub stores only their digest.
 - Business requests use `Authorization: Device <session>`. WebSocket connectivity uses the same short-lived session at `/api/v1/ws`.
-- Tasks use `/api/v1/tasks`, task-specific operations, batch updates, completed-task clearing, and agent run/retry/takeover routes. Configuration uses `/api/v1/config`.
-- Administrators sign in at `/api/v1/admin/login` and use bearer tokens for administrator APIs, including clients, tasks, and dispatch.
+- Tasks use `/api/v1/tasks`, task-specific operations, batch updates, completed-task clearing, and agent run/retry/takeover routes. Device preferences use `GET /api/v1/config?withRevision=true`. Send edited fields and the returned `_configRevision` to `PUT /api/v1/config`. The versioned response lists writable fields in `_configKeys`. Unknown fields and invalid values return 422, a stale revision returns 409, and replacing a previously saved value without a revision returns 428.
+- Administrators sign in at `/api/v1/admin/login` and use bearer tokens for administrator APIs, including clients, tasks, and dispatch. After 10 failed sign-ins for one account or 30 from one IP address within a five-minute window, the Hub returns HTTP 429 with the remaining wait in the `Retry-After` header (seconds). The database stores the counters across Hub workers. Failed attempts appear in the audit log as `admin.login.failed`.
 - Long-term device keys must not enter renderers, logs, or URLs. Server state is authoritative; offline client caches must not overwrite it.
 
 Disabling an account invalidates its existing device sessions and AI/tool tickets, returns devices to pending sign-in, and closes their event, terminal and Runner channels. Device keys, configuration and historical ownership are retained. Another active account can sign in on the same device; re-enabling the original account requires a new sign-in and never restores old sessions. Explicit administrator device bans remain revoked and block every account. Devices already revoked by older account-disable behavior require an administrator to review and activate them; account re-enablement does not automatically lift device bans.
@@ -351,6 +353,14 @@ Disabling an account invalidates its existing device sessions and AI/tool ticket
 Account conversation directory and source projections include `contentLocation`: `hub` for legacy Hub content, `source` for content retained by the original endpoint, `replica` for a valid migrated copy at the current source revision, or `unknown` when the reference cannot be established. The field does not expose private replica identifiers or grant access; clients must retain existing account, Hub, and execution checks. An unknown location must not be used to discard a potentially independent local copy.
 
 See [OAuth deployment and validation](CONNECTOR_OAUTH.en.md) for connector credentials and authorization.
+
+### Listing records
+
+Under `/api/v1`, `admin/users`, `admin/orgs`, `admin/roles`, `admin/domains`, `tasks` and `schedules` return their existing arrays when called without pagination. Supply `limit` (1–200) or `offset` (zero-based) to receive `{items, total}`. With only an offset, the page size defaults to 50. The total counts visible records before pagination. An offset past the end returns an empty page.
+
+Use `GET /api/v1/admin/client-inventory` for an object containing `items`, `total`, `counts`, `page`, `pageSize` and `offset` on every call. Choose `page` and `pageSize` (1–100, default 25), or `offset` and `limit`. Existing callers of `admin/clients` can still request the legacy array or use `paged=1` for an object.
+
+The library uses the same optional limit and offset across folders first, then files. Its existing `folders` and `items` arrays remain separate, and the paginated response includes their combined `total`. Approvals and deliveries accept a positive limit and a zero-based offset.
 
 ## Requirement migration and access
 
@@ -430,3 +440,7 @@ python3 e2e_dsh_private_probe.py \
 ```
 
 This explicit check uses the production private-probe job and ACP bridge, the installed adapter and host, and a synthetic loopback model. It first reproduces the old incorrect installation path, then requires a real model request and the expected Agent response with the corrected path. It uses disposable home, state and temporary directories, blocks non-loopback Node connections and cleans up its subprocesses. It does not install or update dependencies, use real credentials, or verify desktop UI, production Hub or provider behavior. Run it separately from the offline quality gate because it requires an existing native installation.
+
+## Model provider deletion
+
+With `integration.manage`, request `GET /api/v1/admin/model-providers/{id}/deletion-impact`. The result includes the provider and impact revisions, child models, and visible saved model selections. Member names require `user.manage` and issue titles require `task.view`; department visibility still applies. Submit the revisions as `expectedRevision` and `expectedImpact` plus the exact ID as `confirmId` to the existing `DELETE /api/v1/admin/model-providers/{id}`. Older delete requests without the preview return HTTP 428. On HTTP 409, retrieve a fresh preview and confirm again. Built-in services cannot be deleted.
