@@ -1984,7 +1984,8 @@
           (savedModel && !models.some(row => row.name === savedModel));
         // Use the first available model only when no valid preference remains.
         // Resolve from the displayed local-first catalog without rewriting it.
-        var automatic = agent.modelPick === true && firstModel && (!savedModel || missing);
+        var pinnedHubModel = !selected?.configured && Boolean(agent.modelProviderId);
+        var automatic = !pinnedHubModel && agent.modelPick === true && firstModel && (!savedModel || missing);
         if (automatic && (firstModel.localOnly !== true ||
             localDefaults && global.soduWorkAPI?.localAgentModels?.probe)) {
           selected = { configured: true, modelName: firstModel.name, unavailable: false,
@@ -2002,7 +2003,7 @@
         var readiness = modelOnly ? { state: state, setupState: state, displayState: state,
           ...(selected.unavailable ? { why: '原本地默认模型已删除或不可用，请重新选择' }
             : modelMissing ? { why: '' } : {}) } : {};
-        return { ...agent, model: savedModel, modelEffective: selected.modelName,
+        return { ...agent, model: savedModel, modelEffective: selected.modelName, modelProviderId: '',
           ...(selected.automatic ? { modelAutomatic: true } : {}),
           modelGone: selected.unavailable, localModelDefault: selected.localOnly !== false,
           ...(selected.localOnly !== false ? { configRevision: 'local:' + String(localCatalog?.revision ?? 'unavailable') } : {}),
@@ -2049,12 +2050,13 @@
         var inheritedModel = !model;
         if (isCurrentRunner && inheritedModel) {
           if (agent?.modelGone || preferred?.unavailable && !agent?.modelAutomatic) {
-            throw new Error('原本地默认模型已删除或不可用，请重新选择');
+            throw new Error(agent?.modelProviderId ? '请主动选择可用模型后再执行，不会自动切换模型'
+              : '原本地默认模型已删除或不可用，请重新选择');
           }
           model = agent?.modelEffective || preferred?.modelName || '';
           if (agent) {
             // Bind test evidence to the freshly resolved model and runtime.
-            probeAgent = Object.fromEntries(['key', 'version', 'bin', 'model', 'modelEffective',
+            probeAgent = Object.fromEntries(['key', 'version', 'bin', 'model', 'modelEffective', 'modelProviderId',
               'modelGone', 'configRevision', 'runtimeRevision'].map(field => [field, agent[field]]));
           }
         }
@@ -2075,7 +2077,7 @@
       mark(true); return r;
     },
 
-    async setAgentModel(key, model) {
+    async setAgentModel(key, model, providerId) {
       var scope = domainScope(), requestScope = taskStorageKey('ops');
       var defaults = await localAgentDefaults(scope);
       if (isLocalModelChoice(model)) {
@@ -2087,7 +2089,8 @@
         return localResult;
       }
       var r = await jfetch('/agent-setup/model', {
-        method: 'PUT', taskScope: requestScope, body: JSON.stringify({ key: key, model: model || '' })
+        method: 'PUT', taskScope: requestScope, body: JSON.stringify({ key: key, model: model || '',
+          ...(providerId ? { providerId } : {}) })
       });
       if (!sameDomainScope(scope)) throw staleTaskScope();
       if (defaults?.selections?.[key]?.configured) {
@@ -2870,6 +2873,10 @@
       var r = await jfetch('/tasks/' + encodeURIComponent(tid) + '/submit-review',
         { method: 'POST', body: JSON.stringify({ note: note || '' }) });
       mark(true); return acceptTaskResult(r);
+    },
+    async setReviewRecipient(tid, userId) {
+      return jfetch('/tasks/' + encodeURIComponent(tid) + '/review-recipient',
+        {method:'PUT', body:JSON.stringify({userId}), taskScope:taskStorageKey('ops')});
     },
     /* Evaluate the frozen delivery evidence under server-side reviewer permissions and quality gates. */
     async autoReviewTask(tid, note) {

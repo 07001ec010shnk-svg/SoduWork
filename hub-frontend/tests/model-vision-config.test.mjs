@@ -21,6 +21,7 @@ test('editing a model preserves native vision and unrelated config; both routing
     props: { providerId: 'company', initial: { name: 'vision-alias', label: 'Vision', enabled: true, revision: 'original',
       config: { imageRouting: 'native', thinkingMode: 'controllable', thinkingFormat: 'qwen', thinkingLevelMap: { high: 'high' } } }, onClose() {}, onSaved() {} },
     dependencies: { '../api.js': { api: { saveModelDef: async data => saved.push(data) } }, '../ui.jsx': ui,
+      './ModelProviderDeletion.jsx': { __esModule: true, default: () => null },
       './LlmSettings.jsx': { default: () => null }, './ModelRuntime.jsx': { default: () => null }, './model-catalog-actions.css': {},
       './ModelCapabilities.jsx': capabilities, './model-capabilities.css': {} },
   })
@@ -52,6 +53,7 @@ async function form(t, initial = null) {
     exportName: 'ModelForm', privateExports: ['ModelForm'],
     props: { providerId: 'company', initial, onClose() {}, onSaved() {} },
     dependencies: { '../api.js': { api: { saveModelDef: async data => saved.push(data) } }, '../ui.jsx': { ...ui, toast: text => errors.push(text) },
+      './ModelProviderDeletion.jsx': { __esModule: true, default: () => null },
       './LlmSettings.jsx': { default: () => null }, './ModelRuntime.jsx': { default: () => null }, './model-catalog-actions.css': {},
       './ModelCapabilities.jsx': capabilities, './model-capabilities.css': {} },
   })
@@ -101,6 +103,7 @@ test('media generation settings stay separate from chat capabilities', async t =
 async function catalogPage(t, getCatalog) {
   const page = await createComponentHarness(new URL('../src/screens/ModelCatalog.jsx', import.meta.url), {
     dependencies: { '../api.js': { api: { modelCatalog: async () => structuredClone(await getCatalog()) } }, '../ui.jsx': ui,
+      './ModelProviderDeletion.jsx': { __esModule: true, default: () => null },
       './LlmSettings.jsx': () => null, './ModelRuntime.jsx': () => null, './model-catalog-actions.css': {},
       './ModelCapabilities.jsx': capabilities, './model-capabilities.css': {} },
   })

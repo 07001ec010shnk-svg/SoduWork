@@ -1,5 +1,15 @@
 (function (global) {
   const messages = {
+    "文件读取记录": "File read history",
+    "按路径筛选": "Filter by path",
+    "当前记录中没有匹配的读取，文件状态尚待核验。": "No matching read in the loaded history. The file status is unverified.",
+    "显示更多记录": "Show more records",
+    "读取状态待核验": "Read status unverified",
+    "读取成功": "Read succeeded",
+    "读取失败": "Read failed",
+    "正在读取": "Reading",
+    "已取消": "Cancelled",
+    "会话工作目录": "Chat working directory",
     "还没有可用于对话的模型。": "No chat model is available yet.",
     "打开模型目录": "Open model catalog",
     "当前模型不可用，请选择可用模型。": "This model is unavailable. Choose an available model.",
@@ -152,6 +162,7 @@
     "model.detail.当前上下文超过模型容量，历史和本轮输入已保留": "The context exceeds the model's capacity. Your history and current input are saved.",
     "model.detail.当前模型不接受图片输入，请切换支持图片的模型或启用视觉适配": "This model does not accept images. Choose an image-capable model or enable vision adaptation.",
     "model.detail.模型服务拒绝了当前凭据或模型权限": "The model service rejected these credentials or model permissions.",
+    "model.detail.模型服务拒绝了当前凭据或模型权限。个人服务请在「我的模型」检查个人 Key，企业服务请联系管理员核对模型授权": "The model service rejected the credentials or model permissions. For a personal service, check your API key in My models. For a company service, ask your administrator to check model access.",
     "model.detail.模型请求被拒绝": "The model request was rejected.",
     "model.detail.工具已完成，请求模型继续生成时被拒绝": "The tool completed, but the request to continue generating was rejected.",
     "model.detail.模型服务地址或模型不存在": "The model service URL or model does not exist.",

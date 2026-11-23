@@ -369,10 +369,7 @@ async def deliver_artifacts(session, task, *, conversation_id: str, turn_id: str
             # For transparent encryption failures, changing output format may work where regeneration does not.
             reason = str(error)[:500]
             from . import approval_routing
-            reviewers = await approval_routing.preview_assignments(session, task, "review", {}) if artifact else {"ok": True}
-            missing_reviewer = not reviewers["ok"]
-            if missing_reviewer:
-                reason = "需求创建人缺失或账号不可用，验收受阻；请恢复创建人账号，或联系管理员核实需求归属后处理"
+            missing_reviewer = isinstance(error, approval_routing.ReviewAssignmentUnavailable)
             _delivery_issue(task, "review_unassigned" if missing_reviewer else "invalid_delivery", reason,
                             artifact_version_id=artifact.id if missing_reviewer else "")
             # The generic reason may say no reviewable outputs remain.

@@ -39,29 +39,32 @@ class AlertChannelSettingsTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.http.aclose)
 
     async def test_configured_state_survives_legacy_save_and_explicit_removal(self):
-        self.assertEqual((await self.http.get("alert-config")).json(), {"url": "", "configured": False})
-        legacy = "https://example.invalid/fixture-private-path"
+        self.assertEqual((await self.http.get("alert-config")).json(), {"url": "", "configured": False, "usesPlainHttp": False})
+        legacy = "http://example.invalid/fixture-private-path"
         async with self.sessions() as session:
             session.add(models.AppSetting(key=ALERT_URL_KEY, value=legacy))
             await session.commit()
         masked = (await self.http.get("alert-config")).json()
         self.assertTrue(masked["configured"])
         self.assertTrue(masked["url"])
-        self.assertNotIn("example.invalid", masked["url"])
+        self.assertTrue(masked["usesPlainHttp"])
+        self.assertEqual(masked["url"], "••••••••")
         destinations = [legacy, "https://fixture-other.invalid/hook?access_token=fixture-only"]
         for destination in destinations:
             saved = await self.http.put("alert-config", json={"url": destination})
             self.assertEqual(saved.json(), {"ok": True, "configured": True})
-            self.assertEqual((await self.http.get("alert-config")).json(), masked)
+            summary = {**masked, "usesPlainHttp": destination.startswith("http://")}
+            self.assertEqual((await self.http.get("alert-config")).json(), summary)
             for body in [{}, {"url": None}, {"url": masked["url"]}]:
                 self.assertTrue((await self.http.put("alert-config", json=body)).json()["configured"])
+            self.assertEqual((await self.http.get("alert-config")).json(), summary)
             for invalid in [[], "ftp://invalid.invalid", "https://example.invalid/" + "a" * 600]:
                 self.assertEqual((await self.http.put("alert-config", json={"url": invalid})).status_code, 422)
             async with self.sessions() as session:
                 self.assertEqual((await session.get(models.AppSetting, ALERT_URL_KEY)).value, destination)
         cleared = await self.http.put("alert-config", json={"url": ""})
         self.assertEqual(cleared.json(), {"ok": True, "configured": False})
-        self.assertEqual((await self.http.get("alert-config")).json(), {"url": "", "configured": False})
+        self.assertEqual((await self.http.get("alert-config")).json(), {"url": "", "configured": False, "usesPlainHttp": False})
         async with self.sessions() as session:
             self.assertEqual((await session.get(models.AppSetting, ALERT_URL_KEY)).value, "")
             details = (await session.scalars(select(models.AuditLog.detail))).all()

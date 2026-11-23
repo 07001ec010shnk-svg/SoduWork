@@ -202,6 +202,7 @@ export const api = {
   deleteRole: (id) => call('DELETE', '/admin/roles/' + id),
   // Users.
   users: () => call('GET', '/admin/users'),
+  batchUpdateUsers: (b) => call('POST', '/admin/users/batch', b),
   createUser: (b) => call('POST', '/admin/users', b),
   updateUser: (id, b) => call('PATCH', '/admin/users/' + id, b),
   // Occupational profiles describe work without granting permissions; scenarios link intent, capabilities, workflows, and delivery criteria.
@@ -244,7 +245,9 @@ export const api = {
   clientsPage: (p = {}) => call('GET', '/admin/clients?' + new URLSearchParams({
     paged: 'true', page: p.page || 1, pageSize: p.pageSize || 25,
     state: p.state || 'all', form: p.form || 'all', q: p.q || '',
+    ...(p.sortBy ? { sortBy: p.sortBy, sortDir: p.sortDir || 'asc' } : {}),
   }).toString()),
+  exportClients: filters => download('/admin/client-inventory/export.csv?' + new URLSearchParams(filters), 'soduwork-clients.csv'),
   clientAuthPolicy: () => call('GET', '/admin/client-auth-policy'),
   saveClientAuthPolicy: (b) => call('PUT', '/admin/client-auth-policy', b),
   teamModuleScope: () => call('GET', '/admin/team-module-scope'),
@@ -413,7 +416,9 @@ export const api = {
   checkModelCapabilities: (body) => call('POST', '/admin/model-capabilities/check', body, 140000),
   saveModelProvider: (pid, b) => call('PUT', '/admin/model-providers/' + encodeURIComponent(pid), b),
   discoverModels: (pid) => call('POST', '/admin/model-providers/' + encodeURIComponent(pid) + '/discover', {}, 30000),
-  deleteModelProvider: (pid, revision) => call('DELETE', '/admin/model-providers/' + encodeURIComponent(pid) + '?expectedRevision=' + encodeURIComponent(revision)),
+  modelProviderDeletionImpact: pid => call('GET', '/admin/model-providers/' + encodeURIComponent(pid) + '/deletion-impact'),
+  deleteModelProvider: (pid, expectedRevision, expectedImpact, confirmId) => call('DELETE',
+    '/admin/model-providers/' + encodeURIComponent(pid) + '?' + new URLSearchParams({ expectedRevision, expectedImpact, confirmId })),
   saveModelDef: (b) => call('PUT', '/admin/model-defs', b),
   deleteModelDef: (mid, revision) => call('DELETE', '/admin/model-defs/' + encodeURIComponent(mid) + '?expectedRevision=' + encodeURIComponent(revision)),
   modelRuntime: () => call('GET', '/admin/model-runtime'),
