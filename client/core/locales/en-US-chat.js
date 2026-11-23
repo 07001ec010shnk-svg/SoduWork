@@ -125,6 +125,7 @@
     "本次会话权限：检查权限中": "Access for this chat: Checking access",
     "仅分析和读取内容，不修改工作文件": "Analyze and read content without modifying work files",
     "执行机尚未支持此权限模式，请更新执行机或选择兼容底座": "This Runner does not support this access mode. Update it or choose a compatible runtime.",
+    "执行机探测失败，请检查执行机状态后重试": "Runner detection failed. Check the Runner status and try again.",
     "停止尚未确认，请重试": "Stopping has not been confirmed. Try again.",
     "默认权限": "Default access",
     "完全访问": "Full access",
