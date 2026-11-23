@@ -455,11 +455,6 @@ async def update_user(
     if not user.is_super or body.orgId is not None:
         await rbac.lock_org_tree(session, shared=True)
     await _assert_user_in_scope(session, user, target)
-    if body.password is not None:
-        if len(body.password) < 8:
-            raise HTTPException(status_code=422, detail="密码长度不能少于 8 个字符")
-        if len(body.password) > 128:
-            raise HTTPException(status_code=422, detail="密码长度不能超过 128 个字符")
     if body.orgId is not None:
         await _assert_org_in_scope(session, user, body.orgId)
         await _require_existing_org(session, body.orgId)

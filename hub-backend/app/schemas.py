@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal, Optional
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StringConstraints
 from pydantic_core import PydanticCustomError
 
+from .auth import ACCOUNT_PASSWORD_MAX, ACCOUNT_PASSWORD_MIN
 from .models import Client, Task
 
 
@@ -348,10 +349,14 @@ class UserTokenQuota(BaseModel):
     limit: int = Field(default=0, ge=0, le=10_000_000_000_000, strict=True)
 
 
+AccountPassword = Annotated[str, StringConstraints(
+    min_length=ACCOUNT_PASSWORD_MIN, max_length=ACCOUNT_PASSWORD_MAX, pattern=r"\S")]
+
+
 class UserCreate(BaseModel):
     model_config = ConfigDict(extra="ignore")
     username: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
-    password: Annotated[str, StringConstraints(min_length=8, max_length=128)]
+    password: AccountPassword
     displayName: str = ""
     isTestAccount: Optional[bool] = None
     orgId: Optional[str] = None
@@ -368,7 +373,7 @@ class UserUpdate(BaseModel):
     orgId: Optional[str] = None
     roleId: Optional[str] = None
     isActive: Optional[bool] = None
-    password: Optional[Annotated[str, StringConstraints(min_length=8, max_length=128)]] = None
+    password: Optional[AccountPassword] = None
     positions: Optional[list] = None
     domains: Optional[list[str]] = None
     tokenQuota: Optional[UserTokenQuota] = None
