@@ -19,6 +19,7 @@ import { ja as quotaJa, ko as quotaKo } from './quota-management.js'
 import { ja as accessCatalogJa, ko as accessCatalogKo } from './access-catalog.js'
 import { ja as operationsJa, ko as operationsKo } from './operations-overview.js'
 const ja = {
+  "使用 8–128 个字符，不能全为空白。": "8～128文字で、空白以外の文字を1文字以上含めてください。",
   "请联系插件管理员启用流程。": "プラグイン管理者にワークフローの有効化を依頼してください。",
   "前往插件与应用？未保存的场景修改将丢失。": "プラグインとアプリに移動しますか？ シナリオの未保存の変更は失われます。",
   "前往插件与应用配置流程": "プラグインとアプリでワークフローを設定",
@@ -73,6 +74,7 @@ const ja = {
 };
 
 const ko = {
+  "使用 8–128 个字符，不能全为空白。": "8~128자로 입력하고 공백이 아닌 문자를 하나 이상 포함하세요.",
   "请联系插件管理员启用流程。": "플러그인 관리자에게 워크플로 활성화를 요청하세요.",
   "前往插件与应用？未保存的场景修改将丢失。": "플러그인 및 앱으로 이동할까요? 저장하지 않은 시나리오 변경 사항은 사라집니다.",
   "前往插件与应用配置流程": "플러그인 및 앱에서 워크플로 구성",
